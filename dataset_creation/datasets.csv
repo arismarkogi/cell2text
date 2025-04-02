@@ -1,0 +1,30 @@
+Dataset_name,total_count,tissue,sex,age,disease,assay,id
+A multi-tissue single-cell tumor microenvironment atlas,"391,963","blood, breast, colorectum, liver, lung, ovary, skin epidermis, uvea","male, female",25-86,"breast cancer, colorectal cancer, liver cancer, lung cancer, melanoma, ovarian cancer, uveal melanoma","10x 3' v1, 10x 3' v2, 10x 3' v3. 10x 5' v2, inDrop, Smart-seq2",07405240-4f64-4dd9-83c3-b3db3405b05c
+L2/3 IT - MTG: Seattle Alzheimer's Disease Atlas (SEA-AD),"330,085",middle temporal gyrus,"male, female",29-89,"normal, demetia","10x 3' v3, 10x multiome",f9e42464-5984-4c77-99ea-9c6d6c130897
+Stromal cells (all non-immune cells),"318,656","bone marrow, gut wall, kidney, liver, mesenteric lymph node, skin of body, spleen, thymus, yolk sac","male, female","embryo, fetal",normal,"10x 3' v2, 10x 5' v1",617749e2-71cb-428f-9eb7-bad1cf7988ef
+Integrated cancer cell-specific single-cell RNA-seq datasets of immune checkpoint blockade-treated patients,"355,941",14 tissues,"male, female",37-86,10 diesaes,"10x 3' v2, 10x 3' v3, 10x 5' transcription profiling, Smart-seq2",8d918bdd-ab11-4c83-9de0-93640aeb8e20
+Airway,"236,977","bronchus, nasal cavity, trachea","male, female",0-76,"COVID-19, normal","10x 5' v1, 10x 5' v2",8d00a24f-b5aa-4a17-b002-6b440f4497f6
+Individual Single-Cell RNA-seq PBMC Data from Schulte-Schrepping et al.,"90,957",blood,"male, female",18-79,"COVID-19, normal","10x 3' v2, 10x 3' v3",dda7e3d6-27ec-41eb-b439-0501bf3320c8
+All-snRNA-Spatial multi-omic map of human myocardial infarction,"191,795",heart left ventricle,"male, female",38-74,"myocardial infarction, normal",10x 3' v3,171ed79a-b829-4efb-98bf-14951e8a4c90
+scRNA-seq analysis of human fallopian tubes in healthy Vs. hydrosalphinx states,"77,536","ampulla of fallopian tube, fallopian tube, fimbria of fallopian tube, isthmus of fallopian tube",female,30-52,"hydrosalpinx, normal",10x 3' v3,26f36ff7-17b6-4285-8b35-9512dcae307b
+Integrated transcriptomes of the 14 pancreatic islet cell types,"245,878",islet of Langerhans,"male, female",21-66,"normal, prediabetes syndrome, type 2 diabetes mellitus","10x 3' v2, 10x 3' v3",3f118c70-8497-4d11-96d2-429db37e51a9
+right atrium auricular region,"220,243",right atrium auricular region,"male, female",40-89,"atrial fibrillation, normal",10x 3' v3,e67f1a92-0371-4657-b15e-a4934f9ab733
+human_limb_scRNAseq,"125,955","forelimb, hindlimb","male, female","embryo, fetal",normal,"10x 3' v2, 10x 5' v1",6d0d9779-f66b-4297-9bbd-4f232651fb99
+Single-cell RNA-seq of the Adult Human Kidney (Version 1.5),"225,177",kidney,"male, female",20-89,"normal, acute kidney failure, chronic kidney disease",10x 3' v3,f5b6d620-76df-45c5-9524-e5631be0e44a
+Tabula Sapiens - Endothelium,"73,195",69 tissues,"male, female",26 - 74,normal,4 assays,b9ffa30b-9b8f-48b8-8144-69e9ad16131a
+Tabula-Sapiens - Stromal,"232,684",72 tissues,"male, female",26 - 74,normal,4 assays,30ffcf4a-9c42-4589-bd14-612c54784527
+Single-cell sequencing links multiregional immune landscapes and tissue-resident T cells in ccRCC to tumor topology and therapy efficacy,"167,283","blood, kidney, lymph node","male, female",50-69,clear cell renal carcinoma,10x 5' v2,fd9aef61-20f1-46fa-a732-51e519d17bee
+Tabula Sapiens - Epithelium,"228,032",56 tissues,"male, female",26-74,normal,"10x 3' v3, 10x 5' v2, Smart-seq2",676b8605-7e5f-42c3-940a-aa7042c50f63
+Single cell RNA sequencing of oropharyngeal squamous cell carcinoma,"82,844",oropharynx,"male, female",40-79,"normal, oropharynx squamous cell carcinoma",10x 3' v3,85981f97-aaa8-4c45-b920-7522727ea58c
+snRNA-seq of human retina - amacrine cell subset,"571,579","fovea centralis, macula lutea, macula lutea proper, peripheral region of retina","male, female",10-88,normal,10x 3' v3,de311293-090b-4aac-965e-d9c410f431a0
+Figure 1 - A cell atlas of human thymic development defines T cell repertoire formation,"255,901",thymus,"male, female",0-39,"10x 3' v2, 10x 3' v3, 10x 5' v1","10x 3' v2, 10x 3' v3, 10x 5' v1",b2e5ab44-6df3-4136-b452-2f3a6d4b4662
+Fresh samples (single cell),"157,531","axilla, bone spine, breast, liver, lung, neck",female,28-64,breast cancer,"10x 3' v2, 10x 3' v3",9dff3651-e629-4519-aaab-dbd21b6b02b1
+All cells types from snRNA-seq of human primary sclerosing cholangitis patients and healthy controls,"105,780",caudate lobe of liver,"male, female",0 -90,"normal, primary biliary cholangitis, primary sclerosing cholangitis",10x 3' v3,303e954f-33d7-473e-86f9-f96a18192bd2
+Global,"329,762",17 tissues,"male, female",50-79,normal,"10x 3' v3, 10x 5' v1, 10x 5' v2",2ac906a5-9725-4258-8e36-21a9f6c0302a
+BCC and Normal - scRNA-seq data,"152,189",7 tissues (mostly skin),male,23-91,"basal cell carcinoma, normal","10x 3' v1, 10x 3' v2, 10x 3' v3",5c9ab5a5-04a9-4282-9320-3b4d7b95131c
+all cells,"424,528","Brodmann (1909) area 7, Brodmann (1909) area 9, Brodmann (1909) area 17","male, female",52 - 111,"normal, Alzheimer disease","10x 3' v2, 10x 3' v3, Drop-seq",535e37d4-1f8f-41f2-8a3e-dd00709e6b36
+CITEseq of JDM PBMCs,"105,827",blood,"male, female",1 - 18,"juvenile dermatomyositis,normal",10x 3' v3,8f44ba33-fc67-4004-9736-17a2147b0147
+scRNA-seq of lung biopsies from six human lung transplant cases,"108,613","lingula of left lung, lower lobe of right lung, middle lobe of right lung, upper lobe of left lung, upper lobe of right lung",male,19-71,normal,10x 3' v3,a9dd3a9d-ef9f-49bb-b97b-e435817fc890
+A (Balanced) Bone Marrow Reference Map of Hematopoietic Development,"263,159","bone marrow, gut wall, kidney, liver, mesenteric lymph node, skin of body, spleen, thymus, yolk sac","male, female",19-84,normal,5 assays,e0caa053-49bf-4024-8d69-aff3c0342bcf
+Single-cell transcriptomic datasets of Renal cell carcinoma patients,"270,855","adrenal tissue, blood, kidney, perirenal fat, vein","male, female",40-79,"normal, kidney benign neoplasm, kidney oncocytoma, nonpapillary renal cell carcinoma",10x 5' transcription profiling,bf28d870-0750-443d-bb54-ec664b8f40c3
+,"6,340,925",,,,,,
