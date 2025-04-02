@@ -1,0 +1,9 @@
+scanpy
+anndata
+transformers
+datasets 
+torch 
+h5py
+
+
+# Specific versions will be added when the project is completed
