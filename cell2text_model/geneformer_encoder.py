@@ -153,7 +153,7 @@ class GeneformerModel(PreTrainedModel):
                 config_params[key] = kwargs.pop(key)
         
         # Create the model with extracted or default configuration
-        model = cls(**config_params)  # Fixed: Pass as keyword arguments instead of a dictionary
+        model = cls(**config_params)
 
         # Load pretrained weights
         model.geneformer_model = BertForMaskedLM.from_pretrained(

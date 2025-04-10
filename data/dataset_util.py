@@ -26,7 +26,7 @@ import gc
 
 
 # Create a dictionary that stores the text descritpiosns of the obo.json (OBO Foundry) Ontologies
-# Key -> ontology_id, Value -> the description
+# Key: ontology_term_id, Value: the description
 def parse_obo_ontologies(file_path):
     with open(file_path, 'r', encoding='utf-8') as f:
         data = json.load(f)

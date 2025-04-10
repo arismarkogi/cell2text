@@ -7,13 +7,12 @@ from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import StoppingCriteriaList
 from typing import Optional, Tuple, Union, Callable, List
 
-# Import from GeneformerModel implementation
+# Import encoders
 from .geneformer_encoder import GeneformerModel
+from .pubmedbert_encoder import PubMedBertEncoder
 
 # Import from Prot2Text implementation
 from .utils import CABlock, _GPT2LMHeadModel
-
-
 
 
 class Cell2TextModel(PreTrainedModel):
@@ -27,14 +26,27 @@ class Cell2TextModel(PreTrainedModel):
         # GPT2 configuration for the decoder
         self.gpt_config = GPT2Config.from_dict(config.gpt_config)
         
-        # Initialize the Geneformer encoder
-        self.encoder = GeneformerModel(
+        # Initialize the Geneformer encoder for cell data
+        self.cell_encoder = GeneformerModel(
             num_classes=config.num_classes if hasattr(config, "num_classes") else 0,
-            emb_mode=config.emb_mode if hasattr(config, "emb_mode") else "cell",
-            hidden_size=config.encoder_hidden_size if hasattr(config, "encoder_hidden_size") else 512,
+            emb_mode=config.cell_emb_mode if hasattr(config, "cell_emb_mode") else "cell",
+            hidden_size=config.cell_encoder_hidden_size if hasattr(config, "cell_encoder_hidden_size") else 512,
             max_ncells=config.max_ncells if hasattr(config, "max_ncells") else 200,
-            emb_layer=config.emb_layer if hasattr(config, "emb_layer") else -1,
-            emb_label=config.emb_label if hasattr(config, "emb_label") else ["sample_name", "cell type rough", "cell type"],
+            emb_layer=config.cell_emb_layer if hasattr(config, "cell_emb_layer") else -1,
+            emb_label=config.cell_emb_label if hasattr(config, "cell_emb_label") else ["sample_name", "cell type rough", "cell type"],
+            forward_batch_size=config.forward_batch_size if hasattr(config, "forward_batch_size") else -1,
+            nproc=config.nproc if hasattr(config, "nproc") else 4,
+            summary_stat=config.summary_stat if hasattr(config, "summary_stat") else None
+        )
+        
+        # Initialize the PubMedBERT encoder for text data
+        self.text_encoder = PubMedBertEncoder(
+            num_classes=config.num_classes if hasattr(config, "num_classes") else 0,
+            emb_mode=config.text_emb_mode if hasattr(config, "text_emb_mode") else "cls",
+            hidden_size=config.text_encoder_hidden_size if hasattr(config, "text_encoder_hidden_size") else 768,
+            max_texts=config.max_texts if hasattr(config, "max_texts") else 200,
+            emb_layer=config.text_emb_layer if hasattr(config, "text_emb_layer") else -1,
+            emb_label=config.text_emb_label if hasattr(config, "text_emb_label") else ["article_id", "publication_type", "medical_domain"],
             forward_batch_size=config.forward_batch_size if hasattr(config, "forward_batch_size") else -1,
             nproc=config.nproc if hasattr(config, "nproc") else 4,
             summary_stat=config.summary_stat if hasattr(config, "summary_stat") else None
@@ -48,16 +60,48 @@ class Cell2TextModel(PreTrainedModel):
             self.h = nn.ModuleList([CABlock(self.gpt_config, layer_idx=i) for i in range(4)])
             self.ln_f = nn.LayerNorm(self.gpt_config.n_embd, eps=self.gpt_config.layer_norm_epsilon)
         
-        # Linear projection to match dimensions if needed
-        if hasattr(config, "encoder_hidden_size") and config.encoder_hidden_size != self.gpt_config.n_embd:
-            self.to_embedding = nn.Linear(config.encoder_hidden_size, self.gpt_config.n_embd)
+        # Linear projections to match dimensions if needed
+        if hasattr(config, "cell_encoder_hidden_size") and config.cell_encoder_hidden_size != self.gpt_config.n_embd:
+            self.cell_to_embedding = nn.Linear(config.cell_encoder_hidden_size, self.gpt_config.n_embd)
         else:
-            self.to_embedding = nn.Identity()
+            self.cell_to_embedding = nn.Identity()
+            
+        if hasattr(config, "text_encoder_hidden_size") and config.text_encoder_hidden_size != self.gpt_config.n_embd:
+            self.text_to_embedding = nn.Linear(config.text_encoder_hidden_size, self.gpt_config.n_embd)
+        else:
+            self.text_to_embedding = nn.Identity()
+        
+
+        
+        # We will probably keep the attention here
+        # Embedding fusion module to combine cell and text embeddings (if both are present)
+        if hasattr(config, "embedding_fusion_method"):
+            self.embedding_fusion_method = config.embedding_fusion_method
+            if self.embedding_fusion_method == "concatenate":
+                self.fusion_layer = nn.Linear(self.gpt_config.n_embd * 2, self.gpt_config.n_embd)
+            elif self.embedding_fusion_method == "attention":
+                self.fusion_query = nn.Linear(self.gpt_config.n_embd, self.gpt_config.n_embd)
+                self.fusion_key = nn.Linear(self.gpt_config.n_embd, self.gpt_config.n_embd)
+                self.fusion_value = nn.Linear(self.gpt_config.n_embd, self.gpt_config.n_embd)
+                self.fusion_layer_norm = nn.LayerNorm(self.gpt_config.n_embd)
+            elif self.embedding_fusion_method == "sum":
+                # Simple summation, no parameters needed
+                pass
+            elif self.embedding_fusion_method == "linear":
+                self.cell_weight = nn.Parameter(torch.tensor(0.5))
+                self.text_weight = nn.Parameter(torch.tensor(0.5))
+            else:
+                self.embedding_fusion_method = "cell_only"  # Default to cell only if invalid method
+        else:
+            self.embedding_fusion_method = "cell_only"  # Default to cell only if not specified
         
         self.config = config
     
-    def get_encoder(self):
-        return self.encoder
+    def get_cell_encoder(self):
+        return self.cell_encoder
+    
+    def get_text_encoder(self):
+        return self.text_encoder
     
     def get_decoder(self):
         return self.decoder
@@ -67,12 +111,54 @@ class Cell2TextModel(PreTrainedModel):
             return self.transformer.wte
         return self.decoder.transformer.wte
     
-    def warm_up(self, gpt_model=None, geneformer_model=None):
+    def fuse_embeddings(self, cell_emb, text_emb):
+        """
+        Fuse cell and text embeddings based on the specified fusion method
+        """
+        if self.embedding_fusion_method == "concatenate":
+            # Concatenate along feature dimension and project back to original size
+            combined = torch.cat([cell_emb, text_emb], dim=-1)
+            return self.fusion_layer(combined)
+        
+        elif self.embedding_fusion_method == "attention":
+            # Use self-attention mechanism to fuse embeddings
+            query = self.fusion_query(cell_emb)
+            key = self.fusion_key(text_emb)
+            value = self.fusion_value(text_emb)
+            
+            # Compute attention scores
+            attention_scores = torch.matmul(query, key.transpose(-1, -2)) / (self.gpt_config.n_embd ** 0.5)
+            attention_probs = torch.softmax(attention_scores, dim=-1)
+            
+            # Apply attention weights to values
+            context_layer = torch.matmul(attention_probs, value)
+            
+            # Add residual connection and normalization
+            fused_emb = self.fusion_layer_norm(cell_emb + context_layer)
+            return fused_emb
+        
+        elif self.embedding_fusion_method == "sum":
+            # Simple element-wise sum
+            return cell_emb + text_emb
+        
+        elif self.embedding_fusion_method == "linear":
+            # Weighted sum using learnable weights
+            return self.cell_weight * cell_emb + self.text_weight * text_emb
+        
+        else:
+            # Default to cell embeddings only
+            return cell_emb
+    
+    def warm_up(self, gpt_model=None, geneformer_model=None, pubmedbert_model=None):
         """
         Load pre-trained weights for the model components
         """
         if geneformer_model is not None:
-            self.encoder = GeneformerModel.from_pretrained(geneformer_model)
+            self.cell_encoder = GeneformerModel.from_pretrained(geneformer_model)
+        
+        if pubmedbert_model is not None:
+            self.text_encoder = PubMedBertEncoder.from_pretrained(pubmedbert_model)
+            
         if gpt_model is not None:
             self.decoder = _GPT2LMHeadModel.from_pretrained(gpt_model, add_cross_attention=True, use_cache=False)
             self.decoder.resize_token_embeddings(self.gpt_config.vocab_size)
@@ -82,11 +168,14 @@ class Cell2TextModel(PreTrainedModel):
         self,
         expression_tokens: Optional[torch.LongTensor] = None,
         expression_token_lengths: Optional[torch.LongTensor] = None,
+        input_tokens: Optional[torch.LongTensor] = None,
+        input_token_lengths: Optional[torch.LongTensor] = None,
         decoder_input_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
         past_key_values_fusion: Optional[Tuple[Tuple[torch.Tensor]]] = None,
         decoder_attention_mask: Optional[torch.FloatTensor] = None,
         cell_attention_mask: Optional[torch.FloatTensor] = None,
+        text_attention_mask: Optional[torch.FloatTensor] = None,
         token_type_ids: Optional[torch.LongTensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         head_mask: Optional[torch.FloatTensor] = None,
@@ -98,7 +187,7 @@ class Cell2TextModel(PreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        get_cell_emb: Optional[bool] = False,
+        get_embeddings: Optional[bool] = False,
         **kwargs
     ):
         use_cache = use_cache if use_cache is not None else self.gpt_config.use_cache
@@ -108,10 +197,13 @@ class Cell2TextModel(PreTrainedModel):
         if decoder_input_ids is not None and len(decoder_input_ids.size()) == 3:
             decoder_input_ids = decoder_input_ids.squeeze(0)
         
+        cell_emb = None
+        text_emb = None
+        
         # Process gene expression data through Geneformer
         if expression_tokens is not None:
             # Use GeneformerModel to get cell embeddings
-            encoder_outputs = self.encoder(
+            encoder_outputs = self.cell_encoder(
                 expression_tokens=expression_tokens,
                 expression_token_lengths=expression_token_lengths,
                 return_dict=return_dict
@@ -120,7 +212,7 @@ class Cell2TextModel(PreTrainedModel):
             cell_emb = encoder_outputs[1]  # Get embeddings from output tuple
             
             # Apply projection if needed
-            cell_emb = self.to_embedding(cell_emb)
+            cell_emb = self.cell_to_embedding(cell_emb)
             
             # Apply fusion if configured
             if hasattr(self.config, "fusion_method") and self.config.fusion_method == "cross_attention":
@@ -144,14 +236,62 @@ class Cell2TextModel(PreTrainedModel):
                 
                 cell_emb = self.ln_f(cell_emb)
                 cell_emb = cell_emb.view(output_shape)
-        
-        else:
+        elif encoder_hidden_states is not None and kwargs.get('encoder_type', 'cell') == 'cell':
             # If no expression tokens provided, use pre-computed encoder states if available
             cell_emb = encoder_hidden_states
             cell_attention_mask = encoder_attention_mask
         
-        if get_cell_emb:
-            return cell_emb
+        # Process text data through PubMedBERT encoder
+        if input_tokens is not None:
+            # Use PubMedBertEncoder to get text embeddings
+            text_encoder_outputs = self.text_encoder(
+                input_tokens=input_tokens,
+                input_token_lengths=input_token_lengths,
+                return_dict=return_dict
+            )
+            
+            text_emb = text_encoder_outputs[1]  # Get embeddings from output tuple
+            
+            # Apply projection if needed
+            text_emb = self.text_to_embedding(text_emb)
+        elif encoder_hidden_states is not None and kwargs.get('encoder_type', 'cell') == 'text':
+            # If no text tokens provided, use pre-computed encoder states if available
+            text_emb = encoder_hidden_states
+            text_attention_mask = encoder_attention_mask
+        
+        # Determine which embeddings to use
+        if cell_emb is not None and text_emb is not None:
+            # Both encoders provided data, fuse embeddings
+            combined_emb = self.fuse_embeddings(cell_emb, text_emb)
+            
+            # Combine attention masks if both are provided
+            if cell_attention_mask is not None and text_attention_mask is not None:
+                # This is a simplified approach - might need refinement based on fusion method
+                combined_attention_mask = cell_attention_mask & text_attention_mask
+            elif cell_attention_mask is not None:
+                combined_attention_mask = cell_attention_mask
+            elif text_attention_mask is not None:
+                combined_attention_mask = text_attention_mask
+            else:
+                combined_attention_mask = None
+                
+            encoder_emb = combined_emb
+            encoder_attention_mask = combined_attention_mask
+        elif cell_emb is not None:
+            # Only cell encoder provided data
+            encoder_emb = cell_emb
+            encoder_attention_mask = cell_attention_mask
+        elif text_emb is not None:
+            # Only text encoder provided data
+            encoder_emb = text_emb
+            encoder_attention_mask = text_attention_mask
+        else:
+            # No encoder data provided
+            encoder_emb = encoder_hidden_states
+            encoder_attention_mask = encoder_attention_mask
+        
+        if get_embeddings:
+            return encoder_emb
         
         # Process through GPT2 decoder
         transformer_outputs = self.decoder(
@@ -162,8 +302,8 @@ class Cell2TextModel(PreTrainedModel):
             position_ids=position_ids,
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
-            encoder_hidden_states=cell_emb,
-            encoder_attention_mask=cell_attention_mask,
+            encoder_hidden_states=encoder_emb,
+            encoder_attention_mask=encoder_attention_mask,
             labels=labels,
             use_cache=use_cache,
             output_attentions=output_attentions,
@@ -178,42 +318,51 @@ class Cell2TextModel(PreTrainedModel):
         self,
         expression_tokens: Optional[torch.LongTensor] = None,
         expression_token_lengths: Optional[torch.LongTensor] = None,
+        input_tokens: Optional[torch.LongTensor] = None,
+        input_token_lengths: Optional[torch.LongTensor] = None,
         tokenizer=None,
-        device='cpu'
+        device='cpu',
+        use_both_encoders=True
     ):
         """
-        Generate text description for cell expression data
+        Generate text description for cell expression data, optionally using text context
         """
-        if expression_tokens is None:
+        if expression_tokens is None and input_tokens is None:
             raise ValueError(
-                "You need to provide expression_tokens representing gene expression data"
+                "You need to provide at least one of expression_tokens or input_tokens"
             )
         
         self.eval()
         self.to(device)
         
         # Prepare inputs
-        inputs = {
-            'expression_tokens': expression_tokens.to(device),
-            'expression_token_lengths': expression_token_lengths.to(device)
-        }
+        inputs = {}
+        
+        if expression_tokens is not None:
+            inputs['expression_tokens'] = expression_tokens.to(device)
+            inputs['expression_token_lengths'] = expression_token_lengths.to(device)
+        
+        if input_tokens is not None:
+            inputs['input_tokens'] = input_tokens.to(device)
+            inputs['input_token_lengths'] = input_token_lengths.to(device)
         
         # Create decoder input with BOS token
-        inputs['decoder_input_ids'] = torch.ones((expression_tokens.shape[0], 1), 
+        batch_size = expression_tokens.shape[0] if expression_tokens is not None else input_tokens.shape[0]
+        inputs['decoder_input_ids'] = torch.ones((batch_size, 1), 
                                                dtype=torch.long, 
                                                device=device) * tokenizer.bos_token_id
         inputs['decoder_attention_mask'] = torch.ones_like(inputs['decoder_input_ids'])
         
         # Get encoder outputs
-        encoder_state = self(**inputs, get_cell_emb=True, output_attentions=True)
+        encoder_state = self(**inputs, get_embeddings=True, output_attentions=True)
         
         # Generate text with the decoder
         encoder_outputs = {'hidden_states': encoder_state, 'attentions': None}
         
         # Create attention mask for encoder outputs if needed
-        if hasattr(self.config, "use_cell_attention_mask") and self.config.use_cell_attention_mask:
+        if hasattr(self.config, "use_encoder_attention_mask") and self.config.use_encoder_attention_mask:
             # Use a default mask covering all encoder outputs
-            encoder_attention_mask = torch.ones((expression_tokens.shape[0], encoder_state.shape[1]), 
+            encoder_attention_mask = torch.ones((batch_size, encoder_state.shape[1]), 
                                              device=device)
         else:
             encoder_attention_mask = None
@@ -258,19 +407,20 @@ class Cell2TextModel(PreTrainedModel):
         General generate method compatible with Hugging Face generation pipeline
         """
         # Get encoder embeddings
-        encoder_state = self(**kwargs, get_cell_emb=True)
+        encoder_state = self(**kwargs, get_embeddings=True)
         
         # Extract required arguments
         input_ids = kwargs.get('decoder_input_ids')
         attention_mask = kwargs.get('decoder_attention_mask')
         
         # Create encoder_attention_mask if needed
-        encoder_attention_mask = kwargs.get('cell_attention_mask')
+        encoder_attention_mask = kwargs.get('cell_attention_mask', kwargs.get('text_attention_mask'))
         
         # Create clean kwargs for generation
         clean_kwargs = {k: v for k, v in kwargs.items() if k not in [
-            'expression_tokens', 'expression_token_lengths', 'decoder_input_ids', 
-            'decoder_attention_mask', 'cell_attention_mask', 'get_cell_emb'
+            'expression_tokens', 'expression_token_lengths', 'input_tokens', 'input_token_lengths', 
+            'decoder_input_ids', 'decoder_attention_mask', 'cell_attention_mask', 
+            'text_attention_mask', 'get_embeddings'
         ]}
         
         # Call decoder's generate method
