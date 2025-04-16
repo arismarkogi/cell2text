@@ -1,4 +1,4 @@
-from dataset_util import parse_obo_ontologies, process_single_file, get_ids_from_csv
+from data.utils import parse_obo_ontologies, process_single_file, get_ids_from_csv
 import os
 import gc
 

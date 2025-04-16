@@ -11,7 +11,7 @@ from torch_geometric.data import Dataset
 #from deepspeed import is_deepspeed_zero3_enabled
 from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import StoppingCriteriaList
-# from transformers.generation.utils import validate_stopping_criteria
+#from transformers.generation.utils import validate_stopping_criteria
 from transformers.generation.utils import GreedySearchOutput, GreedySearchEncoderDecoderOutput, BeamSearchOutput, BeamSearchEncoderDecoderOutput
 from transformers.generation.beam_search import BeamScorer
 
@@ -95,7 +95,7 @@ class _GPT2LMHeadModel(GPT2LMHeadModel):
                 " `stopping_criteria=StoppingCriteriaList([MaxLengthCriteria(max_length=max_length)])` instead.",
                 UserWarning,
             )
-            stopping_criteria = validate_stopping_criteria(stopping_criteria, max_length)
+            #stopping_criteria = validate_stopping_criteria(stopping_criteria, max_length)
         pad_token_id = pad_token_id if pad_token_id is not None else self.generation_config.pad_token_id
         eos_token_id = eos_token_id if eos_token_id is not None else self.generation_config.eos_token_id
         if isinstance(eos_token_id, int):
