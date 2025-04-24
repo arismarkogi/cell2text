@@ -7,17 +7,16 @@ class Cell2TextConfig(PretrainedConfig):
     def __init__(
         self,
         gpt_config=None,
-        cell_emb_mode="cell",
-        cell_encoder_hidden_size=512,
-        max_ncells=200,
-        cell_emb_layer=-1,
-        cell_emb_label=None,
-        text_encoder_hidden_size=768,
-        text_emb_layer=-1,
-        forward_batch_size=-1,
-        nproc=4,
-        num_classes=0,
-        embedding_fusion_method="attention",
+        emb_mode="cell", # ["cls", "cell", "gene"], this is a hyperparameter of the embeddings, "cell" is recommended
+        max_ncells=1000,
+        emb_layer=-1, #{-1, 0}
+        emb_label=None,
+        nproc = 4,
+        forward_batch_size = 100,
+        summary_stat = None, # [None, "mean", "median", "exact_mean", "exact_median"],
+        cell_encoder_hidden_size = 512,
+        token_dictionary_path = "/home/arismarkog/Desktop/cell2text/Geneformer/geneformer/token_dictionary_gc95M.pkl",
+        geneformer_path = "/home/arismarkog/Desktop/cell2text/Geneformer",
         max_generation_length=100,
         num_beams=4,
         use_encoder_attention_mask=True,
@@ -25,22 +24,20 @@ class Cell2TextConfig(PretrainedConfig):
     ):
         super().__init__(**kwargs)
 
-        self.gpt_config = gpt_config or {}
 
-        self.cell_emb_mode = cell_emb_mode
-        self.cell_encoder_hidden_size = cell_encoder_hidden_size
+        self.emb_mode = emb_mode
         self.max_ncells = max_ncells
-        self.cell_emb_layer = cell_emb_layer
-        self.cell_emb_label = cell_emb_label or ["sample_name", "cell type rough", "cell type"]
-
-        self.text_encoder_hidden_size = text_encoder_hidden_size
-        self.text_emb_layer = text_emb_layer
-
-        self.forward_batch_size = forward_batch_size
+        self.emb_layer = emb_layer
+        self.emb_label = emb_label
         self.nproc = nproc
-        self.num_classes = num_classes
+        self.forward_batch_size = forward_batch_size
+        self.summary_stat = summary_stat
 
-        self.embedding_fusion_method = embedding_fusion_method
+        self.cell_encoder_hidden_size = cell_encoder_hidden_size
+        self.token_dictionary_path = token_dictionary_path
+        self.geneformer_path = geneformer_path
+
+        self.gpt_config = gpt_config or {}
 
         self.max_generation_length = max_generation_length
         self.num_beams = num_beams

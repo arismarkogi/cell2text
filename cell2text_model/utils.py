@@ -358,6 +358,8 @@ class _GPT2LMHeadModel(GPT2LMHeadModel):
         batch_size = len(beam_scorer._beam_hyps)
         num_beams = beam_scorer.num_beams
 
+        num_beams = 1
+
         batch_beam_size, cur_len = input_ids.shape
 
         if num_beams * batch_size != batch_beam_size:

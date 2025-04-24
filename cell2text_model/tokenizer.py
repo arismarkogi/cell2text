@@ -6,20 +6,7 @@ from Geneformer.geneformer.tokenizer import TranscriptomeTokenizer
 
 logger = logging.getLogger(__name__)
 
-class TextTokenizer:
-    def __init__(self, model_name: str = "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext"):
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    def tokenize(self, texts: List[str], max_length: int = 512) -> Dict[str, Union[List[int], List[List[int]]]]:
-        encoded = self.tokenizer(
-            texts,
-            padding="longest",
-            truncation=True,
-            max_length=max_length,
-            return_tensors="pt",
-            return_attention_mask=True
-        )
-        return encoded
 
 
 class CellTokenizer:
