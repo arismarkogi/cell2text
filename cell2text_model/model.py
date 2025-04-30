@@ -1,36 +1,22 @@
 import torch
 import torch.nn as nn
-from transformers import GPT2Config, PretrainedConfig
+from transformers import PretrainedConfig
 from transformers.modeling_utils import PreTrainedModel
-from transformers.generation.configuration_utils import GenerationConfig
-from transformers.generation.logits_process import LogitsProcessorList
-from transformers.generation.stopping_criteria import StoppingCriteriaList
-from typing import Optional, Tuple, Callable, List
+from typing import Optional, Dict, Any
 
-# Import encoders
+from .projectors import LinearProjectionLayer
 from .geneformer_encoder import GeneformerModel, GeneformerConfig
-
-# Import from Prot2Text implementation
-from .utils import  _GPT2LMHeadModel
+from .llama_decoder import Cell2TextLlamaModel, Cell2TextLlamaConfig
 
 
 class Cell2TextModel(PreTrainedModel):
     config_class = PretrainedConfig
-    _keys_to_ignore_on_load_missing = [r"transformer"]
-    base_model_prefix = "decoder"
+    base_model_prefix = "cell2text"
     
     def __init__(self, config):
         super().__init__(config)
         
-
-        
-        # GPT2 configuration for the decoder
-        self.gpt_config = GPT2Config.from_dict(config.gpt_config)
-
-
-        
-       # Initialize the Geneformer encoder for cell data
-        geneformer_config = GeneformerConfig(
+        self.geneformer_config = GeneformerConfig(
             emb_mode=config.emb_mode if hasattr(config, "emb_mode") else "cell",
             max_ncells=config.max_ncells if hasattr(config, "max_ncells") else 1000,
             emb_layer=config.emb_layer if hasattr(config, "emb_layer") else -1,
@@ -41,23 +27,34 @@ class Cell2TextModel(PreTrainedModel):
             token_dictionary_path=config.token_dictionary_path if hasattr(config, "token_dictionary_path") else "/home/arismarkog/Desktop/cell2text/Geneformer/geneformer/token_dictionary_gc95M.pkl"
         )
 
-        self.geneformer_model = GeneformerModel(geneformer_config)
+        self.cell2text_llama_config = Cell2TextLlamaConfig(
+            max_length=config.max_length if hasattr(config, "max_length") else 100,
+            num_beams=config.num_beams if hasattr(config, "num_beams") else 4,
+            early_stopping=config.early_stopping if hasattr(config, "early_stopping") else True,
+            no_repeat_ngram_size=config.no_repeat_ngram_size if hasattr(config, "no_repeat_ngram_size") else 3,
+            temperature=config.temperature if hasattr(config, "temperature") else 1.0,
+            top_p=config.top_p if hasattr(config, "top_p") else 1.0
+        )
         
-        # GPT2 decoder with cross-attention
-        self.gpt_model = _GPT2LMHeadModel(self.gpt_config)
+       
+         
+        # Store cell encoder hidden size for embedding projection
+        self.cell_encoder_hidden_size = config.cell_encoder_hidden_size
+        self.decoder_hidden_size = config.decoder_hidden_size
+
+        # Initialize models
+        self.cell_encoder = None  # Will be loaded in warm_up
+        self.decoder = None       # Will be loaded in warm_up
+
+        self.cell_to_embedding = LinearProjectionLayer(input_dim=self.cell_encoder_hidden_size, output_dim=self.decoder_hidden_size, bias=True)
         
-
-        self.warm_up()
         
-        # Linear projections to match dimensions
-        self.cell_to_embedding = nn.Linear(config.cell_encoder_hidden_size, self.gpt_config.n_embd)
-
-            
-        # # debugging
-        # for name, param in self.named_parameters():
-        #     print(f"{name}: requires_grad = {param.requires_grad}")
-
         self.config = config
+        
+        # print("Trainable parameters using named_parameters():")
+        # for name, param in self.named_parameters():
+        #     if param.requires_grad:
+        #         print(f"{name}: {param.numel()}")
     
     def get_cell_encoder(self):
         return self.cell_encoder
@@ -65,224 +62,99 @@ class Cell2TextModel(PreTrainedModel):
     def get_decoder(self):
         return self.decoder
     
-    def get_input_embeddings(self):
-        return self.decoder.transformer.wte
-    
     def warm_up(self):
         """
         Load pre-trained weights for the model components
         """
-   
-        if self.gpt_model is not None:
-            self.decoder = _GPT2LMHeadModel.from_pretrained("gpt2", add_cross_attention=True, use_cache=False)
-            self.decoder.resize_token_embeddings(self.gpt_config.vocab_size)
-            self.decoder.config = self.gpt_config
+        # Load cell encoder
+        self.cell_encoder = GeneformerModel.from_pretrained(
+            pretrained_model_name_or_path=self.config.geneformer_path, 
+            config=self.geneformer_config
+        )
         
-        if self.geneformer_model is not None:
-            self.cell_encoder = GeneformerModel.from_pretrained(pretrained_model_name_or_path=self.config.geneformer_path)
+        # Create Llama decoder with custom config
+        self.decoder = Cell2TextLlamaModel.from_pretrained(
+            pretrained_model_name_or_path=self.config.decoder_model_name_or_path,
+            config=self.cell2text_llama_config
+        )
     
     def forward(
         self,
         expression_tokens: Optional[torch.LongTensor] = None,
         expression_token_lengths: Optional[torch.LongTensor] = None,
         decoder_input_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
         decoder_attention_mask: Optional[torch.FloatTensor] = None,
-        token_type_ids: Optional[torch.LongTensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        encoder_attention_mask: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-        get_embeddings: Optional[bool] = False,
+        output_attentions: Optional[bool] = False,
+        output_hidden_states: Optional[bool] = False,
+        return_dict: Optional[bool] = False,
         **kwargs
     ):
-        use_cache = use_cache if use_cache is not None else self.gpt_config.use_cache
-        return_dict = return_dict if return_dict is not None else self.gpt_config.use_return_dict
+        """
+        Forward pass through the entire model
+        """
+        # Process cell expression data with Geneformer
+        encoder_outputs = self.cell_encoder(
+            expression_tokens=expression_tokens,
+            expression_token_lengths=expression_token_lengths,
+            return_dict=True
+        )
+        
+        # Get cell embeddings from encoder outputs
+        cell_embeddings = encoder_outputs[1]  # Assuming this is [batch_size, hidden_dim]
+        
+        cell_embeddings = self.cell_to_embedding(cell_embeddings)
 
-        # Run the cell encoder if input is provided
-        if expression_tokens is not None:
-            encoder_outputs = self.cell_encoder(
-                expression_tokens=expression_tokens,
-                expression_token_lengths=expression_token_lengths,
-                return_dict=return_dict
-            )
-
-            cell_emb = encoder_outputs[1]  # assume this is [batch_size, hidden_dim]
-
-            # Linear projection
-            cell_emb = self.cell_to_embedding(cell_emb)
-
-            encoder_emb = cell_emb.unsqueeze(1)  # [batch_size, 1, n_embd]
-
-            encoder_attention_mask = torch.ones(
-                (encoder_emb.size(0), encoder_emb.size(1)), device=encoder_emb.device
-            )
-
-        else:
-            raise ValueError("You must provide expression_tokens.")
-
-        if get_embeddings:
-            return encoder_emb
-
-        # Run decoder
+        # Forward pass through decoder
         decoder_outputs = self.decoder(
-            input_ids=decoder_input_ids,
-            past_key_values=past_key_values,
-            attention_mask=decoder_attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
-            encoder_hidden_states=encoder_emb,
-            encoder_attention_mask=encoder_attention_mask,
+            cell_embeddings=cell_embeddings,
+            decoder_input_ids=decoder_input_ids,
+            decoder_attention_mask=decoder_attention_mask,
             labels=labels,
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
+            **kwargs
         )
-
+        
         return decoder_outputs
-
-
     
     @torch.no_grad()
     def generate_cell_description(
         self,
         expression_tokens: Optional[torch.LongTensor] = None,
         expression_token_lengths: Optional[torch.LongTensor] = None,
-        tokenizer=None,
         device='cpu',
-        use_both_encoders=True
+        **generate_kwargs
     ):
         """
-        Generate text description for cell expression data, optionally using text context
+        Generate text description for cell expression data
         """
         if expression_tokens is None:
-            raise ValueError(
-                "You need to provide expression_tokens"
-            )
+            raise ValueError("You need to provide expression_tokens")
         
-        self.eval()
-        self.to(device)
+        # Process inputs
+        expression_tokens = expression_tokens.to(device)
+        expression_token_lengths = expression_token_lengths.to(device)
         
-        # Prepare inputs
-        inputs = {}
+        # Get cell embeddings from Geneformer
+        encoder_outputs = self.cell_encoder(
+            expression_tokens=expression_tokens,
+            expression_token_lengths=expression_token_lengths,
+            return_dict=True
+        )
         
-        inputs['expression_tokens'] = expression_tokens.to(device)
-        inputs['expression_token_lengths'] = expression_token_lengths.to(device)
-        
-        
-        
-        # Create decoder input with BOS token
-        batch_size = expression_tokens.shape[0] 
-        inputs['decoder_input_ids'] = torch.ones((batch_size, 1), 
-                                               dtype=torch.long, 
-                                               device=device) * tokenizer.bos_token_id
-        
-        inputs['decoder_attention_mask'] = torch.ones_like(inputs['decoder_input_ids'])
-        
-        # Get encoder outputs
-        encoder_state = self(**inputs, get_embeddings=True, output_attentions=True)
-        
-        # Generate text with the decoder
-        encoder_outputs = {'hidden_states': encoder_state, 'attentions': None}
-        
-        # Create attention mask for encoder outputs if needed
-        if hasattr(self.config, "use_encoder_attention_mask") and self.config.use_encoder_attention_mask:
-            # Use a default mask covering all encoder outputs
-            encoder_attention_mask = torch.ones((batch_size, encoder_state.shape[1]), 
-                                             device=device)
-        else:
-            encoder_attention_mask = None
-        
-        # # Generate sequence
-        # generated_ids = self.decoder.generate(
-        #     input_ids=inputs['decoder_input_ids'],
-        #     encoder_outputs=encoder_outputs,
-        #     use_cache=True,
-        #     encoder_attention_mask=encoder_attention_mask,
-        #     max_length=self.config.max_generation_length if hasattr(self.config, "max_generation_length") else 100,
-        #     num_beams=self.config.num_beams if hasattr(self.config, "num_beams") else 4,
-        #     early_stopping=True,
-        #     length_penalty=1.0,
-        #     no_repeat_ngram_size=3
-        # )
+        cell_embeddings = encoder_outputs[1]  # [batch_size, hidden_dim]
 
-        generated_ids = self.decoder.generate(
-            input_ids=inputs['decoder_input_ids'],
-            encoder_outputs=encoder_outputs,
-            encoder_attention_mask=encoder_attention_mask,
-            max_length=100,  # or whatever you need
-            num_beams=1,     # <-- switch to greedy
-            pad_token_id=tokenizer.eos_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-            attention_mask=inputs['decoder_attention_mask'],
-            early_stopping=True,
-            no_repeat_ngram_size=3
+        cell_embeddings = self.cell_to_embedding(cell_embeddings)
+        
+        # Generate text description using the decoder
+        return self.decoder.generate_cell_description(
+            cell_embeddings=cell_embeddings,
+            device=device,
+            **generate_kwargs
         )
 
-        
-        # Decode generated tokens
-        generated_text = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
-        
-        # Clean up any special tokens that might remain
-        if hasattr(tokenizer, "additional_special_tokens"):
-            for token in tokenizer.additional_special_tokens:
-                generated_text = [text.replace(token, "") for text in generated_text]
-        
-        return generated_text[0]
-    
-    @torch.no_grad()
-    def generate(
-        self,
-        inputs: Optional[torch.Tensor] = None,
-        generation_config: Optional[GenerationConfig] = None,
-        logits_processor: Optional[LogitsProcessorList] = None,
-        stopping_criteria: Optional[StoppingCriteriaList] = None,
-        prefix_allowed_tokens_fn: Optional[Callable[[int, torch.Tensor], List[int]]] = None,
-        synced_gpus: Optional[bool] = None,
-        assistant_model: Optional["PreTrainedModel"] = None,
-        streamer = None,
-        **kwargs
-    ):
-        """
-        General generate method compatible with Hugging Face generation pipeline
-        """
-        # Get encoder embeddings
-        encoder_state = self(**kwargs, get_embeddings=True)
-        
-        # Extract required arguments
-        input_ids = kwargs.get('decoder_input_ids')
-        attention_mask = kwargs.get('decoder_attention_mask')
-        
-        # Create encoder_attention_mask if needed
-        encoder_attention_mask = kwargs.get('cell_attention_mask', kwargs.get('text_attention_mask'))
-        
-        # Create clean kwargs for generation
-        clean_kwargs = {k: v for k, v in kwargs.items() if k not in [
-            'expression_tokens', 'expression_token_lengths', 
-            'decoder_input_ids', 'decoder_attention_mask', 'cell_attention_mask', 
-            'text_attention_mask', 'get_embeddings'
-        ]}
-        
-        # Call decoder's generate method
-        return self.decoder.generate(
-            input_ids=input_ids,
-            generation_config=generation_config,
-            logits_processor=logits_processor,
-            stopping_criteria=stopping_criteria,
-            prefix_allowed_tokens_fn=prefix_allowed_tokens_fn,
-            synced_gpus=synced_gpus,
-            assistant_model=assistant_model,
-            streamer=streamer,
-            encoder_outputs={'hidden_states': encoder_state, 'attentions': None},
-            encoder_attention_mask=encoder_attention_mask,
-            **clean_kwargs
-        )
+

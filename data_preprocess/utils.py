@@ -321,7 +321,7 @@ def process_single_file(input_filename, output_filename, ontology_dict=None,
 
         adata.write(output_filename, compression="gzip")
         
-        inspect_h5ad_fast(output_filename)
+        inspect_h5ad(output_filename)
         print_first_n_rows_h5ad(output_filename)
 
         # Clear the AnnData object from memory

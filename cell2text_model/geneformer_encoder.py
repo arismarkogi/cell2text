@@ -16,9 +16,9 @@ from datasets import Dataset
 
 logger = logging.getLogger(__name__)
 
-# Set as constants here, so they are available in the TranscriptomeProcessor
+# Set as constants here, so they are available later
 PAD_TOKEN_ID = 0
-MODEL_INPUT_SIZE = 2048
+MODEL_INPUT_SIZE = 4096
 
 
 
@@ -44,8 +44,8 @@ class GeneformerConfig(PretrainedConfig):
         self.emb_label = emb_label
         self.summary_stat = summary_stat
         self.forward_batch_size = forward_batch_size
-        self.nproc = nproc,
-        self.token_dictionay_path = token_dictionary_path
+        self.nproc = nproc
+        self.token_dictionary_path = token_dictionary_path
 
 
 
@@ -63,7 +63,7 @@ class GeneformerModel(
         self.config = config
 
     
-        token_dictionary_file = config.token_dictionay_path
+        token_dictionary_file = config.token_dictionary_path
         self.token_dictionary_file = token_dictionary_file
 
         with open(token_dictionary_file, "rb") as f:
@@ -111,8 +111,7 @@ class GeneformerModel(
             'length': lengths_np
         })
         
-        print("Printing layer_to_quant...")
-        print(layer_to_quant)
+
 
         embs = get_embs(
             model=self.geneformer_model,
@@ -133,6 +132,8 @@ class GeneformerModel(
     def from_pretrained(
           cls, pretrained_model_name_or_path: str, *args, **kwargs
     ) -> PreTrainedModel:
+        
+        
         if "config" in kwargs:
             config = kwargs.pop("config")
             if isinstance(config, dict):
