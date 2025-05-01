@@ -33,7 +33,7 @@ class Cell2TextModel(PreTrainedModel):
             early_stopping=config.early_stopping if hasattr(config, "early_stopping") else True,
             no_repeat_ngram_size=config.no_repeat_ngram_size if hasattr(config, "no_repeat_ngram_size") else 3,
             temperature=config.temperature if hasattr(config, "temperature") else 1.0,
-            top_p=config.top_p if hasattr(config, "top_p") else 1.0
+            top_p=config.top_p if hasattr(config, "top_p") else 0.9
         )
         
        

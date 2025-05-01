@@ -27,7 +27,7 @@ class Cell2TextConfig(PretrainedConfig):
         early_stopping=True,
         no_repeat_ngram_size=3,
         temperature=1.0,
-        top_p=1.0,
+        top_p=0.9,
 
 
         
