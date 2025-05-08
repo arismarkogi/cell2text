@@ -42,8 +42,8 @@ model.warm_up()
 model.eval()
 
 # BOS token for decoder input
-decoder_input_ids = torch.ones((expression_tokens.shape[0], 1), dtype=torch.long) * tokenizer.bos_token_id
-decoder_attention_mask = torch.ones_like(decoder_input_ids)
+text_input_ids = torch.ones((expression_tokens.shape[0], 1), dtype=torch.long) * tokenizer.bos_token_id
+text_attention_mask = torch.ones_like(text_input_ids)
 
 print(f"Running forward pass on {sample_size} samples...")
 
@@ -52,8 +52,8 @@ with torch.no_grad():
     outputs = model(
         expression_tokens=expression_tokens,
         expression_token_lengths=expression_token_lengths,
-        decoder_input_ids=decoder_input_ids,
-        decoder_attention_mask=decoder_attention_mask
+        text_input_ids=text_input_ids,
+        text_attention_mask=text_attention_mask
     )
 
 print(f"Forward pass successful. Output shape: {outputs}")

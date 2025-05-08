@@ -1,271 +1,381 @@
-# This is the train.py script from the Prot2Text repo, we will change it later
-
-from transformers import DataCollatorForLanguageModeling
-from transformers import GPT2Tokenizer
-from typing import Optional, Tuple, Union, TYPE_CHECKING, Any, Callable, Dict, List
 import torch
-from transformers import GPT2Config, AutoConfig, AutoTokenizer
-from transformers import GPT2LMHeadModel, GPT2Model, PretrainedConfig
-import transformers
-from prot2text_model.Encoder import EncoderRGCN
-from prot2text_dataset.torch_geometric_loader import Prot2TextDataset
-from prot2text_model.utils import Prot2TextTrainer, CABlock, _GPT2LMHeadModel
-from prot2text_model.Model import Prot2TextModel
-from prot2text_model.tokenization_prot2text import Prot2TextTokenizer
-import torch.nn as nn
-from transformers import EvalPrediction, Seq2SeqTrainingArguments
-from transformers.trainer_utils import EvaluationStrategy, HubStrategy, IntervalStrategy, SchedulerType
-import evaluate
-from torch.utils.data.distributed import DistributedSampler
-from torch_geometric.data import Dataset, download_url
-from torch_geometric.loader import DataListLoader, DataLoader
-from torch_geometric.nn import DataParallel
-from torch.nn.parallel import DistributedDataParallel
-from torch.utils.data.distributed import DistributedSampler
 import pandas as pd
-from transformers.trainer_utils import PredictionOutput
-from transformers.utils import logging
-from transformers.models.gpt2.modeling_gpt2 import GPT2Attention, GPT2MLP
+import numpy as np
 import os
 import argparse
-
-argParser = argparse.ArgumentParser()
-argParser.add_argument("--decoder_path", type=str, help="path to the gpt2 model to use (hugging face). options: gpt2, gpt2-medium, gpt2-large..")
-argParser.add_argument("--esm_model_path", type=str, help="path to esm model to use. example: facebook/esm2_t12_35M_UR50D")
-argParser.add_argument("--use_plm", action='store_true', help="True or False. (use or not protein language model in the encoder)")
-argParser.add_argument("--use_rgcn", action='store_true', help="True or False. (use or not RGCN in the encoder)")
-argParser.add_argument("--warmup_esm", action='store_true', help="True or False.")
-argParser.add_argument("--warmup_gpt", action='store_true', help="True or False.")
-argParser.add_argument("--data_path", type=str, default='./data//dataset/', help="root folder of the data")
-argParser.add_argument("--train_csv_path", type=str, default='./data/train.csv', help="csv containing the protein dataset for training")
-argParser.add_argument("--eval_csv_path", type=str, default='./data/eval.csv', help="csv containing the protein dataset for evaluation")
-argParser.add_argument("--batch_per_device", type=int, default=4, help="batch size for each device")
-argParser.add_argument("--nb_epochs", type=int, default=1, help="number of epochs")
-argParser.add_argument("--nb_gpus", type=int, default=1, help="number of GPUs")
-argParser.add_argument("--gradient_accumulation", default=1, help="gradient accumuluation")
-argParser.add_argument("--lr", type=float, default=2e-4, help="learning rate")
-argParser.add_argument("--save_model_path", type=str, default='./models/model_test/', help="path to save the model and the checkpoints")
-argParser.add_argument("--bleu_evaluation", action='store_true', help="True or False")
-
-# usage for single GPU:
-# python train.py \
-#   --decoder_path gpt2 \
-#   --esm_model_path facebook/esm2_t12_35M_UR50D \
-#   --use_plm \
-#   --use_rgcn \
-#   --warmup_esm \
-#   --warmup_gpt \    
-#   --data_path ./data/dataset/ \
-#   --train_csv_path ./data/train.csv \
-#   --eval_csv_path ./data/eval.csv \    
-#   --batch_per_device 4 \
-#   --nb_epochs 25 \
-#   --nb_gpus 1 \
-#   --gradient_accumulation 64 \ 
-#   --lr 2e-4 \ 
-#   --save_model_path ./models/prot2text_base/ \
-#   --bleu_evaluation \
-    
-
-# usage for multiple GPUs:
-# python -u -m torch.distributed.run  --nproc_per_node <number of gpus> --nnodes <number of nodes> --node_rank 0 train.py \
-#   --decoder_path gpt2 \
-#   --esm_model_path facebook/esm2_t12_35M_UR50D \
-#   --use_plm \
-#   --use_rgcn \
-#   --warmup_esm \
-#   --warmup_gpt \    
-#   --data_path ./data/dataset/ \
-#   --train_csv_path ./data/train.csv \
-#   --eval_csv_path ./data/eval.csv \    
-#   --batch_per_device 4 \
-#   --nb_epochs 25 \
-#   --nb_gpus <number of gpus> \
-#   --gradient_accumulation 1 \ 
-#   --lr 2e-4 \ 
-#   --save_model_path ./models/prot2text_base/ \
-#   --bleu_evaluation \
-
-args = argParser.parse_args()
-
-if args.decoder_path is None:
-    raise ValueError(
-            "You need to specify a GPT like model path that is compatible with Hugging Face. Please pass the path of a Hugging Face decoder model using --decoder_path."
-            )
-if args.use_plm and args.esm_model_path is None:
-    raise ValueError(
-            "You want to use protein language model in the encoder, however you did not specify any PLM path.  Please pass the path of a Hugging Face PLM using --esm_model_path."
-            )
-if not args.use_plm and not args.use_rgcn:
-    raise ValueError(
-            "You did not choose which type of encoder to use. Please set --use_plm to train a PLM encoder, --use_rgcn for an RGCN encoder or both for Prot2Text architecture."
-            )
-if not args.use_plm and args.warmup_esm:
-    raise ValueError(
-            "You chose to warmup the protein language model however you chose not to use a PLM in the encoder. Please remove --warmup_esm or use --use_plm and specify a PLM using --esm_model_path."
-            )    
-
-model_name = args.decoder_path
-tokenizer = Prot2TextTokenizer.from_pretrained(model_name)
-SPECIAL_TOKEN = '<|graph_token|>'
-tokenizer.pad_token = tokenizer.eos_token
-tokenizer.pad_token = "<|endoftext|>"
-tokenizer.add_tokens([SPECIAL_TOKEN])
-SPECIAL_TOKEN = '<|stop_token|>'
-tokenizer.add_tokens([SPECIAL_TOKEN])
-tokenizer.eos_token = '<|stop_token|>'
-tokenizer.eos_token_id = 50258
-tokenizer.bos_token_id = 50257
-
-esm_tokenizer = AutoTokenizer.from_pretrained(args.esm_model_path)
-
-config_model = PretrainedConfig(
-    _name_or_path='prot2text',
-    prot2text_version="1.1",
-    cross_esm_graph=args.use_plm & args.use_rgcn,
-    esm=args.use_plm,
-    esm_model_name=args.esm_model_path,
-    gpt_model_name=model_name,
-    rgcn=args.use_rgcn,
-    rgcn_input_dim = 67,
-    rgcn_n_layers = 6,
-    decoder_start_token_id = 50257,
-    eos_token_id = 50258,
-    max_new_tokens = 256,
-    no_repeat_ngram_size = 3,
-    early_stopping = True,
-    length_penalty = 2.0,
-    num_beams = 1,
-    pad_token_id = 50256,
-    bos_token_id = 50257
-    )
-esm_config = AutoConfig.from_pretrained(config_model.esm_model_name).to_dict()
-config_model.esm_config = esm_config
-gpt_config = GPT2Config.from_pretrained(config_model.gpt_model_name,
-                                        _name_or_path= config_model.gpt_model_name,
-                                        is_encoder_decoder=True,
-                                        use_cache=False,
-                                        add_cross_attention=True,
-                                        bos_token_id=config_model.bos_token_id,
-                                        decoder_start_token_id=config_model.decoder_start_token_id,
-                                        eos_token_id=config_model.eos_token_id,
-                                        max_new_tokens=config_model.max_new_tokens,
-                                        pad_token_id=50256,
-                                        vocab_size=50259,
-                                        num_beams=1,
-                                        max_length=256,
-                                        min_length=1)
-gpt_config.max_new_tokens = 256
-gpt_config.prot2text_version = config_model.prot2text_version
-config_model.gpt_config = gpt_config.to_dict()
-
-model = Prot2TextModel(config=config_model)
-if args.warmup_esm and args.warmup_gpt:
-    model.warm_up(gpt_model=args.decoder_path, esm_model=args.esm_model_path)
-elif args.warmup_esm:
-    model.warm_up(esm_model=args.esm_model_path)
-elif args.warmup_gpt:
-    model.warm_up(gpt_model=args.decoder_path)
-
-train_dataset = Prot2TextDataset(root=args.data_path,
-                                 tokenizer=tokenizer,
-                                 file_path=args.train_csv_path,
-                                 block_size=256,
-                                 split='train',
-                                 esmtokenizer=esm_tokenizer)
-print('train set loaded')
-eval_dataset = Prot2TextDataset(root=args.data_path,
-                                tokenizer=tokenizer,
-                                file_path=args.eval_csv_path,
-                                block_size=256,
-                                split='eval',
-                                esmtokenizer=esm_tokenizer)
-print('eval set loaded')
-
-num_gpus = int(args.nb_gpus)
-train_size = len(train_dataset)
-num_epochs = int(args.nb_epochs)
-grad_accumulation = int(args.gradient_accumulation)
-batch_size = int(args.batch_per_device)
-warmup = 0.06 * num_epochs * train_size / (num_gpus * batch_size * grad_accumulation)
-model_save_name = args.save_model_path
-lr = args.lr
-
-def compute_metrics(pred):
-    labels_ids = pred.label_ids
-    pred_ids = pred.predictions
-
-    pred_ids[pred_ids == -100] = tokenizer.eos_token_id
-    pred_str = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
-    labels_ids[labels_ids == -100] = tokenizer.eos_token_id
-    label_str = tokenizer.batch_decode(labels_ids, skip_special_tokens=True)
-    
-    try:
-        res = bleu.compute(predictions=pred_str, references=label_str)
-        return {'eval_bleu': res['bleu']}
-    except:
-        return {'eval_bleu': 0.0}
-
-if args.bleu_evaluation:
-    prediction_loss_only = False
-    metric_for_best_model = 'eval_bleu'
-    greater_is_better = True
-    predict_with_generate = True
-    load_best_model_at_end = True
-    bleu = evaluate.load("bleu")
-    do_predict = True
-else:
-    compute_metrics = None
-    prediction_loss_only = True
-    metric_for_best_model = 'loss'
-    greater_is_better = False
-    predict_with_generate = False
-    load_best_model_at_end = False
-    do_predict = False
-
-training_args = Seq2SeqTrainingArguments(
-    output_dir=model_save_name,
-    overwrite_output_dir=True,
-    num_train_epochs=num_epochs,
-    per_device_train_batch_size=batch_size,
-    per_device_eval_batch_size=batch_size,
-    gradient_accumulation_steps=grad_accumulation,
-    eval_accumulation_steps=None,
-    evaluation_strategy=IntervalStrategy.STEPS,
-    save_steps=500,
-    eval_steps=500,
-    logging_steps=500,
-    save_total_limit=15,
-    weight_decay=0.1,
-    warmup_steps=warmup,
-    lr_scheduler_type="cosine",
-    learning_rate=lr,
-    do_train=True,
-    do_eval=True,
-    do_predict=do_predict,
-    prediction_loss_only=prediction_loss_only,
-    metric_for_best_model=metric_for_best_model,
-    greater_is_better=greater_is_better,
-    predict_with_generate=predict_with_generate,
-    load_best_model_at_end=load_best_model_at_end,
-    )
-
-trainer = Prot2TextTrainer(
-    model=model,
-    args=training_args,
-    data_collator=None,
-    train_dataset=train_dataset,
-    eval_dataset=eval_dataset,
-    tokenizer=tokenizer,
-    compute_metrics=compute_metrics,
+from torch.utils.data import Dataset, DataLoader
+from torch.optim import AdamW
+from transformers import (
+    PretrainedConfig,
+    get_linear_schedule_with_warmup,
+    default_data_collator,
+    AutoTokenizer
 )
+from tqdm import tqdm
+import sys
 
-trainer.train()
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+from torch.amp import GradScaler, autocast
 
-if torch.distributed.is_initialized():
-    if torch.distributed.get_rank()==0:
-        model.save_pretrained(os.path.join(model_save_name,'model/'))
-        tokenizer.save_pretrained(os.path.join(model_save_name,'model/'))
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from cell2text_model.model import Cell2TextModel
+from cell2text_dataset.dataset import collate_fn, Cell2TextDataset
+
+
+
+
+
+
+def train_cell2text_model(args):
+
+    scaler = GradScaler()  # For mixed precision
+
+    # Early stopping variables
+    patience = args.patience
+    no_improvement_epochs = 0
+    
+    print("Starting Cell2Text model training...")
+    
+    # 1. Set up device
+    device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
+    print(f"Using device: {device}")
+    
+    # 2. Load the tokenizer for text descriptions
+    print("Loading tokenizer...")
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(args.decoder_path)
+        # Add padding token if it doesn't exist
+        if tokenizer.pad_token is None:
+            tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+        print("Tokenizer loaded successfully.")
+    except Exception as e:
+        print(f"Error loading tokenizer: {e}")
+        print("Proceeding without tokenizer. This may cause issues in training.")
+        tokenizer = None
+    
+    # 3. Load the datasets
+    print(f"Loading datasets...")
+    print(tokenizer)
+    train_dataset = Cell2TextDataset(args.train_data_path, tokenizer)
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=args.batch_size, 
+        shuffle=True,
+        collate_fn=collate_fn
+    )
+    
+    if args.val_data_path:
+        val_dataset = Cell2TextDataset(args.val_data_path, tokenizer)
+        val_loader = DataLoader(
+            val_dataset, 
+            batch_size=args.batch_size, 
+            shuffle=False,
+            collate_fn=collate_fn
+        )
+        print(f"Validation dataset loaded. Size: {len(val_dataset)}")
     else:
-        model.save_pretrained(os.path.join(model_save_name,'model/'))
-        tokenizer.save_pretrained(os.path.join(model_save_name,'model/'))
+        val_loader = None
+        
+    print(f"Training dataset loaded. Size: {len(train_dataset)}")
+    
+    # 4. Initialize model configuration
+    print("Initializing model configuration...")
+    config = PretrainedConfig()
+    
+    # Set required configuration parameters
+    config.cell_encoder_hidden_size = args.encoder_hidden_size
+    config.mlp_hidden_size = args.mlp_hidden_size
+    config.mlp_dropout = args.mlp_dropout
+    config.decoder_hidden_size = args.decoder_hidden_size
+    config.geneformer_path = args.geneformer_path
+    config.decoder_model_name_or_path = args.decoder_path
+    
+    # Additional configuration parameters
+    config.max_ncells = args.max_ncells
+    config.max_length = args.max_length
+    config.num_beams = args.num_beams
+    
+    # 5. Initialize the model
+    print("Initializing model...")
+    model = Cell2TextModel(config=config)
+    model.warm_up()  # Load pretrained weights
+
+    print("Trainable parameters using named_parameters():")
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            print(f"{name}: {param.numel()}")
+
+    # Freeze LLaMA decoder weights
+    for param in model.decoder.parameters():
+        param.requires_grad = False
+    print("LLaMA decoder parameters frozen.")
+    
+    # # Freeze cell encoder weights
+    # for param in model.cell_encoder.parameters():
+    #     param.requires_grad = False
+    # print("Cell encoder parameters frozen.")
+
+    
+    # If resuming from checkpoint
+    if args.resume_from_checkpoint:
+        print(f"Loading checkpoint from {args.resume_from_checkpoint}")
+        checkpoint = torch.load(args.resume_from_checkpoint, map_location=device)
+        model.load_state_dict(checkpoint["model_state_dict"])
+    
+    model.to(device)
+    
+    # 6. Setup optimizer and scheduler
+    # We'll use different learning rates for encoder and decoder
+    encoder_params = list(model.cell_encoder.parameters())
+    projector_params = list(model.cell_to_embedding.parameters())
+    decoder_params = list(model.decoder.parameters())
+    
+    # Combine parameters with different learning rates
+    optimizer_grouped_parameters = [
+        {"params": encoder_params, "lr": args.encoder_lr},
+        {"params": projector_params, "lr": args.projector_lr}, 
+        {"params": decoder_params, "lr": args.decoder_lr}
+    ]
+    
+    optimizer = AdamW(optimizer_grouped_parameters, weight_decay=args.weight_decay)
+    
+    # Calculate total training steps
+    total_steps = len(train_loader) * args.num_epochs
+    warmup_steps = int(total_steps * args.warmup_ratio)
+    
+    # Learning rate scheduler
+    scheduler = get_linear_schedule_with_warmup(
+        optimizer, 
+        num_warmup_steps=warmup_steps,
+        num_training_steps=total_steps
+    )
+    
+    # 7. Training loop
+    print(f"Starting training for {args.num_epochs} epochs...")
+    best_val_loss = float('inf')
+    global_step = 0
+    
+    for epoch in range(args.num_epochs):
+        # Training
+        model.train()
+        epoch_loss = 0
+        train_progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.num_epochs} [Train]")
+        
+        for batch in train_progress_bar:
+            # Move data to device
+            expression_tokens = batch["expression_tokens"].to(device)
+            expression_token_lengths = batch["expression_token_lengths"].to(device)
+           
+            labels = batch["labels"].to(device) if batch["labels"] is not None else None
+            
+            with autocast(device_type=device.type):
+                outputs = model(
+                    expression_tokens=expression_tokens,
+                    expression_token_lengths=expression_token_lengths,
+                    labels=labels
+                )
+                print(type(outputs))
+                print(outputs)
+
+                loss, logits, _ = outputs
+
+            scaler.scale(loss).backward()
+
+            # Gradient clipping
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+
+            # Optimizer step
+            scaler.step(optimizer)
+            scaler.update()
+            scheduler.step()
+            optimizer.zero_grad()
+
+            
+            # Update progress bar
+            train_progress_bar.set_postfix({"loss": loss.item()})
+            global_step += 1
+            
+            # Log every n steps
+            if global_step % args.logging_steps == 0:
+                print(f"Step {global_step}: loss = {loss.item():.4f}")
+        
+        # Calculate average epoch loss
+        avg_train_loss = epoch_loss / len(train_loader)
+        print(f"Epoch {epoch+1} average training loss: {avg_train_loss:.4f}")
+        
+        # Validation
+        if val_loader:
+            model.eval()
+            val_loss = 0
+            val_progress_bar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{args.num_epochs} [Val]")
+            
+            with torch.no_grad():
+                for batch in val_progress_bar:
+                    # Move data to device
+                    expression_tokens = batch["expression_tokens"].to(device)
+                    expression_token_lengths = batch["expression_token_lengths"].to(device)
+                    
+                    labels = batch["labels"].to(device) if batch["labels"] is not None else None
+                    
+                    # Forward pass
+                    outputs = model(
+                        expression_tokens=expression_tokens,
+                        expression_token_lengths=expression_token_lengths,
+                        #text_input_ids=text_input_ids,
+                        #text_attention_mask=text_attention_mask,
+                        labels=labels
+                    )
+                    
+                    loss = outputs.loss
+                    val_loss += loss.item()
+                    
+                    # Update progress bar
+                    val_progress_bar.set_postfix({"loss": loss.item()})
+            
+            # Calculate average validation loss
+            avg_val_loss = val_loss / len(val_loader)
+            print(f"Epoch {epoch+1} average validation loss: {avg_val_loss:.4f}")
+
+            # Compute BLEU score for a few examples
+            # bleu_scores = []
+            # smooth = SmoothingFunction().method4
+
+            # for i, batch in enumerate(val_loader):
+            #     if i >= 10:  # Only evaluate on first 10 batches to save time
+            #         break
+            #     expression_tokens = batch["expression_tokens"].to(device)
+            #     expression_token_lengths = batch["expression_token_lengths"].to(device)
+
+            #     with torch.no_grad():
+            #         generated = model.generate(
+            #             expression_tokens=expression_tokens,
+            #             expression_token_lengths=expression_token_lengths,
+            #             num_beams=args.num_beams,
+            #             max_length=args.max_length
+            #         )
+
+            #     for j, gen in enumerate(generated):
+            #         decoded_pred = tokenizer.decode(gen, skip_special_tokens=True)
+            #         target = tokenizer.decode(batch["decoder_input_ids"][j], skip_special_tokens=True)
+            #         bleu = sentence_bleu([target.split()], decoded_pred.split(), smoothing_function=smooth)
+            #         bleu_scores.append(bleu)
+
+            # avg_bleu = np.mean(bleu_scores)
+            # print(f"Epoch {epoch+1} average BLEU score: {avg_bleu:.4f}")
+
+            
+            # Save best model
+            if avg_val_loss < best_val_loss:
+                best_val_loss = avg_val_loss
+                best_val_loss = avg_val_loss
+                no_improvement_epochs = 0  # Reset counter
+                print(f"New best validation loss: {best_val_loss:.4f}")
+                
+                # Save the best model
+                save_path = os.path.join(args.output_dir, "best_model.pt")
+                torch.save({
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "scheduler_state_dict": scheduler.state_dict(),
+                    "train_loss": avg_train_loss,
+                    "val_loss": avg_val_loss,
+                    "global_step": global_step
+                }, save_path)
+                print(f"Best model saved to {save_path}")
+            else:
+                no_improvement_epochs += 1
+                print(f"No improvement for {no_improvement_epochs} epoch(s).")
+                if no_improvement_epochs >= patience:
+                    print("Early stopping triggered.")
+                    return
+
+        
+        # Save checkpoint after each epoch
+        checkpoint_path = os.path.join(args.output_dir, f"checkpoint_epoch_{epoch+1}.pt")
+        torch.save({
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
+            "train_loss": avg_train_loss,
+            "val_loss": avg_val_loss if val_loader else None,
+            "global_step": global_step
+        }, checkpoint_path)
+        print(f"Checkpoint saved to {checkpoint_path}")
+    
+    print("Training completed.")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train Cell2Text model")
+    
+    # Data parameters
+    parser.add_argument("--train_data_path", type=str, required=True,
+                        help="Path to the parquet file containing training data")
+    parser.add_argument("--val_data_path", type=str, default=None,
+                        help="Path to the parquet file containing validation data")
+    parser.add_argument("--output_dir", type=str, default="./checkpoints",
+                        help="Directory to save model checkpoints")
+    
+    # Model parameters
+    parser.add_argument("--encoder_hidden_size", type=int, default=512,
+                        help="Hidden size of the cell encoder")
+    parser.add_argument("--mlp_hidden_size", type=int, default=1024,
+                        help="Hidden size of the 2-layer MLP cell-to-embedding projector")
+    parser.add_argument("--mlp_dropout", type=float, default=0.1, 
+                        help="Dropout probability at MLP projector")
+    parser.add_argument("--decoder_hidden_size", type=int, default=2048,
+                        help="Hidden size of the decoder")
+    parser.add_argument("--geneformer_path", type=str, required=True,
+                        help="Path to pretrained Geneformer model")
+    parser.add_argument("--decoder_path", type=str, required=True,
+                        help="Path to pretrained Llama decoder model")
+    parser.add_argument("--max_ncells", type=int, default=1000,
+                        help="Maximum number of cells")
+    parser.add_argument("--max_length", type=int, default=100,
+                        help="Maximum length of generated text")
+    parser.add_argument("--num_beams", type=int, default=4,
+                        help="Number of beams for beam search")
+    
+    # Training parameters
+    parser.add_argument("--batch_size", type=int, default=8,
+                        help="Batch size for training")
+    parser.add_argument("--num_epochs", type=int, default=5,
+                        help="Number of training epochs")
+    parser.add_argument("--encoder_lr", type=float, default=1e-5,
+                        help="Learning rate for the encoder")
+    parser.add_argument("--decoder_lr", type=float, default=5e-5,
+                        help="Learning rate for the decoder")
+    parser.add_argument("--projector_lr", type=float, default=1e-4,
+                        help="Learning rate for the projection layer")
+    parser.add_argument("--weight_decay", type=float, default=0.01,
+                        help="Weight decay for AdamW optimizer")
+    parser.add_argument("--warmup_ratio", type=float, default=0.1,
+                        help="Ratio of total training steps used for warmup")
+    parser.add_argument("--max_grad_norm", type=float, default=1.0,
+                        help="Maximum gradient norm for gradient clipping")
+    parser.add_argument("--logging_steps", type=int, default=100,
+                        help="Log training stats every X steps")
+    parser.add_argument("--patience", type=int, default=3, help="Early stopping patience")
+
+    # Misc parameters
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None,
+                        help="Path to checkpoint to resume training from")
+    parser.add_argument("--no_cuda", action="store_true",
+                        help="Disable CUDA even if available")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed for reproducibility")
+    
+    args = parser.parse_args()
+    
+    # Create output directory if it doesn't exist
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    # Set random seed
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+    
+    train_cell2text_model(args)

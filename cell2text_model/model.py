@@ -4,7 +4,7 @@ from transformers import PretrainedConfig
 from transformers.modeling_utils import PreTrainedModel
 from typing import Optional, Dict, Any
 
-from .projectors import LinearProjectionLayer
+from .projectors import LinearProjectionLayer, MLPProjectionLayer
 from .geneformer_encoder import GeneformerModel, GeneformerConfig
 from .llama_decoder import Cell2TextLlamaModel, Cell2TextLlamaConfig
 
@@ -33,7 +33,7 @@ class Cell2TextModel(PreTrainedModel):
             early_stopping=config.early_stopping if hasattr(config, "early_stopping") else True,
             no_repeat_ngram_size=config.no_repeat_ngram_size if hasattr(config, "no_repeat_ngram_size") else 3,
             temperature=config.temperature if hasattr(config, "temperature") else 1.0,
-            top_p=config.top_p if hasattr(config, "top_p") else 0.9
+            top_p=config.top_p if hasattr(config, "top_p") else 1.0
         )
         
        
@@ -41,13 +41,14 @@ class Cell2TextModel(PreTrainedModel):
         # Store cell encoder hidden size for embedding projection
         self.cell_encoder_hidden_size = config.cell_encoder_hidden_size
         self.decoder_hidden_size = config.decoder_hidden_size
+        self.mlp_hidden_size = config.mlp_hidden_size
+        self.mlp_dropout = config.mlp_dropout
 
         # Initialize models
         self.cell_encoder = None  # Will be loaded in warm_up
         self.decoder = None       # Will be loaded in warm_up
 
-        self.cell_to_embedding = LinearProjectionLayer(input_dim=self.cell_encoder_hidden_size, output_dim=self.decoder_hidden_size, bias=True)
-        
+        self.cell_to_embedding = MLPProjectionLayer(input_dim=self.cell_encoder_hidden_size, hidden_dim=self.mlp_hidden_size, output_dim=self.decoder_hidden_size,dropout_prob=self.mlp_dropout, bias=True)
         
         self.config = config
         
@@ -66,6 +67,8 @@ class Cell2TextModel(PreTrainedModel):
         """
         Load pre-trained weights for the model components
         """
+
+        
         # Load cell encoder
         self.cell_encoder = GeneformerModel.from_pretrained(
             pretrained_model_name_or_path=self.config.geneformer_path, 
@@ -82,8 +85,8 @@ class Cell2TextModel(PreTrainedModel):
         self,
         expression_tokens: Optional[torch.LongTensor] = None,
         expression_token_lengths: Optional[torch.LongTensor] = None,
-        decoder_input_ids: Optional[torch.LongTensor] = None,
-        decoder_attention_mask: Optional[torch.FloatTensor] = None,
+        text_input_ids: Optional[torch.LongTensor] = None,
+        text_attention_mask: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = False,
@@ -95,22 +98,21 @@ class Cell2TextModel(PreTrainedModel):
         Forward pass through the entire model
         """
         # Process cell expression data with Geneformer
-        encoder_outputs = self.cell_encoder(
+        cell_embeddings = self.cell_encoder(
             expression_tokens=expression_tokens,
             expression_token_lengths=expression_token_lengths,
             return_dict=True
         )
         
-        # Get cell embeddings from encoder outputs
-        cell_embeddings = encoder_outputs[1]  # Assuming this is [batch_size, hidden_dim]
+         
         
         cell_embeddings = self.cell_to_embedding(cell_embeddings)
 
         # Forward pass through decoder
         decoder_outputs = self.decoder(
             cell_embeddings=cell_embeddings,
-            decoder_input_ids=decoder_input_ids,
-            decoder_attention_mask=decoder_attention_mask,
+            text_input_ids=text_input_ids,
+            text_attention_mask=text_attention_mask,
             labels=labels,
             use_cache=use_cache,
             output_attentions=output_attentions,
@@ -140,13 +142,12 @@ class Cell2TextModel(PreTrainedModel):
         expression_token_lengths = expression_token_lengths.to(device)
         
         # Get cell embeddings from Geneformer
-        encoder_outputs = self.cell_encoder(
+        cell_embeddings = self.cell_encoder(
             expression_tokens=expression_tokens,
             expression_token_lengths=expression_token_lengths,
             return_dict=True
         )
         
-        cell_embeddings = encoder_outputs[1]  # [batch_size, hidden_dim]
 
         cell_embeddings = self.cell_to_embedding(cell_embeddings)
         

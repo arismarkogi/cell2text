@@ -6,7 +6,7 @@ class Cell2TextConfig(PretrainedConfig):
     def __init__(
         self,
         # Encoder configuration
-        emb_mode="cell",  # ["cls", "cell", "gene"], this is a hyperparameter of the embeddings, "cell" is recommended
+        emb_mode="cell",  # ["cls", "cell", "gene"], this is a hyperparameter of the embeddings
         max_ncells=1000,
         emb_layer=-1,  # {-1, 0}
         emb_label=None,
@@ -16,6 +16,9 @@ class Cell2TextConfig(PretrainedConfig):
         
         # Model dimensions
         cell_encoder_hidden_size=512, # Geneformer hidden_dim
+        
+        mlp_hidden_size=1024, # projection layer hidden_dim
+        mlp_dropout=0.05,
         
         # Paths and files
         token_dictionary_path="/home/arismarkog/Desktop/cell2text/Geneformer/geneformer/token_dictionary_gc95M.pkl",
@@ -27,7 +30,7 @@ class Cell2TextConfig(PretrainedConfig):
         early_stopping=True,
         no_repeat_ngram_size=3,
         temperature=1.0,
-        top_p=0.9,
+        top_p=1.0,
 
 
         
@@ -50,6 +53,8 @@ class Cell2TextConfig(PretrainedConfig):
         
         # Model dimensions
         self.cell_encoder_hidden_size = cell_encoder_hidden_size
+        self.mlp_hidden_size = mlp_hidden_size
+        self.mlp_dropout = mlp_dropout
         
         # Paths
         self.token_dictionary_path = token_dictionary_path

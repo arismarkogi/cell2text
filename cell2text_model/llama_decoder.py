@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 from transformers import LlamaConfig, LlamaForCausalLM, AutoConfig, AutoTokenizer
 from typing import Optional, Tuple, Union, List, Dict, Any
-from transformers import PretrainedConfig
+from transformers import PretrainedConfig, PreTrainedModel, GenerationMixin
+
 
 
 
@@ -15,7 +16,7 @@ class Cell2TextLlamaConfig(PretrainedConfig):
         early_stopping=True,
         no_repeat_ngram_size=3,
         temperature=1.0,
-        top_p=0.9,
+        top_p=1.0,
 
         **kwargs,
     ):
@@ -31,13 +32,13 @@ class Cell2TextLlamaConfig(PretrainedConfig):
 
 
 
-class Cell2TextLlamaModel(nn.Module):
+class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
     
     config_class = Cell2TextLlamaConfig
     
     
     def __init__(self, config):
-        super().__init__()
+        super().__init__(config)
             
         # Initialize the Llama model
         self.decoder = None  # Will be loaded in warm_up
@@ -60,12 +61,10 @@ class Cell2TextLlamaModel(nn.Module):
                 )
         else:
             config = Cell2TextLlamaConfig()
-            
+
 
         model = cls(config, **kwargs)
-        
-        model = cls(config)
-        
+                
         # Use appropriate dtype
         if torch_dtype is None:
             torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
@@ -89,8 +88,8 @@ class Cell2TextLlamaModel(nn.Module):
     def forward(
         self,
         cell_embeddings: torch.FloatTensor,
-        decoder_input_ids: Optional[torch.LongTensor] = None,
-        decoder_attention_mask: Optional[torch.FloatTensor] = None,
+        text_input_ids: Optional[torch.LongTensor] = None,
+        text_attention_mask: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
@@ -103,9 +102,15 @@ class Cell2TextLlamaModel(nn.Module):
         """
         batch_size = cell_embeddings.shape[0]
         
-        
+        if text_input_ids is None:
+            print("TEXT_INPUT_IDS is None\nWe set it to BOS")
+            bos_token_id = self.tokenizer.bos_token_id  # Ensure `tokenizer` is available
+            text_input_ids = torch.full(
+                (cell_embeddings.shape[0], 1), bos_token_id, dtype=torch.long, device=cell_embeddings.device
+            )
+
         # Get Llama embeddings for text tokens
-        text_embeddings = self.decoder.get_input_embeddings()(decoder_input_ids)
+        text_embeddings = self.decoder.get_input_embeddings()(text_input_ids)
         
         # Reshape cell embeddings to match token embeddings shape
         cell_embeddings = cell_embeddings.unsqueeze(1)  # [batch_size, 1, hidden_size]
@@ -114,17 +119,20 @@ class Cell2TextLlamaModel(nn.Module):
         combined_embeddings = torch.cat([cell_embeddings, text_embeddings], dim=1)
         
         # Update attention mask to account for the prepended embedding
-        if decoder_attention_mask is not None:
+        if text_attention_mask is not None:
             combined_attention_mask = torch.ones(
-                (batch_size, 1), device=decoder_attention_mask.device
+                (batch_size, 1), device=text_attention_mask.device
             )
             combined_attention_mask = torch.cat(
-                [combined_attention_mask, decoder_attention_mask], dim=1
+                [combined_attention_mask, text_attention_mask], dim=1
             )
         else:
             combined_attention_mask = None
         
         # If labels are provided, shift them to account for prepended embeddings
+
+       
+
         combined_labels = None
         if labels is not None:
             # Create ignore index (-100) for the prepended cell embeddings position
@@ -133,6 +141,8 @@ class Cell2TextLlamaModel(nn.Module):
             )
             combined_labels = torch.cat([prepend_labels, labels], dim=1)
 
+        print("combined_embeddings.shape:", combined_embeddings.shape)
+        print("combined_labels.shape:", combined_labels.shape if combined_labels is not None else None)
         
         # Forward pass through the decoder with combined embeddings
         outputs = self.decoder(
@@ -147,6 +157,46 @@ class Cell2TextLlamaModel(nn.Module):
         )
         
         return outputs
+    
+    def prepare_inputs_for_generation(
+        self,
+        input_ids: torch.LongTensor,
+        past_key_values: Optional[Tuple[Any]] = None,
+        attention_mask: Optional[torch.LongTensor] = None,
+        cell_embeddings: Optional[torch.FloatTensor] = None,
+        **kwargs
+    ):
+        # If past is not None, we are in generation mode past the first step
+        if past_key_values is not None:
+            return {
+                "input_ids": input_ids,
+                "past_key_values": past_key_values,
+                "attention_mask": attention_mask,
+            }
+
+        # First generation step — prepend cell embeddings
+        batch_size = input_ids.shape[0]
+        text_embeddings = self.decoder.decoder.get_input_embeddings()(input_ids)
+
+        if cell_embeddings is None:
+            raise ValueError("`cell_embeddings` must be provided at generation start")
+
+        cell_embeddings = cell_embeddings.unsqueeze(1)  # [batch_size, 1, hidden]
+        inputs_embeds = torch.cat([cell_embeddings, text_embeddings], dim=1)
+
+        # Update attention mask
+        if attention_mask is not None:
+            prefix = torch.ones((batch_size, 1), dtype=attention_mask.dtype, device=attention_mask.device)
+            attention_mask = torch.cat([prefix, attention_mask], dim=1)
+
+        return {
+            "inputs_embeds": inputs_embeds,
+            "attention_mask": attention_mask,
+        }
+
+    
+    
+
     
     @torch.no_grad()
     def generate_cell_description(

@@ -1,1 +1,2 @@
 Remember to change the "cpu" to "cuda" in emb_extractor.py and pertuber_utils.py
+Check the forward pass at Geneformer again, When use GPU comment out the Dataset and .numpy() things to be efficient
