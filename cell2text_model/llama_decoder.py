@@ -111,53 +111,41 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
 
         # Get Llama embeddings for text tokens
         text_embeddings = self.decoder.get_input_embeddings()(text_input_ids)
-        
+                
         # Reshape cell embeddings to match token embeddings shape
         cell_embeddings = cell_embeddings.unsqueeze(1)  # [batch_size, 1, hidden_size]
         
         # Concatenate cell embeddings with text embeddings
         combined_embeddings = torch.cat([cell_embeddings, text_embeddings], dim=1)
-        
-        # Update attention mask to account for the prepended embedding
+
+
+
+         # Update attention mask
         if text_attention_mask is not None:
-            combined_attention_mask = torch.ones(
-                (batch_size, 1), device=text_attention_mask.device
-            )
-            combined_attention_mask = torch.cat(
-                [combined_attention_mask, text_attention_mask], dim=1
-            )
+            prepend_mask = torch.ones((batch_size, 1), device=text_attention_mask.device)
+            combined_attention_mask = torch.cat([prepend_mask, text_attention_mask], dim=1)
         else:
             combined_attention_mask = None
-        
-        # If labels are provided, shift them to account for prepended embeddings
 
-       
-
-        combined_labels = None
+        # Handle labels (shift for added cell embedding)
         if labels is not None:
-            # Create ignore index (-100) for the prepended cell embeddings position
-            prepend_labels = torch.full(
-                (batch_size, 1), fill_value=-100, dtype=labels.dtype, device=labels.device
-            )
+            prepend_labels = torch.full((batch_size, 1), -100, dtype=labels.dtype, device=labels.device)
             combined_labels = torch.cat([prepend_labels, labels], dim=1)
-
+        else:
+            combined_labels = None
+        
         print("combined_embeddings.shape:", combined_embeddings.shape)
         print("combined_labels.shape:", combined_labels.shape if combined_labels is not None else None)
-        
-        # Forward pass through the decoder with combined embeddings
-        outputs = self.decoder(
+
+        return self.decoder(
             inputs_embeds=combined_embeddings,
             attention_mask=combined_attention_mask,
             labels=combined_labels,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
             **kwargs
         )
         
-        return outputs
-    
+        
+        
     def prepare_inputs_for_generation(
         self,
         input_ids: torch.LongTensor,
@@ -202,62 +190,58 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
     def generate_cell_description(
         self,
         cell_embeddings: torch.FloatTensor,
-        device='cpu',
+        device: str = 'cpu',
+        prompt: str = "Describe the cell:",
         **generate_kwargs
     ):
         """
-        Generate text description for cell expression data by prepending
-        cell embeddings to the input sequence
+        Generate text description from cell embeddings with an optional prompt.
         """
- 
-        
         batch_size = cell_embeddings.shape[0]
-        
-        # Project cell embeddings to match Llama hidden size
-        cell_embeddings = cell_embeddings.unsqueeze(1)  # [batch_size, 1, hidden_size]
-        
-        # Create a starting input_ids with just the bos token
-        input_ids = torch.ones((batch_size, 1), dtype=torch.long, device=device) * self.tokenizer.bos_token_id
-        
-        # Get the embeddings for the BOS token
-        bos_embeddings = self.decoder.get_input_embeddings()(input_ids)
-        
-        # Concatenate cell embeddings with BOS embeddings
-        combined_embeddings = torch.cat([cell_embeddings, bos_embeddings], dim=1)
-        
-        # Create attention mask for the combined embeddings
-        attention_mask = torch.ones((batch_size, combined_embeddings.size(1)), device=device)
-        
-        my_params = {
+        cell_embeddings = cell_embeddings.to(device).unsqueeze(1)  # [B, 1, H]
+
+        # BOS token input IDs and embeddings
+        bos_input_ids = torch.full((batch_size, 1), self.tokenizer.bos_token_id, dtype=torch.long, device=device)
+        bos_embeddings = self.decoder.get_input_embeddings()(bos_input_ids)  # [B, 1, H]
+
+        # Prompt token input IDs and embeddings
+        prompt_input_ids = self.tokenizer(prompt, return_tensors="pt", add_special_tokens=False).input_ids.to(device)  # [1, prompt_len]
+        prompt_input_ids = prompt_input_ids.expand(batch_size, -1)  # [B, prompt_len]
+        prompt_embeddings = self.decoder.get_input_embeddings()(prompt_input_ids)  # [B, prompt_len, H]
+
+        # Concatenate: [cell_embedding] + [BOS] + [prompt]
+        combined_embeddings = torch.cat([cell_embeddings, bos_embeddings, prompt_embeddings], dim=1)
+
+        # Attention mask
+        attention_mask = torch.ones((batch_size, combined_embeddings.size(1)), dtype=torch.long, device=device)
+
+        # Default generation parameters (merged with kwargs)
+        default_generate_args = {
             "max_length": self.config.max_length,
             "num_beams": self.config.num_beams,
             "early_stopping": self.config.early_stopping,
             "no_repeat_ngram_size": self.config.no_repeat_ngram_size,
             "temperature": self.config.temperature,
-            "top_p": self.config.top_p
+            "top_p": self.config.top_p,
         }
-        
-        # Update with user-provided parameters
-        for key, value in my_params.items():
-            if key not in generate_kwargs:
-                generate_kwargs[key] = value
-        
-        # Generate text
-        outputs = self.decoder.generate(
+        for k, v in default_generate_args.items():
+            generate_kwargs.setdefault(k, v)
+
+        # Generate output
+        output_ids = self.decoder.generate(
             inputs_embeds=combined_embeddings,
             attention_mask=attention_mask,
             **generate_kwargs
         )
-        
-        # Decode generated tokens
-        generated_text = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        
-        # Clean up any special tokens that might remain
+
+        # Decode and clean
+        decoded = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)
         if hasattr(self.tokenizer, "additional_special_tokens"):
             for token in self.tokenizer.additional_special_tokens:
-                generated_text = [text.replace(token, "") for text in generated_text]
-        
-        return generated_text[0] if len(generated_text) == 1 else generated_text
+                decoded = [text.replace(token, "") for text in decoded]
+
+        return decoded[0] if batch_size == 1 else decoded
+
 
 
  

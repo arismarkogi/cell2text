@@ -8,28 +8,20 @@ from torch.optim import AdamW
 from transformers import (
     PretrainedConfig,
     get_linear_schedule_with_warmup,
-    default_data_collator,
     AutoTokenizer
 )
 from tqdm import tqdm
 import sys
 
-from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-from torch.amp import GradScaler, autocast
-
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from cell2text_model.model import Cell2TextModel
-from cell2text_dataset.dataset import collate_fn, Cell2TextDataset
-
-
-
-
+from cell2text_dataset.dataset import Cell2TextDataset
+from cell2text_eval.evaluation import evaluate_cell2text_model
 
 
 def train_cell2text_model(args):
-
-    scaler = GradScaler()  # For mixed precision
 
     # Early stopping variables
     patience = args.patience
@@ -62,7 +54,7 @@ def train_cell2text_model(args):
         train_dataset, 
         batch_size=args.batch_size, 
         shuffle=True,
-        collate_fn=collate_fn
+        collate_fn=train_dataset.collate_fn
     )
     
     if args.val_data_path:
@@ -71,7 +63,7 @@ def train_cell2text_model(args):
             val_dataset, 
             batch_size=args.batch_size, 
             shuffle=False,
-            collate_fn=collate_fn
+            collate_fn=train_dataset.collate_fn
         )
         print(f"Validation dataset loaded. Size: {len(val_dataset)}")
     else:
@@ -166,29 +158,33 @@ def train_cell2text_model(args):
             # Move data to device
             expression_tokens = batch["expression_tokens"].to(device)
             expression_token_lengths = batch["expression_token_lengths"].to(device)
+
+            text_input_ids = batch["text_input_ids"].to(device)
+            text_input_attetnion_mask = batch["text_attention_mask"].to(device)
            
             labels = batch["labels"].to(device) if batch["labels"] is not None else None
             
-            with autocast(device_type=device.type):
-                outputs = model(
+            outputs = model(
                     expression_tokens=expression_tokens,
                     expression_token_lengths=expression_token_lengths,
+                    text_input_ids=text_input_ids,
+                    text_input_attetnion_mask=text_input_attetnion_mask,
                     labels=labels
-                )
-                print(type(outputs))
-                print(outputs)
+            )
+            print(type(outputs))
+            print(outputs)
 
-                loss, logits, _ = outputs
+            loss = outputs.loss
 
-            scaler.scale(loss).backward()
+
+            print("Before loss.backward()")
+            loss.backward()
+            print("After loss.backward()")
 
             # Gradient clipping
-            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
-            # Optimizer step
-            scaler.step(optimizer)
-            scaler.update()
+            optimizer.step()
             scheduler.step()
             optimizer.zero_grad()
 
@@ -207,73 +203,13 @@ def train_cell2text_model(args):
         
         # Validation
         if val_loader:
-            model.eval()
-            val_loss = 0
-            val_progress_bar = tqdm(val_loader, desc=f"Epoch {epoch+1}/{args.num_epochs} [Val]")
-            
-            with torch.no_grad():
-                for batch in val_progress_bar:
-                    # Move data to device
-                    expression_tokens = batch["expression_tokens"].to(device)
-                    expression_token_lengths = batch["expression_token_lengths"].to(device)
-                    
-                    labels = batch["labels"].to(device) if batch["labels"] is not None else None
-                    
-                    # Forward pass
-                    outputs = model(
-                        expression_tokens=expression_tokens,
-                        expression_token_lengths=expression_token_lengths,
-                        #text_input_ids=text_input_ids,
-                        #text_attention_mask=text_attention_mask,
-                        labels=labels
-                    )
-                    
-                    loss = outputs.loss
-                    val_loss += loss.item()
-                    
-                    # Update progress bar
-                    val_progress_bar.set_postfix({"loss": loss.item()})
-            
-            # Calculate average validation loss
-            avg_val_loss = val_loss / len(val_loader)
-            print(f"Epoch {epoch+1} average validation loss: {avg_val_loss:.4f}")
+            avg_val_loss, avg_bleu = evaluate_cell2text_model(model, val_loader, tokenizer, device, args)
 
-            # Compute BLEU score for a few examples
-            # bleu_scores = []
-            # smooth = SmoothingFunction().method4
-
-            # for i, batch in enumerate(val_loader):
-            #     if i >= 10:  # Only evaluate on first 10 batches to save time
-            #         break
-            #     expression_tokens = batch["expression_tokens"].to(device)
-            #     expression_token_lengths = batch["expression_token_lengths"].to(device)
-
-            #     with torch.no_grad():
-            #         generated = model.generate(
-            #             expression_tokens=expression_tokens,
-            #             expression_token_lengths=expression_token_lengths,
-            #             num_beams=args.num_beams,
-            #             max_length=args.max_length
-            #         )
-
-            #     for j, gen in enumerate(generated):
-            #         decoded_pred = tokenizer.decode(gen, skip_special_tokens=True)
-            #         target = tokenizer.decode(batch["decoder_input_ids"][j], skip_special_tokens=True)
-            #         bleu = sentence_bleu([target.split()], decoded_pred.split(), smoothing_function=smooth)
-            #         bleu_scores.append(bleu)
-
-            # avg_bleu = np.mean(bleu_scores)
-            # print(f"Epoch {epoch+1} average BLEU score: {avg_bleu:.4f}")
-
-            
-            # Save best model
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
-                best_val_loss = avg_val_loss
-                no_improvement_epochs = 0  # Reset counter
+                no_improvement_epochs = 0
                 print(f"New best validation loss: {best_val_loss:.4f}")
                 
-                # Save the best model
                 save_path = os.path.join(args.output_dir, "best_model.pt")
                 torch.save({
                     "epoch": epoch,
@@ -291,6 +227,10 @@ def train_cell2text_model(args):
                 if no_improvement_epochs >= patience:
                     print("Early stopping triggered.")
                     return
+
+            
+            # Calculate average validation loss
+            print(f"Epoch {epoch+1} average validation loss: {avg_val_loss:.4f}, average BLEU score: {avg_bleu:.4f}")
 
         
         # Save checkpoint after each epoch
