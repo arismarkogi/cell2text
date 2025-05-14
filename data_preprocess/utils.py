@@ -20,7 +20,10 @@ import anndata as ad
 import anndata
 import torch
 from datasets import Dataset
-from geneformer import TranscriptomeTokenizer
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from Geneformer.geneformer import TranscriptomeTokenizer
 import gc
 
 
@@ -238,7 +241,7 @@ def tokenize_with_geneformer(h5ad_path, output_dir):
     filename = os.path.splitext(os.path.basename(h5ad_path))[0]
 
     # Initialize Tokenizer
-    tk = TranscriptomeTokenizer(custom_attrs)
+    tk = TranscriptomeTokenizer(custom_attrs, special_token=True) # the special_token = True is for the CLS
 
     # Tokenize the data
     tk.tokenize_data(

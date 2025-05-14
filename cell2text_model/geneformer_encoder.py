@@ -10,7 +10,7 @@ from Geneformer.geneformer.emb_extractor import get_embs
 from Geneformer.geneformer import perturber_utils as pu
 import pickle
 from datasets import Dataset
-
+import numpy as np
 
 
 
@@ -26,7 +26,7 @@ class GeneformerConfig(PretrainedConfig):
 
     def __init__(
         self,
-        emb_mode="cell",
+        emb_mode="gene",
         max_ncells=1000,  
         emb_layer=-1,
         emb_label=None,
@@ -68,6 +68,7 @@ class GeneformerModel(
 
         with open(token_dictionary_file, "rb") as f:
             self.gene_token_dict = pickle.load(f)
+            self.pad_token_id = self.gene_token_dict.get("<pad>")
 
         self.token_gene_dict = {v: k for k, v in self.gene_token_dict.items()}
         
@@ -84,16 +85,7 @@ class GeneformerModel(
         bool_masked_pos (`torch.BoolTensor` of shape `(batch_size, num_patches)`, *optional*):
             Boolean masked positions. Indicates which patches are masked (1) and which aren't (0).
         """
-        # embs = get_embs(
-        #     self.geneformer_model,
-        #     expression_tokens,
-        #     expression_token_lengths,
-        #     self.config.emb_mode,
-        #     self.config.emb_layer,
-        #     PAD_TOKEN_ID,
-        #     self.config.forward_batch_size,
-        #     self.config.summary_stat,
-        # )
+        
 
         layer_to_quant = pu.quant_layers(self.geneformer_model) + self.config.emb_layer
         
@@ -133,6 +125,9 @@ class GeneformerModel(
         )
 
 
+
+        print("Shape of embs:", embs.shape)
+
         return embs
 
 
@@ -170,7 +165,7 @@ class GeneformerModel(
         )
 
         # Print model architecture
-        print("\nModel Architecture:")
+        print("Geneformer Architecture:")
         print(model.geneformer_model)
 
 

@@ -43,6 +43,8 @@ class Cell2TextModel(PreTrainedModel):
         self.decoder_hidden_size = config.decoder_hidden_size
         self.mlp_hidden_size = config.mlp_hidden_size
         self.mlp_dropout = config.mlp_dropout
+        self.k = config.k
+        self.top_k=config.top_k
 
         # Initialize models
         self.cell_encoder = None  # Will be loaded in warm_up
@@ -103,10 +105,24 @@ class Cell2TextModel(PreTrainedModel):
             expression_token_lengths=expression_token_lengths,
             return_dict=True
         )
+
+
+        print(f"self.top_k: {self.top_k}")
+        if self.top_k == "express":
+            # Selects top-k tokens from each sample to fit the decoder's hidden size
+            cell_embeddings = cell_embeddings[:, :self.k+1, :] # +1 because of the CLS token at the beginning of the sequnece
         
-         
-        
+        elif self.top_k == "score":
+            pass 
+
+
+
+
+        # Projection from encoder_hidden_dim to decoder_hidden_dim
         cell_embeddings = self.cell_to_embedding(cell_embeddings)
+
+
+        print(f"Embeddings Shape: {cell_embeddings.shape}")
 
         # Forward pass through decoder
         decoder_outputs = self.decoder(
@@ -147,8 +163,15 @@ class Cell2TextModel(PreTrainedModel):
             expression_token_lengths=expression_token_lengths,
             return_dict=True
         )
-        
 
+        if self.top_k == "express":
+            # Selects top-k tokens from each sample to fit the decoder's hidden size
+            cell_embeddings = cell_embeddings[:, :self.k+1, :] # +1 because of the CLS token at the beginning of the sequnece
+        
+        elif self.top_k == "score": 
+            pass
+        
+        # Projection from encoder_hidden_dim to decoder_hidden_dim
         cell_embeddings = self.cell_to_embedding(cell_embeddings)
         
         # Generate text description using the decoder

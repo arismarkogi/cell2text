@@ -59,13 +59,13 @@ with torch.no_grad():
 print(f"Forward pass successful. Output shape: {outputs}")
 print(f"Processed {sample_size} samples out of {len(df)} total samples")
 
-# Generate a description for the first sample
-print("\nGenerating description for first sample...")
-description = model.generate_cell_description(
-    expression_tokens=expression_tokens[0:1],
-    expression_token_lengths=expression_token_lengths[0:1],
-    max_length=50,  # Adjust as needed
-    num_beams=2     # Use a smaller beam size for testing
-)
+# # Generate a description for the first sample
+# print("\nGenerating description for first sample...")
+# description = model.generate_cell_description(
+#     expression_tokens=expression_tokens[0:1],
+#     expression_token_lengths=expression_token_lengths[0:1],
+#     max_new_tokens=50,  # Adjust as needed
+#     num_beams=2     # Use a smaller beam size for testing
+# )
 
-print(f"Generated description: {description}")
+# print(f"Generated description: {description}")

@@ -10,6 +10,7 @@ from transformers import (
     get_linear_schedule_with_warmup,
     AutoTokenizer
 )
+import pickle
 from tqdm import tqdm
 import sys
 
@@ -17,6 +18,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from cell2text_model.model import Cell2TextModel
+from cell2text_model.configuration import Cell2TextConfig
 from cell2text_dataset.dataset import Cell2TextDataset
 from cell2text_eval.evaluation import evaluate_cell2text_model
 
@@ -49,12 +51,25 @@ def train_cell2text_model(args):
     # 3. Load the datasets
     print(f"Loading datasets...")
     print(tokenizer)
+
+    # Find the pad_token_id of geneformer
+    token_dictionary_file = "/home/arismarkog/Desktop/cell2text/Geneformer/geneformer/token_dictionary_gc95M.pkl"
+
+    with open(token_dictionary_file, "rb") as f:
+        gene_token_dict = pickle.load(f)
+        geneformer_pad_token_id = gene_token_dict["<pad>"]
+
+
+    print(f"geneformer_pad_token_id: {geneformer_pad_token_id}")
+
+
+
     train_dataset = Cell2TextDataset(args.train_data_path, tokenizer)
     train_loader = DataLoader(
         train_dataset, 
         batch_size=args.batch_size, 
         shuffle=True,
-        collate_fn=train_dataset.collate_fn
+        collate_fn=train_dataset.collate_fn(geneformer_pad_token_id=geneformer_pad_token_id)
     )
     
     if args.val_data_path:
@@ -63,7 +78,7 @@ def train_cell2text_model(args):
             val_dataset, 
             batch_size=args.batch_size, 
             shuffle=False,
-            collate_fn=train_dataset.collate_fn
+            collate_fn=train_dataset.collate_fn(geneformer_pad_token_id=geneformer_pad_token_id)
         )
         print(f"Validation dataset loaded. Size: {len(val_dataset)}")
     else:
@@ -73,7 +88,7 @@ def train_cell2text_model(args):
     
     # 4. Initialize model configuration
     print("Initializing model configuration...")
-    config = PretrainedConfig()
+    config = Cell2TextConfig()
     
     # Set required configuration parameters
     config.cell_encoder_hidden_size = args.encoder_hidden_size
@@ -87,6 +102,8 @@ def train_cell2text_model(args):
     config.max_ncells = args.max_ncells
     config.max_length = args.max_length
     config.num_beams = args.num_beams
+
+
     
     # 5. Initialize the model
     print("Initializing model...")
@@ -98,7 +115,7 @@ def train_cell2text_model(args):
         if param.requires_grad:
             print(f"{name}: {param.numel()}")
 
-    # Freeze LLaMA decoder weights
+    # Freeze LLaMA decoder weights in order to do a loss.backward() my computer's RAM
     for param in model.decoder.parameters():
         param.requires_grad = False
     print("LLaMA decoder parameters frozen.")
@@ -258,6 +275,7 @@ if __name__ == "__main__":
                         help="Path to the parquet file containing validation data")
     parser.add_argument("--output_dir", type=str, default="./checkpoints",
                         help="Directory to save model checkpoints")
+    
     
     # Model parameters
     parser.add_argument("--encoder_hidden_size", type=int, default=512,

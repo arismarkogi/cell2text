@@ -6,7 +6,7 @@ class Cell2TextConfig(PretrainedConfig):
     def __init__(
         self,
         # Encoder configuration
-        emb_mode="cell",  # ["cls", "cell", "gene"], this is a hyperparameter of the embeddings
+        emb_mode="gene",  # ["cls", "cell", "gene"], use "gene" for now and probably forever
         max_ncells=1000,
         emb_layer=-1,  # {-1, 0}
         emb_label=None,
@@ -16,8 +16,12 @@ class Cell2TextConfig(PretrainedConfig):
         
         # Model dimensions
         cell_encoder_hidden_size=512, # Geneformer hidden_dim
+
+        k=512, # hyperparameter for the top_k selection of genes (tokens)
+        top_k="express", # ["score", "express", None] "score": selects the top_k by apllying a scoring function, "express": get the tokens of the top_k most expressed tokens
         
-        mlp_hidden_size=1024, # projection layer hidden_dim
+        
+        mlp_hidden_size=256, # projection layer hidden_dim
         mlp_dropout=0.05,
         
         # Paths and files
@@ -25,7 +29,7 @@ class Cell2TextConfig(PretrainedConfig):
         geneformer_path="/home/arismarkog/Desktop/cell2text/Geneformer",
         
         # Generation parameters
-        max_length=100,
+        max_length=500,
         num_beams=4,
         early_stopping=True,
         no_repeat_ngram_size=3,
@@ -55,7 +59,9 @@ class Cell2TextConfig(PretrainedConfig):
         self.cell_encoder_hidden_size = cell_encoder_hidden_size
         self.mlp_hidden_size = mlp_hidden_size
         self.mlp_dropout = mlp_dropout
-        
+        self.k = k
+        self.top_k = top_k
+
         # Paths
         self.token_dictionary_path = token_dictionary_path
         self.geneformer_path = geneformer_path
