@@ -173,7 +173,8 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
         
         print(f"Inside llama decoder, input_embeds.shape: {inputs_embeds.shape}")
 
-       
+        # Remove inputs_embeds from kwargs to avoid duplicate argument error, i dont know what's happemning
+        kwargs.pop('inputs_embeds', None)
 
         # Forward through LLaMA with prepared embeddings
         return self.llama(

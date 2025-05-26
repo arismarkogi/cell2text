@@ -98,7 +98,7 @@ class Cell2TextDataset(Dataset):
             "description_input_ids": description_ids,  # (1, desc_len)
         }
     
-    def collate_fn(self, geneformer_pad_token_id, mode="train"):
+    def collate_fn(self, geneformer_pad_token_id=0, mode="train"):
         """
         Create collate function with simplified right padding for all sequences
         Args:
