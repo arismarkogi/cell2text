@@ -1,3 +1,5 @@
+#https://github.com/ColinFX/Prot2Text-V2 This code was really helpful
+
 import torch
 import torch.nn as nn
 from transformers import LlamaConfig, LlamaForCausalLM, AutoConfig, AutoTokenizer
