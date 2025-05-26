@@ -67,36 +67,69 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
         return model
     
     def prepare_decoder_inputs(
-        self, 
-        input_ids: torch.LongTensor,
-        cell_embeddings: torch.FloatTensor,
-        attention_mask: Optional[torch.LongTensor] = None,
-        cell_attention_mask: Optional[torch.LongTensor] = None, 
+        self,
+        input_ids: torch.LongTensor,         # Tokenized text prompt (batch_size, seq_len)
+        cell_embeddings: torch.FloatTensor,  # Gene expression embeddings (batch_size, cell_seq_len, hidden_dim)
+        attention_mask: Optional[torch.LongTensor] = None,    # Attention mask for input_ids (batch_size, seq_len)
+        cell_attention_mask: Optional[torch.LongTensor] = None, # Attention mask for cell_embeddings (batch_size, cell_seq_len)
     ):
         batch_size, seq_len = input_ids.size()
-        _, cell_seq_len, _ = cell_embeddings.size()
-        
-        if attention_mask is None: 
+        _, cell_seq_len_dim, _ = cell_embeddings.size() # Note: Renamed cell_seq_len to avoid conflict if it's a class member
+
+        # Default attention masks if not provided (all ones, meaning attend to all tokens)
+        if attention_mask is None:
             attention_mask = torch.ones((batch_size, seq_len), dtype=torch.long, device=input_ids.device)
-        if cell_attention_mask is None: 
-            cell_attention_mask = torch.ones((batch_size, cell_seq_len), dtype=torch.long, device=cell_embeddings.device)
+        if cell_attention_mask is None:
+            
+            cell_attention_mask = torch.ones((batch_size, cell_seq_len_dim), dtype=torch.long, device=cell_embeddings.device)
 
-        print("Vocab size:", self.llama.config.vocab_size)
-        print("Pad token ID:", self.tokenizer.pad_token_id)
-
-
-        print(f"input_ids:{input_ids}")
-        print(f"input_ids.shape: {input_ids.shape}")
-        # Get text embeddings
+        
+        # 1. Get text embeddings from the language model's embedding layer
+        # input_ids are token indices. This converts them to dense vectors.
+        # Shape: (batch_size, seq_len, hidden_dim)
         inputs_embeds = self.llama.get_input_embeddings()(input_ids)
-        
-        # Replace placeholders with cell embeddings
-        placeholder_mask = input_ids == self.config.placeholder_id
-        cell_mask = cell_attention_mask.bool()
-        inputs_embeds[placeholder_mask] = cell_embeddings[cell_mask]
-        
+
+        # 2. Replace placeholders with cell embeddings
+        # placeholder_mask = input_ids == self.config.placeholder_id # (batch_size, seq_len)
+        # cell_mask = cell_attention_mask.bool() # (batch_size, cell_seq_len_dim)
+        # inputs_embeds[placeholder_mask] = cell_embeddings[cell_mask]
+
+
+        # Iterate over each sample in the batch for robust replacement
+        for i in range(batch_size):
+            # Find indices of placeholder tokens in the current sample's input_ids
+            # .nonzero() returns a tuple of tensors, one for each dimension. We want the first one.
+            placeholder_indices_in_sample = (input_ids[i] == self.config.placeholder_id).nonzero(as_tuple=True)[0]
+            num_placeholders_sample = len(placeholder_indices_in_sample)
+
+            if num_placeholders_sample == 0:
+                continue # No placeholders to replace in this sample
+
+            # Select the active cell embeddings for the current sample using its cell_attention_mask
+            # active_cell_embeddings_for_sample shape: (num_active_genes_in_sample, hidden_dim)
+            active_cell_embeddings_for_sample = cell_embeddings[i][cell_attention_mask[i].bool()]
+
+            # The number of placeholders in the text prompt (num_placeholders_sample)
+            # dictates how many gene embeddings we need to insert. This count comes from
+            # `placeholder_length` in `__getitem__` (which considers `top_k`).
+            # We must ensure we have enough cell embeddings and select the correct ones.
+            if active_cell_embeddings_for_sample.shape[0] < num_placeholders_sample:
+                raise ValueError(
+                    f"Sample {i}: Not enough cell embeddings ({active_cell_embeddings_for_sample.shape[0]}) "
+                    f"to fill placeholders ({num_placeholders_sample}). "
+                    f"Ensure cell_embeddings provide at least `top_k` (or actual gene count if less than `top_k`) embeddings per sample."
+                )
+
+            # Select the subset of cell embeddings to insert. We assume the first
+            # `num_placeholders_sample` active cell embeddings are the ones to use.
+            # This aligns with using `top_k` (or min(len, top_k)) genes.
+            embeddings_to_insert = active_cell_embeddings_for_sample[:num_placeholders_sample]
+
+            # Perform the replacement for the current sample
+            inputs_embeds[i, placeholder_indices_in_sample] = embeddings_to_insert
+
         return inputs_embeds, attention_mask
-    
+        
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -188,9 +221,6 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
     
     # Delegate essential properties and methods to LLaMA
     def get_input_embeddings(self):
-        print("PAD token ID:", self.tokenizer.pad_token_id)
-        print("Vocab size:", self.decoder.config.vocab_size)
-        print("Pad token ID:", self.tokenizer.pad_token_id)
         return self.llama.get_input_embeddings()
     
     def set_input_embeddings(self, value):

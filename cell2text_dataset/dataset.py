@@ -51,7 +51,7 @@ class Cell2TextDataset(Dataset):
 
         # Get target description
         if "struct_desc" not in sample or not sample["struct_desc"]:
-            raise ValueError(f"No 'text_desc' for index {idx}")
+            raise ValueError(f"No 'struct_desc' for index {idx}")
         
         description = sample["struct_desc"]
         
@@ -63,6 +63,10 @@ class Cell2TextDataset(Dataset):
         placeholder_string = self.placeholder_token * placeholder_length
         
         user_message = f"Gene expression embeddings: {placeholder_string}"
+        
+    
+        
+        
         prompt_conversation = [
             {"role": "system", "content": self.system_message}, 
             {"role": "user", "content": user_message}
@@ -94,13 +98,12 @@ class Cell2TextDataset(Dataset):
             "description_input_ids": description_ids,  # (1, desc_len)
         }
     
-    def collate_fn(self, geneformer_pad_token_id, mode="train", top_k=None):
+    def collate_fn(self, geneformer_pad_token_id, mode="train"):
         """
-        Create collate function similar to Prot2TextInstructCollater
+        Create collate function with simplified right padding for all sequences
         Args:
             geneformer_pad_token_id: Pad token ID for gene expression data
             mode: "train" or "inference"
-            top_k: If specified, override dataset top_k for this batch
         """
         def collate(batch):
             # Extract components from batch
@@ -108,9 +111,6 @@ class Cell2TextDataset(Dataset):
             expression_lengths = torch.tensor([item["expression_token_length"] for item in batch], dtype=torch.long)
             prompt_input_ids = [item["prompt_input_ids"][0] for item in batch]
             description_input_ids = [item["description_input_ids"][0] for item in batch]
-
-            # Keep full expression tokens - no truncation here
-            # The truncation only affects placeholders in the prompt (already handled in __getitem__)
 
             # Pad expression tokens (right padding)
             max_expr_len = max(len(t) for t in expression_tokens)
@@ -121,17 +121,14 @@ class Cell2TextDataset(Dataset):
                 padded_expr[i, :len(t)] = t
                 padded_expr_mask[i, :len(t)] = 1
 
-            # Pad prompts (left padding like in protein dataset)
+            # Pad prompts (right padding)
             max_prompt_len = max(len(p) for p in prompt_input_ids)
-
-            
             padded_prompt_ids = torch.full((len(batch), max_prompt_len), fill_value=self.tokenizer.pad_token_id, dtype=torch.long)
             padded_prompt_mask = torch.zeros((len(batch), max_prompt_len), dtype=torch.long)
             
             for i, p in enumerate(prompt_input_ids):
-                start_idx = max_prompt_len - len(p)
-                padded_prompt_ids[i, start_idx:] = p
-                padded_prompt_mask[i, start_idx:] = 1
+                padded_prompt_ids[i, :len(p)] = p
+                padded_prompt_mask[i, :len(p)] = 1
 
             # Pad descriptions (right padding)
             max_desc_len = max(len(d) for d in description_input_ids)
@@ -144,7 +141,7 @@ class Cell2TextDataset(Dataset):
                 padded_desc_mask[i, :len(d)] = 1
                 padded_labels[i, :len(d)] = d  # Labels same as description for training
 
-            # Combine based on mode (similar to protein dataset logic)
+            # Combine based on mode
             if mode == "train":
                 # Concatenate prompt and description for training
                 combined_input_ids = torch.cat([padded_prompt_ids, padded_desc_ids], dim=1)
@@ -176,5 +173,5 @@ class Cell2TextDataset(Dataset):
             
             else:
                 raise ValueError(f"Invalid mode: {mode}")
-    
+
         return collate
