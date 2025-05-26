@@ -34,7 +34,7 @@ class Cell2TextConfig(PretrainedConfig):
         
         # Model configurations
         llama_config=None, # Configuration for Llama model
-        decoder_model_name_or_path="meta-llama/Llama-3.2-3B-Instruct", # Default model path
+        decoder_model_name_or_path="meta-llama/Llama-3.2-1B-Instruct", # Default model path
         decoder_hidden_size=2048, # Default for meta-llama/Llama-3.2-1B-Instruct
         **kwargs
     ):

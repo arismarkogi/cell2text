@@ -304,12 +304,21 @@ class Cell2TextModel(PreTrainedModel):
         self,
         expression_tokens: Optional[torch.LongTensor] = None,
         expression_token_lengths: Optional[torch.LongTensor] = None,
-        prompt_template: Optional[str] = None,  # Changed from prompt to prompt_template
+        inputs: Optional[torch.LongTensor] = None,  # tokenized prompt (input_ids)
+        attention_mask: Optional[torch.LongTensor] = None,  # attention mask for prompt
         device='cpu',
         **generate_kwargs
     ):
         """
-        Generate text description for cell expression data
+        Generate text description for cell expression data using tokenized prompt.
+        
+        Args:
+            expression_tokens: Gene expression tokens
+            expression_token_lengths: Lengths of expression token sequences
+            inputs: Tokenized prompt (input_ids)
+            attention_mask: Attention mask for the tokenized prompt
+            device: Device to run inference on
+            **generate_kwargs: Additional generation parameters
         """
         if expression_tokens is None:
             raise ValueError("You need to provide expression_tokens")
@@ -325,16 +334,24 @@ class Cell2TextModel(PreTrainedModel):
             return_dict=True
         )
 
-        # Selects top-k tokens from each sample to fit the decoder's hidden size
-        cell_embeddings = cell_embeddings[:, :self.top_k, :]  # Fixed: changed from self.k+1 to self.top_k
-        
-        # Projection from encoder_hidden_dim to decoder_hidden_dim
+        # Handle different return types from encoder
+        if hasattr(cell_embeddings, 'last_hidden_state'):
+            cell_embeddings = cell_embeddings.last_hidden_state
+        elif hasattr(cell_embeddings, 'hidden_states'):
+            cell_embeddings = cell_embeddings.hidden_states[-1]
+
+        # Select top-k tokens from each sample
+        if self.top_k < cell_embeddings.shape[1]:
+            cell_embeddings = cell_embeddings[:, :self.top_k, :]
+                
+        # Project from encoder_hidden_dim to decoder_hidden_dim
         cell_embeddings = self.cell_to_embedding(cell_embeddings)
         
-        # Generate text description using the decoder - now using prompt_template parameter
+        # Generate text description using the decoder with tokenized prompt
         return self.decoder.generate_cell_description(
             cell_embeddings=cell_embeddings,
-            prompt_template=prompt_template,  # Changed from prompt to prompt_template
+            inputs=inputs,  # tokenized prompt
+            attention_mask=attention_mask,
             device=device,
             **generate_kwargs
         )

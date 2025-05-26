@@ -467,7 +467,7 @@ def create_argument_parser():
                         help="Path to pretrained Llama decoder model")
     parser.add_argument("--max_ncells", type=int, default=1000,
                         help="Maximum number of cells")
-    parser.add_argument("--max_length", type=int, default=100,
+    parser.add_argument("--max_length", type=int, default=500,
                         help="Maximum length of generated text")
     parser.add_argument("--num_beams", type=int, default=4,
                         help="Number of beams for beam search")

@@ -186,24 +186,24 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
             **kwargs
         )
     
-    def generate(self, **kwargs):
-        """Delegate generation to LLaMA after processing cell embeddings if provided."""
-        if 'cell_embeddings' in kwargs:
-            cell_embeddings = kwargs.pop('cell_embeddings')
-            cell_attention_mask = kwargs.pop('cell_attention_mask', None)
-            inputs = kwargs.pop('input_ids', kwargs.pop('inputs', None))
-            attention_mask = kwargs.pop('attention_mask', None)
-            
-            if inputs is None:
-                batch_size = cell_embeddings.shape[0]
-                inputs = torch.full(
-                    (batch_size, 1), 
-                    self.tokenizer.bos_token_id, 
-                    dtype=torch.long, 
-                    device=cell_embeddings.device
-                )
-            
-            # Get prepared embeddings
+   # Updated generate method in Cell2TextLlamaModel class
+    def generate(
+        self,
+        inputs: torch.LongTensor,  # alias of `input_ids` - tokenized prompt
+        attention_mask: Optional[torch.LongTensor] = None,
+        cell_embeddings: Optional[torch.FloatTensor] = None,
+        cell_attention_mask: Optional[torch.LongTensor] = None,
+        **kwargs
+    ) -> Union[GenerateOutput, torch.LongTensor]:
+        """
+        Do inference based on given input prompt. 
+        `inputs` is expected to be tokenized [prompt] only. 
+        Output will not keep the input prompt due to input in form of embeds.
+        Generation behavior can be controlled by `kwargs`, read 
+        `GenerationMixin.generate` for more info. 
+        """
+        if cell_embeddings is not None:
+            # Get decoder inputs
             prompt_inputs_embeds, prompt_attention_mask = self(
                 input_ids=inputs, 
                 attention_mask=attention_mask,
@@ -219,8 +219,12 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
                 **kwargs
             )
         else:
-            # Standard generation
-            return self.llama.generate(**kwargs)
+            # Standard generation without cell embeddings
+            return self.llama.generate(
+                input_ids=inputs,
+                attention_mask=attention_mask,
+                **kwargs
+            )
     
     # Delegate essential properties and methods to LLaMA
     def get_input_embeddings(self):
@@ -246,35 +250,48 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
     def generate_cell_description(
         self,
         cell_embeddings: torch.FloatTensor,
-        prompt_template: Optional[str] = None,
+        inputs: Optional[torch.LongTensor] = None,  # tokenized prompt
+        attention_mask: Optional[torch.LongTensor] = None,
         device: str = 'cpu',
         **generate_kwargs
     ):
+        """
+        Generate text description for cell embeddings using tokenized prompt.
+        
+        Args:
+            cell_embeddings: Cell embeddings tensor
+            inputs: Tokenized prompt (input_ids)
+            attention_mask: Attention mask for the tokenized prompt
+            device: Device to run inference on
+            **generate_kwargs: Additional generation parameters
+        """
         batch_size = cell_embeddings.shape[0]
         cell_embeddings = cell_embeddings.to(device)
         
-        if prompt_template is not None:
-            prompt_inputs = self.tokenizer(
-                prompt_template,
-                return_tensors="pt",
-                padding=True,
-                truncation=True
-            )
-            input_ids = prompt_inputs.input_ids.to(device)
-            attention_mask = prompt_inputs.attention_mask.to(device)
+        if inputs is not None:
+            # Use provided tokenized prompt
+            inputs = inputs.to(device)
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(device)
+            else:
+                # Create attention mask if not provided
+                attention_mask = torch.ones_like(inputs)
             
-            if batch_size > 1:
-                input_ids = input_ids.repeat(batch_size, 1)
+            # Expand to match batch size if needed
+            if batch_size > 1 and inputs.shape[0] == 1:
+                inputs = inputs.repeat(batch_size, 1)
                 attention_mask = attention_mask.repeat(batch_size, 1)
         else:
-            input_ids = torch.full(
+            # Use BOS token as default if no prompt provided
+            inputs = torch.full(
                 (batch_size, 1), 
                 self.tokenizer.bos_token_id, 
                 dtype=torch.long, 
                 device=device
             )
-            attention_mask = torch.ones_like(input_ids)
+            attention_mask = torch.ones_like(inputs)
 
+        # Set default generation parameters from config
         default_generate_args = {
             "max_new_tokens": self.config.max_length,
             "num_beams": self.config.num_beams,
@@ -287,16 +304,19 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
         for k, v in default_generate_args.items():
             generate_kwargs.setdefault(k, v)
 
+        # Generate using the updated generate method
         output_ids = self.generate(
-            input_ids=input_ids,
+            inputs=inputs,
             attention_mask=attention_mask,
             cell_embeddings=cell_embeddings,
             **generate_kwargs
         )
 
+        # Decode the output
         decoded = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)
         if hasattr(self.tokenizer, "additional_special_tokens"):
             for token in self.tokenizer.additional_special_tokens:
                 decoded = [text.replace(token, "") for text in decoded]
 
         return decoded[0] if batch_size == 1 else decoded
+
