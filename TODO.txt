@@ -1,3 +1,6 @@
 Remember to change the "cpu" to "cuda" in emb_extractor.py and pertuber_utils.py
 Check the forward pass at Geneformer again, When use GPU comment out the Dataset and .numpy() things to be efficient
-CLS token before and EOS token after rank value encoding, during tokenization (special_token = True)
+CLS token before and EOS token after rank value encoding, during tokenization (special_token = True, by default)
+Maybe find a better prompt at dataset.py
+Change "struct_desc" to "free_text_desc" in the dataset.py after I finalize the dataset
+Should i include the EOS token at the truncated Geneformer tokens that will be the input to Llama?

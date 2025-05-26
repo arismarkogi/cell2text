@@ -6,21 +6,17 @@ class Cell2TextConfig(PretrainedConfig):
     def __init__(
         self,
         # Encoder configuration
-        emb_mode="gene",  # ["cls", "cell", "gene"], use "gene" for now and probably forever
+        emb_mode="gene", # ["cls", "cell", "gene"], use "gene" for now and probably forever
         max_ncells=1000,
-        emb_layer=-1,  # {-1, 0}
+        emb_layer=-1, # {-1, 0}
         emb_label=None,
         nproc=4,
         forward_batch_size=100,
-        summary_stat=None,  # [None, "mean", "median", "exact_mean", "exact_median"]
+        summary_stat=None, # [None, "mean", "median", "exact_mean", "exact_median"]
         
         # Model dimensions
         cell_encoder_hidden_size=512, # Geneformer hidden_dim
-
-        k=512, # hyperparameter for the top_k selection of genes (tokens)
-        top_k="express", # ["score", "express", None] "score": selects the top_k by apllying a scoring function, "express": get the tokens of the top_k most expressed tokens
-        
-        
+        top_k=512, # hyperparameter for the top_k selection of genes (tokens)
         mlp_hidden_size=256, # projection layer hidden_dim
         mlp_dropout=0.05,
         
@@ -28,19 +24,17 @@ class Cell2TextConfig(PretrainedConfig):
         token_dictionary_path="/home/arismarkog/Desktop/cell2text/Geneformer/geneformer/token_dictionary_gc95M.pkl",
         geneformer_path="/home/arismarkog/Desktop/cell2text/Geneformer",
         
-        # Generation parameters
-        max_length=500,
+        # Generation parameters - Fixed parameter names to match Cell2TextLlamaConfig
+        max_new_tokens=500,  # Changed from max_length
         num_beams=4,
         early_stopping=True,
         no_repeat_ngram_size=3,
         temperature=1.0,
         top_p=1.0,
-
-
         
         # Model configurations
-        llama_config=None,  # Configuration for Llama model
-        decoder_model_name_or_path="meta-llama/Llama-3.2-1B-Instruct",  # Default model path
+        llama_config=None, # Configuration for Llama model
+        decoder_model_name_or_path="meta-llama/Llama-3.2-3B-Instruct", # Default model path
         decoder_hidden_size=2048, # Default for meta-llama/Llama-3.2-1B-Instruct
         **kwargs
     ):
@@ -59,25 +53,21 @@ class Cell2TextConfig(PretrainedConfig):
         self.cell_encoder_hidden_size = cell_encoder_hidden_size
         self.mlp_hidden_size = mlp_hidden_size
         self.mlp_dropout = mlp_dropout
-        self.k = k
         self.top_k = top_k
-
+        
         # Paths
         self.token_dictionary_path = token_dictionary_path
         self.geneformer_path = geneformer_path
         
-        # Generation parameters
-        self.max_generation_length = max_length
+        # Generation parameters - Fixed attribute name
+        self.max_new_tokens = max_new_tokens  # Changed from max_generation_length
         self.num_beams = num_beams
-        self.early_stopping=early_stopping
-        self.no_repeat_ngram_size=no_repeat_ngram_size
-        self.temperature=temperature
-        self.top_p=top_p
-        
+        self.early_stopping = early_stopping
+        self.no_repeat_ngram_size = no_repeat_ngram_size
+        self.temperature = temperature
+        self.top_p = top_p
         
         # Model configurations
         self.llama_config = llama_config or {}
         self.decoder_model_name_or_path = decoder_model_name_or_path
-        self.decoder_hidden_size=decoder_hidden_size
-        
-        
+        self.decoder_hidden_size = decoder_hidden_size

@@ -3,12 +3,12 @@ import torch.nn as nn
 from transformers import LlamaConfig, LlamaForCausalLM, AutoConfig, AutoTokenizer
 from typing import Optional, Tuple, Union, List, Dict, Any
 from transformers import PretrainedConfig, PreTrainedModel, GenerationMixin
-
-
+from transformers.generation.utils import GenerateOutput
+from transformers.modeling_outputs import CausalLMOutputWithPast
+from transformers import Cache
 
 
 class Cell2TextLlamaConfig(PretrainedConfig):
-
     def __init__(
         self,
         num_beams=4,
@@ -17,202 +17,231 @@ class Cell2TextLlamaConfig(PretrainedConfig):
         no_repeat_ngram_size=3,
         temperature=1.0,
         top_p=1.0,
-
+        placeholder_id=128003,
         **kwargs,
     ):
         super().__init__(**kwargs)
-
-        self.num_beams=num_beams
-        self.max_length=max_length
-        self.early_stopping=early_stopping
-        self.no_repeat_ngram_size=no_repeat_ngram_size
-        self.temperature=temperature
-        self.top_p=top_p
-
-
+        self.num_beams = num_beams
+        self.max_length = max_length
+        self.early_stopping = early_stopping
+        self.no_repeat_ngram_size = no_repeat_ngram_size
+        self.temperature = temperature
+        self.top_p = top_p
+        self.placeholder_id = placeholder_id
 
 
 class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
     
     config_class = Cell2TextLlamaConfig
     
-    
     def __init__(self, config):
         super().__init__(config)
-            
-        # Initialize the Llama model
-        self.decoder = None  # Will be loaded in warm_up
-        
-        self.config = config or Cell2TextLlamaConfig()
+        self.llama = None  # Will be loaded in from_pretrained
+        self.tokenizer = None
     
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path: str, config=None, torch_dtype=None, **kwargs):
-        """
-        Instantiate model and load pre-trained LLaMA weights from a given path or model name
-        """
-
         if "config" in kwargs:
             config = kwargs.pop("config")
             if isinstance(config, dict):
                 config = Cell2TextLlamaConfig(**config)
             elif not isinstance(config, Cell2TextLlamaConfig):
-                raise ValueError(
-                    "Parameter `config` must be a dictionary or an instance of `GeneformerConfig`."
-                )
+                raise ValueError("Parameter `config` must be a dictionary or an instance of `Cell2TextLlamaConfig`.")
         else:
             config = Cell2TextLlamaConfig()
 
-
         model = cls(config, **kwargs)
                 
-        # Use appropriate dtype
         if torch_dtype is None:
             torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
         
-        # Load decoder config and model
-        llama_config = AutoConfig.from_pretrained(pretrained_model_name_or_path)
-        model.decoder = LlamaForCausalLM.from_pretrained(
+        # Load the LLaMA model
+        model.llama = LlamaForCausalLM.from_pretrained(
             pretrained_model_name_or_path,
             torch_dtype=torch_dtype,
-            config=llama_config,
             **kwargs
         )
-
-        # Attach config explicitly if needed
-        model.decoder.config = llama_config
-
-        model.tokenizer=AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
+        model.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
+        
         
         return model
     
+    def prepare_decoder_inputs(
+        self, 
+        input_ids: torch.LongTensor,
+        cell_embeddings: torch.FloatTensor,
+        attention_mask: Optional[torch.LongTensor] = None,
+        cell_attention_mask: Optional[torch.LongTensor] = None, 
+    ):
+        batch_size, seq_len = input_ids.size()
+        _, cell_seq_len, _ = cell_embeddings.size()
+        
+        if attention_mask is None: 
+            attention_mask = torch.ones((batch_size, seq_len), dtype=torch.long, device=input_ids.device)
+        if cell_attention_mask is None: 
+            cell_attention_mask = torch.ones((batch_size, cell_seq_len), dtype=torch.long, device=cell_embeddings.device)
+
+        print("Vocab size:", self.llama.config.vocab_size)
+        print("Pad token ID:", self.tokenizer.pad_token_id)
+
+
+        print(f"input_ids:{input_ids}")
+        print(f"input_ids.shape: {input_ids.shape}")
+        # Get text embeddings
+        inputs_embeds = self.llama.get_input_embeddings()(input_ids)
+        
+        # Replace placeholders with cell embeddings
+        placeholder_mask = input_ids == self.config.placeholder_id
+        cell_mask = cell_attention_mask.bool()
+        inputs_embeds[placeholder_mask] = cell_embeddings[cell_mask]
+        
+        return inputs_embeds, attention_mask
+    
     def forward(
         self,
-        cell_embeddings: torch.FloatTensor,
-        text_input_ids: Optional[torch.LongTensor] = None,
-        text_attention_mask: Optional[torch.FloatTensor] = None,
-        labels: Optional[torch.LongTensor] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
-        **kwargs
-    ):
-        """
-        Forward pass that prepends cell embeddings to input_ids
-        """
-        batch_size = cell_embeddings.shape[0]
-        
-        if text_input_ids is None:
-            print("TEXT_INPUT_IDS is None\nWe set it to BOS")
-            bos_token_id = self.tokenizer.bos_token_id  # Ensure `tokenizer` is available
-            text_input_ids = torch.full(
-                (cell_embeddings.shape[0], 1), bos_token_id, dtype=torch.long, device=cell_embeddings.device
-            )
-
-
-        # Get Llama embeddings for text tokens
-        text_embeddings = self.decoder.get_input_embeddings()(text_input_ids)
-        print(f"text_embeddings_shape{text_embeddings.shape}")
-
-        # Concatenate cell embeddings with text embeddings
-        combined_embeddings = torch.cat([cell_embeddings, text_embeddings], dim=1)
-
-        print(f"combined_embeddings_shape: {combined_embeddings.shape}")
-
-
-        num_cell_tokens = cell_embeddings.shape[1]
-
-        # Update attention mask
-        if text_attention_mask is not None:
-            prepend_mask = torch.ones((batch_size, 1), device=text_attention_mask.device)
-            combined_attention_mask = torch.cat([prepend_mask, text_attention_mask], dim=1)
-        else:
-            combined_attention_mask = None
-
-        # Handle labels (shift for added cell embedding)
-        if labels is not None:
-            prepend_labels = torch.full((batch_size, num_cell_tokens), -100, dtype=labels.dtype, device=labels.device)
-            combined_labels = torch.cat([prepend_labels, labels], dim=1)
-        else:
-            combined_labels = None
-
-
-        return self.decoder(
-            inputs_embeds=combined_embeddings,
-            attention_mask=combined_attention_mask,
-            labels=combined_labels,
-            **kwargs
-        )
-        
-        
-        
-    def prepare_inputs_for_generation(
-        self,
-        input_ids: torch.LongTensor,
-        past_key_values: Optional[Tuple[Any]] = None,
+        input_ids: Optional[torch.LongTensor] = None,
         attention_mask: Optional[torch.LongTensor] = None,
         cell_embeddings: Optional[torch.FloatTensor] = None,
-        **kwargs
-    ):
-        # If past is not None, we are in generation mode past the first step
-        if past_key_values is not None:
-            return {
-                "input_ids": input_ids,
-                "past_key_values": past_key_values,
-                "attention_mask": attention_mask,
-            }
-
-        # First generation step — prepend cell embeddings
-        batch_size = input_ids.shape[0]
-        text_embeddings = self.decoder.decoder.get_input_embeddings()(input_ids)
-
+        cell_attention_mask: Optional[torch.LongTensor] = None,
+        return_decoder_inputs: bool = False,
+        **kwargs  # All other LlamaForCausalLM arguments
+    ) -> Union[Tuple, CausalLMOutputWithPast]:
+        
         if cell_embeddings is None:
-            raise ValueError("`cell_embeddings` must be provided at generation start")
-
+            # Standard LLaMA forward without cell embeddings
+            return self.llama(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                **kwargs
+            )
         
+        if input_ids is None:
+            batch_size = cell_embeddings.shape[0]
+            input_ids = torch.full(
+                (batch_size, 1), 
+                self.tokenizer.bos_token_id, 
+                dtype=torch.long, 
+                device=cell_embeddings.device
+            )
+
+        print(f"Inside llama decoder, input_ids.shape: {input_ids.shape}")
+        print(f"Inside llama decoder, cell_embeddings.shape: {cell_embeddings.shape}")
+
+        # Prepare inputs with placeholder replacement
+        inputs_embeds, attention_mask = self.prepare_decoder_inputs(
+            input_ids=input_ids, 
+            cell_embeddings=cell_embeddings, 
+            attention_mask=attention_mask, 
+            cell_attention_mask=cell_attention_mask, 
+        )
         
-        inputs_embeds = torch.cat([cell_embeddings, text_embeddings], dim=1)
+        if return_decoder_inputs:
+            return inputs_embeds, attention_mask
+        
+        print(f"Inside llama decoder, input_embeds.shape: {inputs_embeds.shape}")
 
-        # Update attention mask
-        if attention_mask is not None:
-            prefix = torch.ones((batch_size, 1), dtype=attention_mask.dtype, device=attention_mask.device)
-            attention_mask = torch.cat([prefix, attention_mask], dim=1)
+       
 
-        return {
-            "inputs_embeds": inputs_embeds,
-            "attention_mask": attention_mask,
-        }
-
+        # Forward through LLaMA with prepared embeddings
+        return self.llama(
+            input_ids=None,  # We use inputs_embeds instead
+            attention_mask=attention_mask, 
+            inputs_embeds=inputs_embeds,
+            **kwargs
+        )
     
+    def generate(self, **kwargs):
+        """Delegate generation to LLaMA after processing cell embeddings if provided."""
+        if 'cell_embeddings' in kwargs:
+            cell_embeddings = kwargs.pop('cell_embeddings')
+            cell_attention_mask = kwargs.pop('cell_attention_mask', None)
+            inputs = kwargs.pop('input_ids', kwargs.pop('inputs', None))
+            attention_mask = kwargs.pop('attention_mask', None)
+            
+            if inputs is None:
+                batch_size = cell_embeddings.shape[0]
+                inputs = torch.full(
+                    (batch_size, 1), 
+                    self.tokenizer.bos_token_id, 
+                    dtype=torch.long, 
+                    device=cell_embeddings.device
+                )
+            
+            # Get prepared embeddings
+            prompt_inputs_embeds, prompt_attention_mask = self(
+                input_ids=inputs, 
+                attention_mask=attention_mask,
+                cell_embeddings=cell_embeddings,
+                cell_attention_mask=cell_attention_mask,
+                return_decoder_inputs=True
+            )
+            
+            # Generate with prepared embeddings
+            return self.llama.generate(
+                inputs_embeds=prompt_inputs_embeds, 
+                attention_mask=prompt_attention_mask, 
+                **kwargs
+            )
+        else:
+            # Standard generation
+            return self.llama.generate(**kwargs)
     
-
+    # Delegate essential properties and methods to LLaMA
+    def get_input_embeddings(self):
+        print("PAD token ID:", self.tokenizer.pad_token_id)
+        print("Vocab size:", self.decoder.config.vocab_size)
+        print("Pad token ID:", self.tokenizer.pad_token_id)
+        return self.llama.get_input_embeddings()
+    
+    def set_input_embeddings(self, value):
+        self.llama.set_input_embeddings(value)
+    
+    def get_output_embeddings(self):
+        return self.llama.get_output_embeddings()
+    
+    def set_output_embeddings(self, new_embeddings):
+        self.llama.set_output_embeddings(new_embeddings)
+    
+    def tie_weights(self):
+        self.llama.tie_weights()
+    
+    @property
+    def device(self):
+        return self.llama.device
     
     @torch.no_grad()
     def generate_cell_description(
         self,
         cell_embeddings: torch.FloatTensor,
+        prompt_template: Optional[str] = None,
         device: str = 'cpu',
         **generate_kwargs
     ):
-        """
-        Generate text description from cell embeddings.
-        """
         batch_size = cell_embeddings.shape[0]
-        #cell_embeddings = cell_embeddings.to(device).unsqueeze(1)  # [B, 1, H]
+        cell_embeddings = cell_embeddings.to(device)
+        
+        if prompt_template is not None:
+            prompt_inputs = self.tokenizer(
+                prompt_template,
+                return_tensors="pt",
+                padding=True,
+                truncation=True
+            )
+            input_ids = prompt_inputs.input_ids.to(device)
+            attention_mask = prompt_inputs.attention_mask.to(device)
+            
+            if batch_size > 1:
+                input_ids = input_ids.repeat(batch_size, 1)
+                attention_mask = attention_mask.repeat(batch_size, 1)
+        else:
+            input_ids = torch.full(
+                (batch_size, 1), 
+                self.tokenizer.bos_token_id, 
+                dtype=torch.long, 
+                device=device
+            )
+            attention_mask = torch.ones_like(input_ids)
 
-
-        # BOS token input IDs and embeddings
-        bos_input_ids = torch.full((batch_size, 1), self.tokenizer.bos_token_id, dtype=torch.long, device=device)
-        bos_embedding = self.decoder.get_input_embeddings()(bos_input_ids)  # [B, 1, H]
-
-
-        # Concatenate: [BOS] + [cell_embedding] 
-        combined_embeddings = torch.cat([bos_embedding, cell_embeddings], dim=1)
-
-        # Attention mask
-        attention_mask = torch.ones((batch_size, combined_embeddings.size(1)), dtype=torch.long, device=device)
-
-        # Default generation parameters (merged with kwargs)
         default_generate_args = {
             "max_new_tokens": self.config.max_length,
             "num_beams": self.config.num_beams,
@@ -222,26 +251,19 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
             "top_p": self.config.top_p,
         }
 
-        print(default_generate_args)
         for k, v in default_generate_args.items():
             generate_kwargs.setdefault(k, v)
 
-        # Generate output
-        output_ids = self.decoder.generate(
-            inputs_embeds=combined_embeddings,
+        output_ids = self.generate(
+            input_ids=input_ids,
             attention_mask=attention_mask,
-            input_ids=bos_input_ids,
+            cell_embeddings=cell_embeddings,
             **generate_kwargs
         )
 
-        # Decode and clean
         decoded = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)
         if hasattr(self.tokenizer, "additional_special_tokens"):
             for token in self.tokenizer.additional_special_tokens:
                 decoded = [text.replace(token, "") for text in decoded]
 
         return decoded[0] if batch_size == 1 else decoded
-
-
-
- 

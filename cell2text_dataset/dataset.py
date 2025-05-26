@@ -1,3 +1,5 @@
+#https://github.com/ColinFX/Prot2Text-V2 This code was really helpful
+
 import torch
 import torch
 import pandas as pd
@@ -6,99 +8,173 @@ import os
 from torch.utils.data import Dataset
 import sys
 import pickle
+from datasets import load_from_disk
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 
-
 class Cell2TextDataset(Dataset):
-    def __init__(self, data_path, tokenizer):
+    def __init__(self, data_path, tokenizer, geneformer_tokenizer=None, 
+                 system_message="You are a scientific assistant specialized in analyzing single-cell gene expression data. Given the gene expression profile, describe the cell type and its characteristics clearly and concisely in professional language.",
+                 placeholder_token='<|reserved_special_token_1|>', top_k=None):
         """
         Dataset for cell expression data
         Args:
             data_path: Path to the parquet file containing cell data
-            tokenizer:  tokenizer for text descriptions
+            tokenizer: tokenizer for text descriptions (e.g., Llama tokenizer)
+            geneformer_tokenizer: tokenizer for gene expression data
+            system_message: System message for chat template
+            placeholder_token: Token to use as placeholder for expression embeddings
+            top_k: If specified, only use top k gene expression tokens
         """
-        self.data = pd.read_parquet(data_path)
+        self.data = load_from_disk(data_path)
+        self.data = self.data.select(range(8))
         self.tokenizer = tokenizer
+        self.geneformer_tokenizer = geneformer_tokenizer
+        self.system_message = system_message
+        self.placeholder_token = placeholder_token
+        self.top_k = top_k
         
     def __len__(self):
         return len(self.data)
     
     def __getitem__(self, idx):
-        sample = self.data.iloc[idx]
+        sample = self.data[idx]
 
+        # Get expression data
         try:
             expression_ids = sample["input_ids"]
-
             expression_tokens = torch.tensor(expression_ids, dtype=torch.long)
-            expression_token_length = torch.tensor(len(expression_ids), dtype=torch.long)
-                
+            expression_token_length = sample["length"]
         except KeyError as e:
             raise KeyError(f"Missing gene expression field: {e}")
 
-        # Use a structured format like: "Prompt: <X>. Description: <Y>"
-        if "text_desc" not in sample or not sample["text_desc"]:
+        # Get target description
+        if "struct_desc" not in sample or not sample["struct_desc"]:
             raise ValueError(f"No 'text_desc' for index {idx}")
         
-        target_text = sample["text_desc"]
+        description = sample["struct_desc"]
         
+        # Create chat template with placeholder tokens - use top_k for placeholders only
+        if self.top_k is not None:
+            placeholder_length = min(len(expression_ids), self.top_k)
+        else:
+            placeholder_length = len(expression_ids)
+        placeholder_string = self.placeholder_token * placeholder_length
+        
+        user_message = f"Gene expression embeddings: {placeholder_string}"
+        prompt_conversation = [
+            {"role": "system", "content": self.system_message}, 
+            {"role": "user", "content": user_message}
+        ]
+        
+        # Apply chat template to create prompt
+        prompt_ids = self.tokenizer.apply_chat_template(
+            prompt_conversation,
+            add_generation_prompt=True, 
+            tokenize=True, 
+            padding=False, 
+            return_tensors="pt"
+        )
+        
+        # Tokenize description with EOS token
+        description_ids = self.tokenizer(
+            [description + self.tokenizer.eos_token],
+            add_special_tokens=False,
+            return_attention_mask=False,
+            return_tensors="pt"
+        )["input_ids"]
 
-        # Tokenize prompt and target separately
-        target_enc = self.tokenizer(target_text, add_special_tokens=False)
-
-        # Combine them into a single input
-        input_ids = target_enc["input_ids"]
-        attention_mask = [1] * len(input_ids)
-
-        # Labels: ignore prompt, supervise target
-        labels =  target_enc["input_ids"]
-
-        input_ids = torch.tensor(input_ids, dtype=torch.long)
-        attention_mask = torch.tensor(attention_mask, dtype=torch.long)
-        labels = torch.tensor(labels, dtype=torch.long)
-
+        # Return data in format similar to protein dataset
+        # Keep tensors as (1, seq_length) for batch formation
         return {
-            "expression_tokens": expression_tokens,
+            "expression_tokens": expression_tokens.unsqueeze(0),  # (1, expr_len)
             "expression_token_length": expression_token_length,
-            "text_input_ids": input_ids,
-            "text_attention_mask": attention_mask,
-            "labels": labels
+            "prompt_input_ids": prompt_ids,  # (1, prompt_len)
+            "description_input_ids": description_ids,  # (1, desc_len)
         }
     
-    def collate_fn(self, geneformer_pad_token_id):
+    def collate_fn(self, geneformer_pad_token_id, mode="train", top_k=None):
+        """
+        Create collate function similar to Prot2TextInstructCollater
+        Args:
+            geneformer_pad_token_id: Pad token ID for gene expression data
+            mode: "train" or "inference"
+            top_k: If specified, override dataset top_k for this batch
+        """
         def collate(batch):
-            expression_tokens = [item["expression_tokens"] for item in batch]
-            expression_token_lengths = torch.tensor([item["expression_token_length"] for item in batch], dtype=torch.long)
+            # Extract components from batch
+            expression_tokens = [item["expression_tokens"][0] for item in batch]  # Remove extra dimension
+            expression_lengths = torch.tensor([item["expression_token_length"] for item in batch], dtype=torch.long)
+            prompt_input_ids = [item["prompt_input_ids"][0] for item in batch]
+            description_input_ids = [item["description_input_ids"][0] for item in batch]
 
-            text_input_ids_list = [item["text_input_ids"] for item in batch]
-            attention_masks_list = [item["text_attention_mask"] for item in batch]
-            labels_list = [item["labels"] for item in batch]
+            # Keep full expression tokens - no truncation here
+            # The truncation only affects placeholders in the prompt (already handled in __getitem__)
 
-            # Pad expression tokens with geneformer_pad_token_id
+            # Pad expression tokens (right padding)
             max_expr_len = max(len(t) for t in expression_tokens)
             padded_expr = torch.full((len(batch), max_expr_len), fill_value=geneformer_pad_token_id, dtype=torch.long)
+            padded_expr_mask = torch.zeros((len(batch), max_expr_len), dtype=torch.long)
+            
             for i, t in enumerate(expression_tokens):
                 padded_expr[i, :len(t)] = t
+                padded_expr_mask[i, :len(t)] = 1
 
-            # Pad text inputs
-            max_text_len = max(len(t) for t in text_input_ids_list)
-            padded_input_ids = torch.full((len(batch), max_text_len), fill_value=self.tokenizer.pad_token_id, dtype=torch.long)
-            padded_attention_mask = torch.zeros((len(batch), max_text_len), dtype=torch.long)
-            padded_labels = torch.full((len(batch), max_text_len), fill_value=-100, dtype=torch.long)
+            # Pad prompts (left padding like in protein dataset)
+            max_prompt_len = max(len(p) for p in prompt_input_ids)
 
-            for i, (inp, attn, lbl) in enumerate(zip(text_input_ids_list, attention_masks_list, labels_list)):
-                padded_input_ids[i, :len(inp)] = inp
-                padded_attention_mask[i, :len(attn)] = attn
-                padded_labels[i, :len(lbl)] = lbl
+            
+            padded_prompt_ids = torch.full((len(batch), max_prompt_len), fill_value=self.tokenizer.pad_token_id, dtype=torch.long)
+            padded_prompt_mask = torch.zeros((len(batch), max_prompt_len), dtype=torch.long)
+            
+            for i, p in enumerate(prompt_input_ids):
+                start_idx = max_prompt_len - len(p)
+                padded_prompt_ids[i, start_idx:] = p
+                padded_prompt_mask[i, start_idx:] = 1
 
-            return {
-                "expression_tokens": padded_expr,
-                "expression_token_lengths": expression_token_lengths,
-                "text_input_ids": padded_input_ids,
-                "text_attention_mask": padded_attention_mask,
-                "labels": padded_labels
-            }
+            # Pad descriptions (right padding)
+            max_desc_len = max(len(d) for d in description_input_ids)
+            padded_desc_ids = torch.full((len(batch), max_desc_len), fill_value=self.tokenizer.pad_token_id, dtype=torch.long)
+            padded_desc_mask = torch.zeros((len(batch), max_desc_len), dtype=torch.long)
+            padded_labels = torch.full((len(batch), max_desc_len), fill_value=-100, dtype=torch.long)
+            
+            for i, d in enumerate(description_input_ids):
+                padded_desc_ids[i, :len(d)] = d
+                padded_desc_mask[i, :len(d)] = 1
+                padded_labels[i, :len(d)] = d  # Labels same as description for training
+
+            # Combine based on mode (similar to protein dataset logic)
+            if mode == "train":
+                # Concatenate prompt and description for training
+                combined_input_ids = torch.cat([padded_prompt_ids, padded_desc_ids], dim=1)
+                combined_attention_mask = torch.cat([padded_prompt_mask, padded_desc_mask], dim=1)
+                combined_labels = torch.cat([
+                    torch.full_like(padded_prompt_ids, fill_value=-100),  # Ignore prompt in loss
+                    padded_labels
+                ], dim=1)
+                
+                return {
+                    "expression_tokens": padded_expr,
+                    "expression_attention_mask": padded_expr_mask,
+                    "expression_token_lengths": expression_lengths,
+                    "input_ids": combined_input_ids,
+                    "attention_mask": combined_attention_mask,
+                    "labels": combined_labels
+                }
+            
+            elif mode == "inference":
+                # Only return prompt for generation
+                return {
+                    "expression_tokens": padded_expr,
+                    "expression_attention_mask": padded_expr_mask,
+                    "expression_token_lengths": expression_lengths,
+                    "input_ids": padded_prompt_ids,
+                    "attention_mask": padded_prompt_mask,
+                    "description_input_ids": padded_desc_ids,  # For evaluation
+                }
+            
+            else:
+                raise ValueError(f"Invalid mode: {mode}")
     
         return collate
-
