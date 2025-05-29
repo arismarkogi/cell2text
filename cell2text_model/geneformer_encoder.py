@@ -89,30 +89,12 @@ class GeneformerModel(
 
         layer_to_quant = pu.quant_layers(self.geneformer_model) + self.config.emb_layer
         
-
-
-
-        # Might need to comment this out when run on GPU
-
-        # Convert to numpy arrays instead of lists (more efficient)
-        if expression_tokens.is_cuda:
-            tokens_np = expression_tokens.cpu().numpy()
-            lengths_np = expression_token_lengths.cpu().numpy()
-        else:
-            tokens_np = expression_tokens.numpy()
-            lengths_np = expression_token_lengths.numpy()
-
-        
-        # this might not be efficient
-        
         # Create dataset from numpy arrays directly
         filtered_input_data = Dataset.from_dict({
-            'input_ids': tokens_np,
-            'length': lengths_np
+            'input_ids': expression_tokens,
+            'length': expression_token_lengths
         })
         
-
-
         embs = get_embs(
             model=self.geneformer_model,
             filtered_input_data=filtered_input_data,
@@ -123,8 +105,6 @@ class GeneformerModel(
             token_gene_dict=self.token_gene_dict,
             summary_stat=self.config.summary_stat
         )
-
-
 
         print("Shape of embs:", embs.shape)
 

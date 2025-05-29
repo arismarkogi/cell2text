@@ -324,8 +324,8 @@ class Cell2TextModel(PreTrainedModel):
             raise ValueError("You need to provide expression_tokens")
         
         # Process inputs
-        expression_tokens = expression_tokens.to(device)
-        expression_token_lengths = expression_token_lengths.to(device)
+        # expression_tokens = expression_tokens.to(device)
+        # expression_token_lengths = expression_token_lengths.to(device)
         
         # Get cell embeddings from Geneformer
         cell_embeddings = self.cell_encoder(

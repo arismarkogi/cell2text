@@ -63,10 +63,7 @@ class Cell2TextDataset(Dataset):
         placeholder_string = self.placeholder_token * placeholder_length
         
         user_message = f"Gene expression embeddings: {placeholder_string}"
-        
-    
-        
-        
+        W
         prompt_conversation = [
             {"role": "system", "content": self.system_message}, 
             {"role": "user", "content": user_message}
