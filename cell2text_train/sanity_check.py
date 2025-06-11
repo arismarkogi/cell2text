@@ -99,7 +99,7 @@ class Cell2TextSanityTrainer:
             sanity_dataset, 
             batch_size=self.args.batch_size, 
             shuffle=True,
-            collate_fn=full_dataset.collate_fn()
+            collate_fn=full_dataset.collate_fn(mode="train")
         )
         print(f"Sanity dataset loaded. Size: {len(sanity_dataset)}")
         
@@ -108,7 +108,7 @@ class Cell2TextSanityTrainer:
             sanity_dataset, 
             batch_size=self.args.batch_size, 
             shuffle=False,
-            collate_fn=full_dataset.collate_fn()
+            collate_fn=full_dataset.collate_fn(mode="inference")
         )
         
     def initialize_model(self):
@@ -294,7 +294,13 @@ class Cell2TextSanityTrainer:
         
         
         print("\nStarting overfitting training...")
-        progress_bar = tqdm(desc="Sanity Training", total=self.args.epochs)
+        progress_bar = tqdm(
+            desc="🧠 Sanity Training", 
+            total=self.args.epochs, 
+            position=0,
+            leave=True,
+            file=sys.stdout
+        )
         
         epoch_loss = 0.0
         epoch = 0
@@ -309,19 +315,17 @@ class Cell2TextSanityTrainer:
                 epoch_losses.append(loss)
                 self.losses.append(loss)
                 
-                step += 1
-                progress_bar.update(1)
-                progress_bar.set_postfix({
-                    "loss": f"{loss:.4f}",
-                    "avg_loss": f"{np.mean(self.losses[-10:]):.4f}",
-                    "target": f"{self.args.target_loss:.4f}"
-                })
                 
 
             # After completing one epoch
             epoch_loss = np.mean(epoch_losses)
+            
+            progress_bar.update(1)
+            progress_bar.set_description(
+                f"🧠 Sanity Training | 📊 Epoch: {epoch+1}/{self.args.epochs} | "
+                f"📉 Loss: {epoch_loss:.4f} | 🎯 Target: {self.args.target_loss:.4f}"
+            )
 
-            print(f"Epoch {epoch}: avg_loss = {epoch_loss:.4f}")
             epoch += 1
 
             if epoch_loss <= self.args.target_loss:
@@ -333,7 +337,6 @@ class Cell2TextSanityTrainer:
         
         final_loss = epoch_loss
         print(f"\nSanity training completed!")
-        print(f"Steps taken: {step}")
         print(f"Final loss: {final_loss:.4f}")
         print(f"Target reached: {'✓' if final_loss <= self.args.target_loss else '✗'}")
         
@@ -343,7 +346,7 @@ class Cell2TextSanityTrainer:
             save_dict = {
                 "model_state_dict": self.model.state_dict(),
                 "final_loss": final_loss,
-                "steps_taken": step,
+                "epochs_taken": epoch,
                 "target_reached": final_loss <= self.args.target_loss,
                 "losses": self.losses
             }
@@ -374,16 +377,11 @@ class Cell2TextSanityTrainer:
         print(f"Final training loss: {self.losses[-1]:.4f}")
         print(f"Target loss: {self.args.target_loss:.4f}")
         print(f"Target reached: {'✓' if self.losses[-1] <= self.args.target_loss else '✗'}")
-        print(f"Validation loss: {results['loss']:.4f}")
         print(f"BLEU score: {results['bleu']:.4f}")
         print(f"Cell type accuracy: {results['cell_type_accuracy']:.4f}")
         print(f"Cell type F1: {results['cell_type_f1']:.4f}")
         
-        # Check if overfitting worked (low validation loss on same samples)
-        if results['loss'] < 0.1:
-            print("✅ SANITY CHECK PASSED - Model successfully overfitted to small dataset!")
-        else:
-            print("❌ SANITY CHECK FAILED - Model did not overfit properly")
+        
         
         return results
         

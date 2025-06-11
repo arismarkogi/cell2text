@@ -126,6 +126,7 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
             # `num_placeholders_sample` active cell embeddings are the ones to use.
             # This aligns with using `top_k` (or min(len, top_k)) genes.
             embeddings_to_insert = active_cell_embeddings_for_sample[:num_placeholders_sample]
+            embeddings_to_insert = embeddings_to_insert.to(dtype=inputs_embeds.dtype)
 
             # Perform the replacement for the current sample
             inputs_embeds[i, placeholder_indices_in_sample] = embeddings_to_insert
@@ -159,8 +160,7 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
                 device=cell_embeddings.device
             )
 
-        print(f"Inside llama decoder, input_ids.shape: {input_ids.shape}")
-        print(f"Inside llama decoder, cell_embeddings.shape: {cell_embeddings.shape}")
+    
 
         # Prepare inputs with placeholder replacement
         inputs_embeds, attention_mask = self.prepare_decoder_inputs(
@@ -173,7 +173,6 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
         if return_decoder_inputs:
             return inputs_embeds, attention_mask
         
-        print(f"Inside llama decoder, input_embeds.shape: {inputs_embeds.shape}")
 
         # Remove inputs_embeds from kwargs to avoid duplicate argument error, i dont know what's happemning
         kwargs.pop('inputs_embeds', None)

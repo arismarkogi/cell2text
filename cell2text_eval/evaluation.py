@@ -63,6 +63,11 @@ class CellTypeExtractor:
         
         return normalized
 
+def setup_device():
+        """Setup device for training"""
+        return torch.device("cuda" if torch.cuda.is_available()  else "cpu")
+
+
 def calculate_cell_type_metrics(predicted_types, target_types):
     """Calculate precision, recall, and F1 for cell type extraction"""
     
@@ -116,8 +121,9 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         save_results: Optional path to save detailed results as JSON
     """
     
+    
+    device = setup_device()
     model.eval()
-    val_loss = 0
     bleu_scores = []
     smooth = SmoothingFunction().method4
     
@@ -138,29 +144,16 @@ def evaluate_cell2text_model(model: Cell2TextModel,
             expression_token_lengths = batch["expression_token_lengths"].to(device)
             text_input_ids = batch["input_ids"].to(device)
             text_attention_mask = batch["attention_mask"].to(device)
-            labels = batch["labels"].to(device) if batch["labels"] is not None else None
             
-            # Forward pass to get loss
-            outputs = model(
-                expression_tokens=expression_tokens,
-                expression_token_lengths=expression_token_lengths,
-                input_ids=text_input_ids,
-                attention_mask=text_attention_mask,
-                labels=labels,
-                return_dict=True
-            )
             
-            if outputs.loss is not None:
-                loss = outputs.loss
-                val_loss += loss.item()
-            else:
-                loss = torch.tensor(0.0)
+            
             
             # Generate descriptions
             generated = model.generate_cell_description(
                 expression_tokens=expression_tokens,
                 expression_token_lengths=expression_token_lengths,
-                prompt_template=None,
+                inputs=text_input_ids,
+                attention_mask=text_attention_mask,
                 device=device
             )
             
@@ -174,10 +167,8 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                 
                 # Decode target
                 target = ""
-                if "decoder_input_ids" in batch:
-                    target = tokenizer.decode(batch["decoder_input_ids"][j], skip_special_tokens=True)
-                elif "labels" in batch and batch["labels"] is not None:
-                    target_ids = batch["labels"][j]
+                if "description_input_ids" in batch and batch["description_input_ids"] is not None:
+                    target_ids = batch["description_input_ids"][j]
                     target_ids = target_ids[target_ids != -100]
                     target = tokenizer.decode(target_ids, skip_special_tokens=True)
                 else:
@@ -216,10 +207,8 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                 }
                 examples.append(example)
             
-            val_progress_bar.set_postfix({"loss": loss.item()})
     
     # Calculate overall metrics
-    avg_val_loss = val_loss / len(val_loader) if len(val_loader) > 0 else 0
     avg_bleu = np.mean(bleu_scores) if bleu_scores else 0.0
     
     # Calculate cell type metrics
@@ -229,7 +218,6 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     print(f"\n{'='*60}")
     print(f"VALIDATION RESULTS")
     print(f"{'='*60}")
-    print(f"Loss: {avg_val_loss:.4f}")
     print(f"BLEU Score: {avg_bleu:.4f}")
     print(f"\nCell Type Extraction Metrics:")
     print(f"  Accuracy: {cell_type_metrics['accuracy']:.4f}")
@@ -272,7 +260,6 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     if save_results:
         results = {
             'overall_metrics': {
-                'loss': avg_val_loss,
                 'bleu_score': avg_bleu,
                 'cell_type_metrics': cell_type_metrics
             },
@@ -288,7 +275,6 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         print(f"\nDetailed results saved to: {save_results}")
     
     return {
-        'loss': avg_val_loss,
         'bleu': avg_bleu,
         'cell_type_accuracy': cell_type_metrics['accuracy'],
         'cell_type_f1': cell_type_metrics['f1'],

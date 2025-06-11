@@ -8,12 +8,6 @@ Extracts terms with their names, definitions, and synonyms.
 Usage:
     python obo_to_json.py <obo_file1> [obo_file2] ... -o <output.json>
     python obo_to_json.py cl.obo uberon-basic.obo -o ontologies.json
-    
-Or use as a module:
-    from obo_to_json import OBOToJSONConverter
-    converter = OBOToJSONConverter()
-    converter.parse_files(['cl.obo', 'uberon-basic.obo'])
-    converter.save_json('output.json')
 """
 
 import re
@@ -186,48 +180,6 @@ class OBOToJSONConverter:
         """Save the parsed terms to a compact JSON file (no indentation)."""
         self.save_json(output_file, indent=None)
     
-    def get_terms_by_prefix(self, prefix: str) -> Dict[str, Dict[str, Any]]:
-        """
-        Get all terms with a specific prefix (e.g., 'CL:', 'UBERON:').
-        
-        Args:
-            prefix: The ID prefix to filter by
-            
-        Returns:
-            Dictionary of terms with the specified prefix
-        """
-        return {k: v for k, v in self.terms.items() if k.startswith(prefix)}
-    
-    def search_terms(self, query: str) -> Dict[str, Dict[str, Any]]:
-        """
-        Search for terms by name or synonym (case-insensitive).
-        
-        Args:
-            query: Search query
-            
-        Returns:
-            Dictionary of matching terms
-        """
-        query_lower = query.lower()
-        results = {}
-        
-        for term_id, term_data in self.terms.items():
-            # Search in name
-            if query_lower in term_data['name'].lower():
-                results[term_id] = term_data
-                continue
-            
-            # Search in synonyms
-            synonyms = term_data['synonym']
-            if isinstance(synonyms, list):
-                for synonym in synonyms:
-                    if query_lower in synonym.lower():
-                        results[term_id] = term_data
-                        break
-            elif isinstance(synonyms, str) and query_lower in synonyms.lower():
-                results[term_id] = term_data
-        
-        return results
     
     def _print_stats(self) -> None:
         """Print processing statistics."""
