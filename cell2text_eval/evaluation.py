@@ -54,12 +54,8 @@ class CellTypeExtractor:
         normalized = cell_type.lower().strip()
         
         # Remove common prefixes/suffixes that might cause mismatches
-        prefixes_to_remove = ["mature", "immature", "activated", "resting", "naive"]
         suffixes_to_remove = ["cell", "cells"]
         
-        for prefix in prefixes_to_remove:
-            if normalized.startswith(prefix + " "):
-                normalized = normalized[len(prefix + " "):]
         
         for suffix in suffixes_to_remove:
             if normalized.endswith(" " + suffix):

@@ -126,6 +126,7 @@ class Cell2TextSanityTrainer:
         config.geneformer_path = self.args.geneformer_path
         config.decoder_model_name_or_path = self.args.decoder_path
         config.top_k = self.args.top_k
+        config.token_dictionary_path = self.args.token_dictionary_path
         
         # Additional configuration parameters
         config.max_ncells = self.args.max_ncells
@@ -450,6 +451,8 @@ def create_argument_parser():
                         help="Path to pretrained Geneformer model")
     parser.add_argument("--decoder_path", type=str, required=True,
                         help="Path to pretrained Llama decoder model")
+    parser.add_argument("--token_dictionary_path", type=str, required=True,
+                        help="Path to geneformer Dictionary file")
     parser.add_argument("--max_ncells", type=int, default=1000,
                         help="Maximum number of cells")
     parser.add_argument("--max_length", type=int, default=500,
@@ -536,20 +539,6 @@ def main():
     print("\n" + "="*60)
     print("FINAL SANITY CHECK RESULTS")
     print("="*60)
-    
-    if target_reached and results['loss'] < 0.1:
-        print("🎉 SANITY CHECK COMPLETELY SUCCESSFUL!")
-        print("   - Model overfitted to target loss")
-        print("   - Low validation loss on same samples")
-        print("   - Ready for full training")
-    elif target_reached:
-        print("⚠️  PARTIAL SUCCESS:")
-        print("   - Target training loss reached")
-        print("   - But validation loss still high - check model/data")
-    else:
-        print("❌ SANITY CHECK FAILED:")
-        print("   - Could not reach target loss")
-        print("   - Check model architecture, learning rates, or data")
     
     print(f"\nKey metrics:")
     print(f"  Training loss: {trainer.losses[-1]:.4f}")

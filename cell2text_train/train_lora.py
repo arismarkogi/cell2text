@@ -109,6 +109,7 @@ class Cell2TextTrainer:
         config.geneformer_path = self.args.geneformer_path
         config.decoder_model_name_or_path = self.args.decoder_path
         config.top_k = self.args.top_k
+        config.token_dictionary_path = self.args.token_dictionary_path
         
         # Additional configuration parameters
         config.max_ncells = self.args.max_ncells
@@ -465,6 +466,8 @@ def create_argument_parser():
                         help="Path to pretrained Geneformer model")
     parser.add_argument("--decoder_path", type=str, required=True,
                         help="Path to pretrained Llama decoder model")
+    parser.add_argument("--token_dictionary_path", type=str, required=True,
+                        help="Path to geneformer Dictionary file")
     parser.add_argument("--max_ncells", type=int, default=1000,
                         help="Maximum number of cells")
     parser.add_argument("--max_length", type=int, default=500,

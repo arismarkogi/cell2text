@@ -50,10 +50,10 @@ class Cell2TextDataset(Dataset):
             raise KeyError(f"Missing gene expression field: {e}")
 
         # Get target description
-        if "struct_desc" not in sample or not sample["struct_desc"]:
-            raise ValueError(f"No 'struct_desc' for index {idx}")
+        if "natural_desc" not in sample or not sample["natural_desc"]:
+            raise ValueError(f"No 'natural_desc' for index {idx}")
         
-        description = sample["struct_desc"]
+        description = sample["natural_desc"]
         
         # Create chat template with placeholder tokens - use top_k for placeholders only
         if self.top_k is not None:
