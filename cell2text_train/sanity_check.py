@@ -272,7 +272,7 @@ class Cell2TextSanityTrainer:
         print("STARTING SANITY CHECK TRAINING")
         print("="*60)
         print(f"Target loss: {self.args.target_loss}")
-        print(f"Max steps: {self.args.max_steps}")
+        print(f"Epochs: {self.args.epochs}")
         print(f"Number of samples: {self.args.num_samples}")
         print("="*60)
         
@@ -298,7 +298,7 @@ class Cell2TextSanityTrainer:
         
         epoch_loss = 0.0
         epoch = 0
-        
+
         while epoch < self.args.epochs:
             epoch_losses = []
             

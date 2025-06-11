@@ -119,6 +119,7 @@ class Cell2TextModel(PreTrainedModel):
         state_dict = torch.load(pytorch_path, map_location="cpu")
         self._load_state_dict_with_prefix_handling(state_dict)
     
+    
     def _load_state_dict_with_prefix_handling(self, state_dict: Dict[str, torch.Tensor]):
         """
         Load state dict with proper prefix handling for different components.
@@ -178,6 +179,20 @@ class Cell2TextModel(PreTrainedModel):
         # Projector weights will be randomly initialized unless loaded from full model
         print("Projector weights randomly initialized (unless loaded from full model)")
     
+
+    def process_encoder_outputs(self, cell_embeddings):
+        """
+        Utility to process encoder output: truncate top_k and project to decoder hidden size.
+        """
+        # Truncate to top_k tokens
+        if self.top_k < cell_embeddings.shape[1]:
+            cell_embeddings = cell_embeddings[:, :self.top_k, :]
+        
+        # Project to decoder hidden size
+        cell_embeddings = self.cell_to_embedding(cell_embeddings)
+        
+        return cell_embeddings
+
     def warm_up(self):
         """
         DEPRECATED: Use from_pretrained() or load_pretrained_weights() instead.
@@ -252,37 +267,10 @@ class Cell2TextModel(PreTrainedModel):
         )
 
         
-        sample_embeddings = cell_embeddings
-        # Handle different return types
-        if hasattr(sample_embeddings, 'last_hidden_state'):
-                sample_embeddings = sample_embeddings.last_hidden_state
-        elif hasattr(sample_embeddings, 'hidden_states'):
-                sample_embeddings = sample_embeddings.hidden_states[-1]
-            
-        actual_hidden_size = sample_embeddings.shape[-1]
-           
-        print(f"Detected cell encoder hidden size: {actual_hidden_size}")
-        print(f"Configured cell encoder hidden size: {self.cell_encoder_hidden_size}")
-            
-        if actual_hidden_size != self.cell_encoder_hidden_size:
-                print(f"Updating configuration: {self.cell_encoder_hidden_size} -> {actual_hidden_size}")
-                self.cell_encoder_hidden_size = actual_hidden_size
-        print(f"Embeddings Shape before truncation: {cell_embeddings.shape}")
-
+                    
         print(f"self.top_k: {self.top_k}")
-        # Selects top-k tokens from each sample to fit the decoder's hidden size
 
-        if self.top_k < cell_embeddings.shape[1]:
-            cell_embeddings = cell_embeddings[:, :self.top_k, :] # +1 because of the CLS token at the beginning of the sequence
-        
-        print(f"Type of cell_embeddings: {type(cell_embeddings)}")
-
-        print(f"Embeddings Shape after truncation: {cell_embeddings.shape}")
-
-        # Projection from encoder_hidden_dim to decoder_hidden_dim
-        cell_embeddings = self.cell_to_embedding(cell_embeddings)
-
-        print(f"Embeddings Shape after truncation: {cell_embeddings.shape}")
+        cell_embeddings = self.process_encoder_outputs(cell_embeddings)
 
         # Forward pass through decoder - using correct parameter names
         decoder_outputs = self.decoder(
@@ -334,18 +322,8 @@ class Cell2TextModel(PreTrainedModel):
             return_dict=True
         )
 
-        # Handle different return types from encoder
-        if hasattr(cell_embeddings, 'last_hidden_state'):
-            cell_embeddings = cell_embeddings.last_hidden_state
-        elif hasattr(cell_embeddings, 'hidden_states'):
-            cell_embeddings = cell_embeddings.hidden_states[-1]
-
-        # Select top-k tokens from each sample
-        if self.top_k < cell_embeddings.shape[1]:
-            cell_embeddings = cell_embeddings[:, :self.top_k, :]
+        cell_embeddings = self.process_encoder_outputs(cell_embeddings)
                 
-        # Project from encoder_hidden_dim to decoder_hidden_dim
-        cell_embeddings = self.cell_to_embedding(cell_embeddings)
         
         # Generate text description using the decoder with tokenized prompt
         return self.decoder.generate_cell_description(
