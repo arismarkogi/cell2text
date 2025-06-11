@@ -1,0 +1,816 @@
+
+============================================================
+VALIDATION RESULTS
+============================================================
+BLEU Score: 0.7898
+
+Cell Type Extraction Metrics:
+  Accuracy: 0.8600
+  F1 Score: 0.7547
+  Precision: 0.7584
+  Recall: 0.7622
+  Total Samples: 100
+
+============================================================
+EXAMPLE PREDICTIONS (showing first 100)
+============================================================
+
+--- Example 1 ---
+TARGET: This sample consists of a central nervous system neuron, Any neuron that is part of a central nervous system. It originates from the brain of a normal female during adulthood.
+GENERATED: This sample consists of a central nervous system neuron, Any neuron that is part of a Central Nervous System. It originates from the brain of a normal female during adulthood.
+BLEU: 0.8391
+Target Cell Type: 'central nervous system neuron'
+Predicted Cell Type: 'central nervous system neuron'
+Cell Type Match: ✓
+
+--- Example 2 ---
+TARGET: This sample consists of a fibroblast, connective tissue cell which secretes an extracellular matrix rich in collagen and other macromolecules. Flattened and irregular in outline with branching processes; appear fusiform or spindle-shaped. It originates from the breast of a normal female during late embryonic stage.
+GENERATED: This sample consists of a fibroblast, connective tissue cell which secretes an extracellular matrix rich in collagen and other macromolecules. Flattened and irregular in outline with branching processes; appear fusiform or spindle-shaped. It originates from the breast of a normal female during late embryonic stage.
+BLEU: 1.0000
+Target Cell Type: 'fibroblast'
+Predicted Cell Type: 'fibroblast'
+Cell Type Match: ✓
+
+--- Example 3 ---
+TARGET: This sample consists of a late promyelocyte, promyelocyte that is considerably smaller, with more condensed chromatin, and nucleoli are no longer conspicuous. It originates from the bone marrow of a normal male during late embryonic stage.
+GENERATED: This sample consists of a late promocyte, promocyte that is considerably smaller, with more condensed chromatin, and nucleoli are no longer conspicuous. It originates from the liver of a normal male during late embryonic stage.
+BLEU: 0.7922
+Target Cell Type: 'late promyelocyte'
+Predicted Cell Type: 'late promocyte'
+Cell Type Match: ✗
+
+--- Example 4 ---
+TARGET: This sample consists of a myometrial cell, smooth muscle cell of the myometrium that enlarges and stretches during pregnancy, and contracts in response to oxytocin. It originates from the myometrium of a normal female during adulthood.
+GENERATED: This sample consists of a myometrial cell, smooth muscle cell of the myometrium that enlarges and stretches during pregnancy, and contracts in response to oxytocin. It originates from the uterine wall of a normal female during adulthood.
+BLEU: 0.8996
+Target Cell Type: 'myometrial'
+Predicted Cell Type: 'myometrial'
+Cell Type Match: ✓
+
+--- Example 5 ---
+TARGET: This sample consists of a dendritic cell, cell of hematopoietic origin, typically resident in particular tissues, specialized in the uptake, processing, and transport of antigens to lymph nodes for the purpose of stimulating an immune response via T cell activation. These cells are lineage negative (CD3-negative, CD19-negative, CD34-negative, and CD56-negative). It originates from the lung of a female with small cell lung carcinoma during middle age.
+GENERATED: This sample consists of a dendritic cell, cell of hematopoietic origin, typically resident in particular tissues, specialized in the uptake, processing, and transport of antigens to lymph nodes for the purpose of stimulating an immune response via T cell activation. These cells are lineage negative (CD3-low, CD19-negative, CD34-negative, and CD56-negative). It originates from the lung of a female with small cell lung carcinoma during middle age.
+BLEU: 0.9608
+Target Cell Type: 'dendritic'
+Predicted Cell Type: 'dendritic'
+Cell Type Match: ✓
+
+--- Example 6 ---
+TARGET: This sample consists of a Sertoli cell, supporting cell projecting inward from the basement membrane of seminiferous tubules. They surround and nourish the developing male germ cells and secrete androgen binding protein. Their tight junctions with the spermatogonia and spermatocytes provide a blood-testis barrier. It originates from the gonad of a normal male during early embryonic stage.
+GENERATED: This sample consists of a Sertoli cell, supporting cell projecting inward from the basement membrane of seminiferous tubules. They surround and nourish the developing male germ cells and secrete androgen binding protein. Their tight junctions with the spermatogonia and spermatocytes provide a blood-testis barrier. It originates from the gonad of a normal male during early embryonic stage.
+BLEU: 1.0000
+Target Cell Type: 'sertoli'
+Predicted Cell Type: 'sertoli'
+Cell Type Match: ✓
+
+--- Example 7 ---
+TARGET: This sample consists of a macrophage, mononuclear phagocyte present in variety of tissues, typically differentiated from monocytes, capable of phagocytosing a variety of extracellular particulate material, including immune complexes, microorganisms, and dead cells. It originates from the fallopian tube of a female with hydrosalpinx during adulthood.
+GENERATED: This sample consists of a macrophage, mononuclear phagocyte present in variety of tissues, typically differentiated from monocytes, capable of phagocytosing a variety of extracellular particulate material, including immune complexes, microorganisms, and dead cells. It originates from the fallopian tube of a female with hydrosalpinx during adulthood.
+BLEU: 1.0000
+Target Cell Type: 'macrophage'
+Predicted Cell Type: 'macrophage'
+Cell Type Match: ✓
+
+--- Example 8 ---
+TARGET: This sample consists of a gamma-delta T cell, T cell that expresses a gamma-delta T cell receptor complex. It originates from the gingiva of a male with gingivitis during late embryonic stage.
+GENERATED: This sample consists of a gamma-delta T cell, T cell that expresses a gamma-dollar delta T cell receptor complex. It originates from the gingiva of a male with gingivitis during late embryonic stage.
+BLEU: 0.8866
+Target Cell Type: 'gamma-delta t'
+Predicted Cell Type: 'gamma-delta t'
+Cell Type Match: ✓
+
+--- Example 9 ---
+TARGET: This sample consists of a Mueller cell, Astrocyte-like radial glial cell that extends vertically throughout the retina, with the nucleus are usually in the middle of the inner nuclear layer. It originates from the peripheral region of retina of a normal male during advanced elderly stage.
+GENERATED: This sample consists of a Mueller cell, Astrocyte-like radial glial cell that extends vertically throughout the retina, with the nucleus are usually in the middle of the inner nuclear layer. It originates from the peripheral region of retina of a normal male during advanced elderly stage.
+BLEU: 1.0000
+Target Cell Type: 'mueller'
+Predicted Cell Type: 'mueller'
+Cell Type Match: ✓
+
+--- Example 10 ---
+TARGET: This sample consists of a acinar cell of salivary gland, An acinar cell of salivary gland. It originates from the labial gland of a normal female during adulthood.
+GENERATED: This sample consists of a acetylcholine receptor-positive, myometrial cell, smooth muscle cell of the myometrium that stretches and contracts in response to oxytocin and vasopressin, respectively. It originates from the uterine muscle of a normal female during adulthood.
+BLEU: 0.2865
+Target Cell Type: 'acinar cell of salivary gland'
+Predicted Cell Type: 'acetylcholine receptor-positive'
+Cell Type Match: ✗
+
+--- Example 11 ---
+TARGET: This sample consists of a CD4-positive, alpha-beta T cell, A mature alpha-beta T cell that expresses an alpha-beta T cell receptor and the CD4 coreceptor. It originates from the lung of a with non-specific interstitial pneumonia.
+GENERATED: This sample consists of a CD4-positive, alpha-beta T cell, A mature αβ T cell that expresses an alpha beta T cell receptor and the CD4 coreceptor. It originates from the lung of a with non-specific interstitial pneumonia.
+BLEU: 0.8260
+Target Cell Type: 'cd4-positive'
+Predicted Cell Type: 'cd4-positive'
+Cell Type Match: ✓
+
+--- Example 12 ---
+TARGET: This sample consists of a enterocyte of epithelium proper of duodenum, An enterocyte that is part of the epithelium proper of duodenum. It originates from the duodenum of a normal female during middle age.
+GENERATED: This sample consists of a enterocyte of epithelium proper of duodenum, An enterocyte that is part of the epithelium of the proper duodenium and is characterized by a microvillus that extends into the lumen of the intestine. This cell type is capable of secreting the enzyme amylase, which breaks down carbohydrates into smaller sugars. It originates from the duodenum of a normal female during middle age.
+BLEU: 0.4396
+Target Cell Type: 'enterocyte of epithelium proper of duodenum'
+Predicted Cell Type: 'enterocyte of epithelium proper of duodenum'
+Cell Type Match: ✓
+
+--- Example 13 ---
+TARGET: This sample consists of a fibroblast of mammary gland, fibroblast that is part of the mammary gland. It originates from the breast of a normal female during adulthood.
+GENERATED: This sample consists of a fibroblast, connective tissue cell which secretes an extracellular matrix rich in collagen and other macromolecules. Flattened and irregular in outline with branching processes; appear fusiform or spindle-shaped. It originates from the breast of a normal female during late embryonic stage.
+BLEU: 0.2711
+Target Cell Type: 'fibroblast of mammary gland'
+Predicted Cell Type: 'fibroblast'
+Cell Type Match: ✗
+
+--- Example 14 ---
+TARGET: This sample consists of a neuron, The basic cellular unit of nervous tissue. Each neuron consists of a body, an axon, and dendrites. Their purpose is to receive, conduct, and transmit impulses in the nervous system. It originates from the cerebral cortex of a normal male during middle age.
+GENERATED: This sample consists of a neuron in the cerebral cortex of a normal male during middle age. It originates from the brain of a male with Parkinson disease during advanced elderly stage.
+BLEU: 0.2938
+Target Cell Type: 'neuron'
+Predicted Cell Type: 'neuron in the cerebral cortex of a normal male during middle age'
+Cell Type Match: ✗
+
+--- Example 15 ---
+TARGET: This sample consists of a glioblast, non-terminally differentiated cell that develops form the neuroectoderm. Glioblast has the potential to differentiate into various types of glial cells, including astrocytes and oligodendrocytes. It originates from the caudate-putamen of a normal individual during early embryonic stage.
+GENERATED: This sample consists of a glioblast, non-terminally differentiated cell that develops form the neuroectoderm. Glioblast has the potential to differentiate into various types of glial cells, including astrocytes and oligodendrocytes. It originates from the caudate-putamen of a normal individual during early embryonic stage.
+BLEU: 1.0000
+Target Cell Type: 'glioblast'
+Predicted Cell Type: 'glioblast'
+Cell Type Match: ✓
+
+--- Example 16 ---
+TARGET: This sample consists of a embryonic fibroblast, Any fibroblast that is part of a embryo. It originates from the placenta of a normal individual during early embryonic stage.
+GENERATED: This sample consists of a embryonicfibroblast, Any fibroblast that is part of a embryo. It originates from the placenta of a normal individual during early embryonic stage.
+BLEU: 0.8659
+Target Cell Type: 'embryonic fibroblast'
+Predicted Cell Type: 'embryonicfibroblast'
+Cell Type Match: ✗
+
+--- Example 17 ---
+TARGET: This sample consists of a glutamatergic neuron, neuron that is capable of some neurotansmission by glutamate secretion. It originates from the primary visual cortex of a normal individual during infancy.
+GENERATED: This sample consists of a glutamatergic neuron, neuron that is capable of some neurotansmission by glutamate secretion. It originates from the primary visual cortex of a normal individual during infancy.
+BLEU: 1.0000
+Target Cell Type: 'glutamatergic neuron'
+Predicted Cell Type: 'glutamatergic neuron'
+Cell Type Match: ✓
+
+--- Example 18 ---
+TARGET: This sample consists of a activated CD4-positive, alpha-beta T cell, A recently activated CD4-positive, alpha-beta T cell with the phenotype CD69-positive, CD62L-negative, CD127-negative, and CD25-positive. It originates from the blood of a normal male during late embryonic stage.
+GENERATED: This sample consists of a activated CD4-positive, alpha-beta T cell, A recently activated CD25-positive, CD62L-negative, CD127-negative, and CD69-positive T cell. It originates from the blood of a normal male during late embryonic stage.
+BLEU: 0.6682
+Target Cell Type: 'activated cd4-positive'
+Predicted Cell Type: 'activated cd4-positive'
+Cell Type Match: ✓
+
+--- Example 19 ---
+TARGET: This sample consists of a neuron, The basic cellular unit of nervous tissue. Each neuron consists of a body, an axon, and dendrites. Their purpose is to receive, conduct, and transmit impulses in the nervous system. It originates from the hippocampal formation of a normal male during late embryonic stage.
+GENERATED: This sample consists of a neuron, The basic cellular unit of nervous tissue. Each neuron consists ofa body, an axon, and dendrites. Their purpose is to receive, conduct, and transmit impulses in the nervous system. It originates from the hippocampal formation of a normal male during late embryonic stage.
+BLEU: 0.9273
+Target Cell Type: 'neuron'
+Predicted Cell Type: 'neuron'
+Cell Type Match: ✓
+
+--- Example 20 ---
+TARGET: This sample consists of a pulmonary capillary endothelial cell, Any capillary endothelial cell that is part of a lung. It originates from the middle lobe of right lung of a normal male during adulthood.
+GENERATED: This sample consists of a pulmonary Capillary Endothelial cell, Any capillary endothelial cell that is part of a lung. It originates from the middle lobe of right lung of a normal male during adulthood.
+BLEU: 0.8902
+Target Cell Type: 'pulmonary capillary endothelial'
+Predicted Cell Type: 'pulmonary capillary endothelial'
+Cell Type Match: ✓
+
+--- Example 21 ---
+TARGET: This sample consists of a slow muscle cell, muscle cell that develops tension more slowly than a fast-twitch fiber. It originates from the skeletal muscle organ of a normal individual during elderly stage.
+GENERATED: This sample consists of a slow muscle cell, muscle cell that develops tension more slowly than a fast-twitch fiber. It originates from the skeletal muscle organ of a normal individual during elderly stage.
+BLEU: 1.0000
+Target Cell Type: 'slow muscle'
+Predicted Cell Type: 'slow muscle'
+Cell Type Match: ✓
+
+--- Example 22 ---
+TARGET: This sample consists of a natural killer cell, lymphocyte that can spontaneously kill a variety of target cells without prior antigenic activation via germline encoded activation receptors and also regulate immune responses via cytokine release and direct contact with other cells. It originates from the blood of a male with COVID-19 during middle age.
+GENERATED: This sample consists of a natural killer cell, lymphocyte that can spontaneously kill a variety of target cells without prior antigenic activation via germline encoded activation receptors and also regulate immune responses via cytokine release and direct contact with other cells. It originates from the blood of a male with pulmonary fibrosis during late embryonic stage.
+BLEU: 0.8943
+Target Cell Type: 'natural killer'
+Predicted Cell Type: 'natural killer'
+Cell Type Match: ✓
+
+--- Example 23 ---
+TARGET: This sample consists of a goblet cell, specialized, columnar, mucus secreting epithelial cell shaped like a flask or goblet. A narrow basal end contains the nucleus while the apical end is swollen by the accumulation of mucus laden secretory granules.  Short microvilli project from the apical plasma membrane. It originates from the ileum of a normal individual.
+GENERATED: This sample consists of a goblet cell, specialized, columnar, mucus secreting epithelial cell shaped like a flask or goblet. A narrow basal end contains the nucleus while the apical end is swollen by the accumulation of mucus laden secretory granules.  Short microvilli project from the apICAL plasma membrane. It originates from the ileum of a normal individual.
+BLEU: 0.9543
+Target Cell Type: 'goblet'
+Predicted Cell Type: 'goblet'
+Cell Type Match: ✓
+
+--- Example 24 ---
+TARGET: This sample consists of a smooth muscle fiber of ileum, smooth muscle cell that is part of the ileum. It originates from the ileum of a with Crohn ileitis during adulthood.
+GENERATED: This sample consists of a smooth muscle fiber of ileum, smooth muscle cell that is part of the ileum. It originates from the hepatic cecum of a female with tubulovillous adenoma during middle age.
+BLEU: 0.6958
+Target Cell Type: 'smooth muscle fiber of ileum'
+Predicted Cell Type: 'smooth muscle fiber of ileum'
+Cell Type Match: ✓
+
+--- Example 25 ---
+TARGET: This sample consists of a memory B cell, memory B cell is a mature B cell that is long-lived, readily activated upon re-encounter of its antigenic determinant, and has been selected for expression of higher affinity immunoglobulin. This cell type has the phenotype CD19-positive, CD20-positive, MHC Class II-positive, and CD138-negative. It originates from the blood of a normal female during late embryonic stage.
+GENERATED: This sample consists of amemory B cell, memory B cell that is long-lived, readily activated upon re-encounter of its antigenic determinant, and has been selected for expression of higher affinity immunoglobulin. This cell type has the phenotype CD19-low, CD20-positive, MHC Class II-positive, and CD138-negative. It originates from the blood of a normal female during late embryonic stage.
+BLEU: 0.8129
+Target Cell Type: 'memory b'
+Predicted Cell Type: 'unknown'
+Cell Type Match: ✗
+
+--- Example 26 ---
+TARGET: This sample consists of a myeloid dendritic cell, human, A myeloid dendritic cell with the phenotype HLA-DRA-positive. It originates from the upper lobe of left lung of a male with COVID-19 during middle age.
+GENERATED: This sample consists of a myeloid dendritic cell, human, A male with COVID-19 during elderly stage.
+BLEU: 0.2418
+Target Cell Type: 'myeloid dendritic'
+Predicted Cell Type: 'myeloid dendritic'
+Cell Type Match: ✓
+
+--- Example 27 ---
+TARGET: This sample consists of a diffuse bipolar 4 cell, An ON diffuse bipolar cell that predominantly connects to ON parasol cells and lateral amacrine cells. It originates from the peripheral region of retina of a normal female during advanced elderly stage.
+GENERATED: This sample consists of a diffuse bipolar 4 cell, An ON diffuse bipolar cell that predominantly connects to ON parasol cells and lateral amacrine cells. It originates from the peripheral region of retina of a normal female during advanced elderly stage.
+BLEU: 1.0000
+Target Cell Type: 'diffuse bipolar 4'
+Predicted Cell Type: 'diffuse bipolar 4'
+Cell Type Match: ✓
+
+--- Example 28 ---
+TARGET: This sample consists of a cortical cell of adrenal gland, cell of the adrenal cortex. Cell types include those that synthesize and secrete chemical derivatives (steroids) of cholesterol. It originates from the adrenal gland of a normal female during early embryonic stage.
+GENERATED: This sample consists of a cortical cell of adrenal gland, cell of the adrenal cortex. Cell types include those that synthesize and secrete chemical derivatives (steroids) of cholesterol. It originates from the adrenal gland of a normal female during early embryonic stage.
+BLEU: 1.0000
+Target Cell Type: 'cortical cell of adrenal gland'
+Predicted Cell Type: 'cortical cell of adrenal gland'
+Cell Type Match: ✓
+
+--- Example 29 ---
+TARGET: This sample consists of a ciliated columnar cell of tracheobronchial tree, multi-ciliated epithelial cell located in the trachea and bronchi, characterized by a columnar shape and motile cilia on its apical surface. These cilia facilitate mucociliary clearance by moving mucus and trapped particles toward the pharynx. It originates from the lung of a normal female during early childhood.
+GENERATED: This sample consists of a ciliated columnar cell of tracheobronchial tree, multi-ciliated epithelial cell located in the trachea and bronchi, characterized by a columnar shape and motile cilia on its apical surface. These cilia facilitate mucociliary clearance by moving mucus and trapped particles toward the pharynx. It originates from the lung of a normal female during early childhood.
+BLEU: 1.0000
+Target Cell Type: 'ciliated columnar cell of tracheobronchial tree'
+Predicted Cell Type: 'ciliated columnar cell of tracheobronchial tree'
+Cell Type Match: ✓
+
+--- Example 30 ---
+TARGET: This sample consists of a luminal adaptive secretory precursor cell of mammary gland, luminal epithelial cell of the mammary gland that can proliferate and has the potential to differentiate into a lactocyte during pregnancy. In humans, a luminal adaptive secretory precursor cell can be identified by high levels of the markers EpCAM and CD49f, and in mice it can be identified by low levels of CD29 and high levels of CD14, Kit, CD61, and Tspan8. It originates from the breast of a normal female during adulthood.
+GENERATED: This sample consists of a luminal adaptive secretory precursor cell of mammary gland, luminal epithelial cell of the milk ductal tree that can proliferate and has the potential to differentiate into a lactocyte during pregnancy. In humans, alumina raresis is the human equivalent of this cell type. It originates from the breast of a normal female during adulthood.
+BLEU: 0.4481
+Target Cell Type: 'luminal adaptive secretory precursor cell of mammary gland'
+Predicted Cell Type: 'luminal adaptive secretory precursor cell of mammary gland'
+Cell Type Match: ✓
+
+--- Example 31 ---
+TARGET: This sample consists of a tracheal goblet cell, goblet cell that is part of the epithelium of trachea. It originates from the nasal cavity of a male with COVID-19 during early childhood.
+GENERATED: This sample consists of a tracheal epithelial cell, cell that is part of the epithelium of trachea. It originates from the nasal cavity of a male with COVID-19 during early childhood.
+BLEU: 0.8581
+Target Cell Type: 'tracheal goblet'
+Predicted Cell Type: 'tracheal epithelial'
+Cell Type Match: ✗
+
+--- Example 32 ---
+TARGET: This sample consists of a goblet cell, specialized, columnar, mucus secreting epithelial cell shaped like a flask or goblet. A narrow basal end contains the nucleus while the apical end is swollen by the accumulation of mucus laden secretory granules.  Short microvilli project from the apical plasma membrane. It originates from the transverse colon of a normal male during middle age.
+GENERATED: This sample consists of a goblet cell, specialized, columnar, mucus secreting epithelial cell shaped like a flask or goblet. A narrow basal end contains the nucleus while the apical end is swollen by the accumulation of mucus laden secretory granules.  Short microvilli project from the apICAL plasma membrane. It originates from the transverse colon of a normal male during middle age.
+BLEU: 0.9574
+Target Cell Type: 'goblet'
+Predicted Cell Type: 'goblet'
+Cell Type Match: ✓
+
+--- Example 33 ---
+TARGET: This sample consists of a CD14-positive monocyte, monocyte that expresses CD14 and is negative for the lineage markers CD3, CD19, and CD20. It originates from the blood of a normal female during advanced elderly stage.
+GENERATED: This sample consists of a CD14-positive monocyte, monocyte that expresses CD14 and is negative for the lineage markers CD3, CD19, and CD20. It originates from the blood of a normal female during advanced elderly stage.
+BLEU: 1.0000
+Target Cell Type: 'cd14-positive monocyte'
+Predicted Cell Type: 'cd14-positive monocyte'
+Cell Type Match: ✓
+
+--- Example 34 ---
+TARGET: This sample consists of a classical monocyte, monocyte that responds rapidly to microbial stimuli by secreting cytokines and antimicrobial factors and which is characterized by high expression of CCR2 in both rodents and humans, negative for the lineage markers CD3, CD19, and CD20, and of larger size than non-classical monocytes. It originates from the blood of a female with systemic lupus erythematosus during adulthood.
+GENERATED: This sample consists of a classical monocyte, monocyte that responds rapidly to microbial stimuli by secreting cytokines and antimicrobial factors and which is characterized by high expression of CCR2 in both rodents and humans, negative for the lineage markers CD3, CD19, and CD20, and of larger size than non-classical monocytes. It originates from the blood of a female with systemic lupus erythematosus during adulthood.
+BLEU: 1.0000
+Target Cell Type: 'classical monocyte'
+Predicted Cell Type: 'classical monocyte'
+Cell Type Match: ✓
+
+--- Example 35 ---
+TARGET: This sample consists of a abnormal cell, cell found in an organism or derived from an organism exhibiting a phenotype that deviates from the expected phenotype of any native cell type of that organism. Abnormal cells are typically found in disease states or disease models. It originates from the rectum of a female with hyperplastic polyp during middle age.
+GENERATED: This sample consists of a abnormal cell, cell found in an organism or derived from an organism exhibiting a phenotype that deviates from the expected phenotype of any native cell type of that organism. Abnormal cells are typically found in disease states or disease models. It originates from the rectum of a female with hyperplastic polyp during middle age.
+BLEU: 1.0000
+Target Cell Type: 'abnormal'
+Predicted Cell Type: 'abnormal'
+Cell Type Match: ✓
+
+--- Example 36 ---
+TARGET: This sample consists of a pericyte, An elongated, contractile cell found wrapped about precapillary arterioles outside the basement membrane. Pericytes are present in capillaries where proper adventitia and muscle layer are missing (thus distingushing this cell type from adventitial cells). They are relatively undifferentiated and may become fibroblasts, macrophages, or smooth muscle cells. It originates from the brain of a male with multiple sclerosis during adulthood.
+GENERATED: This sample consists of a pericyte, An elongated, contractile cell found wrapped about precapillary arterioles outside the basement membrane. Pericytes are present in capillaries where proper adventitia and muscle layer are missing (thus distingushing this cell type from adventitial cells). They are relatively undifferentiated and may become fibroblasts, macrophages, or smooth muscle cells. It originates from the brain of a male with multiple sclerosis during adulthood.
+BLEU: 1.0000
+Target Cell Type: 'pericyte'
+Predicted Cell Type: 'pericyte'
+Cell Type Match: ✓
+
+--- Example 37 ---
+TARGET: This sample consists of a L2/3-6 intratelencephalic projecting glutamatergic neuron, An intratelencephalic-projecting glutamatergic neuron with a soma found in cortical layers L2/3-6. It originates from the dorsolateral prefrontal cortex of a normal male during elderly stage.
+GENERATED: This sample consists of a L2/3-6 intratelencephalic projecting glutamatergic neuron, An intrapellicular projecting neuron with a soma found between the layers of the telencephalon and having its axon extend into the cerebral cortex. It originates from the dorsolateral prefrontal cortex of a normal male during elderly stage.
+BLEU: 0.5603
+Target Cell Type: 'l2/3-6 intratelencephalic projecting glutamatergic neuron'
+Predicted Cell Type: 'l2/3-6 intratelencephalic projecting glutamatergic neuron'
+Cell Type Match: ✓
+
+--- Example 38 ---
+TARGET: This sample consists of a common dendritic progenitor, Common dendritic precursor is a hematopoietic progenitor cell that is CD117-low, CD135-positive, CD115-positive and lacks plasma membrane parts for hematopoietic lineage markers. It originates from the blood of a female with B-cell acute lymphoblastic leukemia during infancy.
+GENERATED: This sample consists of a common dendritic progenitor, Common dendritic precursor is a hematopoietic progenitor cell that is CD117-low, CD135-negative, CD115-low and has the phenotype Tspan8-low, Sertoli cell marker low and is capable of differentiating into various populations of dendritic cells, including those that express high levels of the lineage markers CD3, CD19 and CD20. It originates from the thymus of a normal male during infancy.
+BLEU: 0.3341
+Target Cell Type: 'common dendritic progenitor'
+Predicted Cell Type: 'common dendritic progenitor'
+Cell Type Match: ✓
+
+--- Example 39 ---
+TARGET: This sample consists of a CD8-positive, alpha-beta T cell, A T cell expressing an alpha-beta T cell receptor and the CD8 coreceptor. It originates from the lung of a female with pleomorphic carcinoma during middle age.
+GENERATED: This sample consists of a CD8-positive, alpha-beta natural killer cell, A mature alpha-beta T cell expressing an NK cell marker that is capable of cytotoxicity and cytokine production. It originates from the lung of a female with pleomorphic carcinoma during middle age.
+BLEU: 0.5412
+Target Cell Type: 'cd8-positive'
+Predicted Cell Type: 'cd8-positive'
+Cell Type Match: ✓
+
+--- Example 40 ---
+TARGET: This sample consists of a epithelial cell, cell that is usually found in a two-dimensional sheet with a free surface. The cell has a cytoskeleton that allows for tight cell to cell contact and for cell polarity where apical part is directed towards the lumen and the basal part to the basal lamina. It originates from the decidua of a normal female.
+GENERATED: This sample consists of a epithelial cell, cell that is usually found in a two-dimensional sheet with a free surface. The cell has a cytoskeleton that allows for tight cell to cell contact and for cell polarity where apical part is directed towards the lumen and the basal part to the basal lamina. It originates from the decidua of a normal female.
+BLEU: 1.0000
+Target Cell Type: 'epithelial'
+Predicted Cell Type: 'epithelial'
+Cell Type Match: ✓
+
+--- Example 41 ---
+TARGET: This sample consists of a natural killer cell, lymphocyte that can spontaneously kill a variety of target cells without prior antigenic activation via germline encoded activation receptors and also regulate immune responses via cytokine release and direct contact with other cells. It originates from the thymus of a normal male during infancy.
+GENERATED: This sample consists of a natural killer cell, lymphocyte that can spontaneously kill a variety of target cells without prior antigenic activation via germline encoded activation receptors and also regulate immune responses via cytokine release and direct contact with other cells. It originates from the thymus of a normal male during infancy.
+BLEU: 1.0000
+Target Cell Type: 'natural killer'
+Predicted Cell Type: 'natural killer'
+Cell Type Match: ✓
+
+--- Example 42 ---
+TARGET: This sample consists of a neoplastic cell, An abnormal cell exhibiting dysregulation of cell proliferation or programmed cell death and capable of forming a neoplasm, an aggregate of cells in the form of a tumor mass or an excess number of abnormal cells (liquid tumor) within an organism. It originates from the hepatic cecum of a female with tubulovillous adenoma during middle age.
+GENERATED: This sample consists of a neoplastic cell, An abnormal cell exhibiting dysregulation of cell proliferation or programmed cell death and capable of forming a neoplasm, an aggregate of cells in the form of a tumor mass or an excess number of abnormal cells (liquid tumor) within an organism. It originates from the hepatic cecum of a female with tubulovillous adenoma during middle age.
+BLEU: 1.0000
+Target Cell Type: 'neoplastic'
+Predicted Cell Type: 'neoplastic'
+Cell Type Match: ✓
+
+--- Example 43 ---
+TARGET: This sample consists of a T cell, type of lymphocyte whose defining characteristic is the expression of a T cell receptor complex. It originates from the blood of a female with B-cell acute lymphoblastic leukemia during infancy.
+GENERATED: This sample consists of a regulatory T cell, T cell which regulates overall immune responses as well as the responses of other T cell subsets through direct cell-cell contact and cytokine release. It originates from the mesenteric lymph node of a normal male during elderly stage.
+BLEU: 0.1620
+Target Cell Type: 't'
+Predicted Cell Type: 'regulatory t'
+Cell Type Match: ✗
+
+--- Example 44 ---
+TARGET: This sample consists of a regulatory T cell, T cell which regulates overall immune responses as well as the responses of other T cell subsets through direct cell-cell contact and cytokine release. It originates from the skin of temple of a male with basal cell carcinoma during middle age.
+GENERATED: This sample consists of a regulatory T cell, T cell which regulates overall immune responses as well as the responses of other T cell subsets through direct cell-cell contact and cytokine release. It originates from the skin of temple of a male with basal cell carcinoma during middle age.
+BLEU: 1.0000
+Target Cell Type: 'regulatory t'
+Predicted Cell Type: 'regulatory t'
+Cell Type Match: ✓
+
+--- Example 45 ---
+TARGET: This sample consists of a double-positive, alpha-beta thymocyte, A thymocyte expressing the alpha-beta T cell receptor complex as well as both the CD4 and CD8 coreceptors. It originates from the thymus of a normal male during infancy.
+GENERATED: This sample consists of a double-positive, alpha-beta thymocytes, A thymocyte expressing the alpha-beta T cell receptor complex as well as both the CD4 and CD8 coreceptors. It originates from the thymus of a normal male during infancy.
+BLEU: 0.9279
+Target Cell Type: 'double-positive'
+Predicted Cell Type: 'double-positive'
+Cell Type Match: ✓
+
+--- Example 46 ---
+TARGET: This sample consists of a CD8-positive, alpha-beta regulatory T cell, A CD8-positive, alpha-beta T cell that regulates overall immune responses as well as the responses of other T cell subsets through direct cell-cell contact and cytokine release. It originates from the labial gland of a female with Sjogren syndrome during elderly stage.
+GENERATED: This sample consists of a regulatory T cell, T cell which regulates overall immune responses as well as the responses of other T cell subsets through direct cell-cell contact and cytokine release. It originates from the mesenteric lymph node of a normal male during elderly stage.
+BLEU: 0.6100
+Target Cell Type: 'cd8-positive'
+Predicted Cell Type: 'regulatory t'
+Cell Type Match: ✗
+
+--- Example 47 ---
+TARGET: This sample consists of a midzonal region hepatocyte, Any hepatocyte that is part of the liver lobule midzonal region. These cells have mixed functionality in comparison with those in the other two regions of the liver lobule. It originates from the caudate lobe of liver of a normal male during adulthood.
+GENERATED: This sample consists of a midzonal region hepatocyte, Any hepatocyte that is part of the liver lobule midzone. These cells have mixed functionality in comparison with those in the other two regions of the hepatic lobule. It originates from the caudate lobe of liver of a normal male during adulthood.
+BLEU: 0.8768
+Target Cell Type: 'midzonal region hepatocyte'
+Predicted Cell Type: 'midzonal region hepatocyte'
+Cell Type Match: ✓
+
+--- Example 48 ---
+TARGET: This sample consists of a granulosa cell, supporting cell for the developing female gamete in the ovary of mammals. They develop from the coelomic epithelial cells of the gonadal ridge. Granulosa cells form a single layer around the mammalian oocyte in the primordial ovarian follicle and advance to form a multilayered cumulus oophorus surrounding the ovum in the Graafian follicle. The major functions of granulosa cells include the production of steroids and LH receptors. It originates from the gonad of a normal female during early embryonic stage.
+GENERATED: This sample consists of a granulosa cell, supporting cell for the developing female gamete in the ovary of mammals. They develop from the coelomic epithelial cells of the gonadal ridge. Granulosa cells form a single layer around the mammalian oocyte in the primordial ovarian follicle and advance to form a multilayered cumulus oophorus surrounding the ovum in the Graafian follicle. The major functions of granulosis cells include the production of
+BLEU: 0.7554
+Target Cell Type: 'granulosa'
+Predicted Cell Type: 'granulosa'
+Cell Type Match: ✓
+
+--- Example 49 ---
+TARGET: This sample consists of a epithelial cell of proximal tubule, An epithelial cell of the proximal tubule of the kidney. It originates from the cortex of kidney of a male with type 2 diabetes mellitus during middle age.
+GENERATED: This sample consists of a epithelial cell of proximal tubule, An adult male with type 2 diabetes mellitus during middle age. It originates from the kidney of a normal male during adulthood.
+BLEU: 0.5579
+Target Cell Type: 'epithelial cell of proximal tubule'
+Predicted Cell Type: 'epithelial cell of proximal tubule'
+Cell Type Match: ✓
+
+--- Example 50 ---
+TARGET: This sample consists of a glutamatergic neuron, neuron that is capable of some neurotansmission by glutamate secretion. It originates from the entorhinal cortex of a normal female during early childhood.
+GENERATED: This sample consists of a glutamatergic neuron, neuron that is capable of some neurotansmission by glutamate secretion. It originates from the entorhinal cortex of a normal female during early childhood.
+BLEU: 1.0000
+Target Cell Type: 'glutamatergic neuron'
+Predicted Cell Type: 'glutamatergic neuron'
+Cell Type Match: ✓
+
+--- Example 51 ---
+TARGET: This sample consists of a cortical thymic epithelial cell, An epithelial cell of the cortical portion of the thymus. Epithelial cells in this region are required for positive selection of CD8-positive T cells. It originates from the thymus of a normal female during infancy.
+GENERATED: This sample consists of a cortical thymic epithelial cells, An epithelial cell of the cortical portion of the thymus. Epithelial cells in this region are required for positive selection of CD8-positive T cells. It originates from the cortical region of a normal female during infancy.
+BLEU: 0.8589
+Target Cell Type: 'cortical thymic epithelial'
+Predicted Cell Type: 'cortical thymic epithelial'
+Cell Type Match: ✓
+
+--- Example 52 ---
+TARGET: This sample consists of a club cell, non-mucous, epithelial secretory cell that is part of the tracheobronchial tree. A club cell has short microvilli but no cilia. A club cell is able to multiply and differentiate into ciliated cells to regenerate the bronchiolar epithelium and it also protects the tracheobronchial epithelium. It originates from the alveolar sac of a normal individual.
+GENERATED: This sample consists of a club cell, non-mucous, epithelial secretory cell that is part of the tracheobronchial tree. A club cell has short microvilli but no cilia. It originates from the lung of a normal female during early childhood.
+BLEU: 0.4448
+Target Cell Type: 'club'
+Predicted Cell Type: 'club'
+Cell Type Match: ✓
+
+--- Example 53 ---
+TARGET: This sample consists of a monocyte, Myeloid mononuclear recirculating leukocyte that can act as a precursor of tissue macrophages, osteoclasts and some populations of tissue dendritic cells. It originates from the blood of a normal male during elderly stage.
+GENERATED: This sample consists of a monocyte, Myeloid mononuclear recirculating leukocyte that can act as a precursor of tissue macrophages, osteoclasts and some populations of tissue dendritic cells. It originates from the adnexa of uterus of a female with malignant ovarian serous tumor during middle age.
+BLEU: 0.6994
+Target Cell Type: 'monocyte'
+Predicted Cell Type: 'monocyte'
+Cell Type Match: ✓
+
+--- Example 54 ---
+TARGET: This sample consists of a vasa recta descending limb cell, cell that is part of some vasa recta descending limb. It originates from the renal medulla of a normal female during adulthood.
+GENERATED: This sample consists of a vasa recta descending limb cell, cell that is part of some vasca recta. It originates from the renal cortex of a normal female during adulthood.
+BLEU: 0.7308
+Target Cell Type: 'vasa recta descending limb'
+Predicted Cell Type: 'vasa recta descending limb'
+Cell Type Match: ✓
+
+--- Example 55 ---
+TARGET: This sample consists of a retinal rod cell, One of the two photoreceptor cell types of the vertebrate retina. In rods the photopigment is in stacks of membranous disks separate from the outer cell membrane. Rods are more sensitive to light than cones, but rod mediated vision has less spatial and temporal resolution than cone vision. It originates from the peripheral region of retina of a normal male during early embryonic stage.
+GENERATED: This sample consists of a retinal rod cell, One of the two photoreceptor cell types of the vertebrate retina. In rods the photopigment is in stacks of membranous disks separate from the outer cell membrane. Rods are more sensitive to light than cones, but rod mediated vision has less spatial and temporal resolution than cone vision. It originates from the peripheral region of retina of a normal male during early embryonic stage.
+BLEU: 1.0000
+Target Cell Type: 'retinal rod'
+Predicted Cell Type: 'retinal rod'
+Cell Type Match: ✓
+
+--- Example 56 ---
+TARGET: This sample consists of a malignant cell, neoplastic cell that is capable of entering a surrounding tissue. It originates from the axilla of a female with breast cancer during middle age.
+GENERATED: This sample consists of a malignant cell, neoplastic cell that is capable of entering a surrounding tissue. It originates from the axilla of a female with breast cancer during middle age.
+BLEU: 1.0000
+Target Cell Type: 'malignant'
+Predicted Cell Type: 'malignant'
+Cell Type Match: ✓
+
+--- Example 57 ---
+TARGET: This sample consists of a monocyte, Myeloid mononuclear recirculating leukocyte that can act as a precursor of tissue macrophages, osteoclasts and some populations of tissue dendritic cells. It originates from the adnexa of uterus of a female with malignant ovarian serous tumor during middle age.
+GENERATED: This sample consists of a monocyte, Myeloid mononuclear recirculating leukocyte that can act as a precursor of tissue macrophages, osteoclasts and some populations of tissue dendritic cells. It originates from the adnexa of uterus of a female with malignant ovarian serous tumor during middle age.
+BLEU: 1.0000
+Target Cell Type: 'monocyte'
+Predicted Cell Type: 'monocyte'
+Cell Type Match: ✓
+
+--- Example 58 ---
+TARGET: This sample consists of a malignant cell, neoplastic cell that is capable of entering a surrounding tissue. It originates from the arm skin of a with primary cutaneous diffuse large B-cell lymphoma during adulthood.
+GENERATED: This sample consists of a malignant cell, neoplastic cell that is capable of entering a surrounding tissue. It originates from the arm skin of a with primary cutaneous diffuse large B-cell lymphoma during adulthood.
+BLEU: 1.0000
+Target Cell Type: 'malignant'
+Predicted Cell Type: 'malignant'
+Cell Type Match: ✓
+
+--- Example 59 ---
+TARGET: This sample consists of a epithelial cell of esophagus, An epithelial cell of the lining of the esophagus. It originates from the lower esophagus of a normal male during adulthood.
+GENERATED: This sample consists of a epithelial cell of esophagus, An epithelialcell of the lining of the esophagusthat is capable of moving substances toward the stomach by peristaltic movements and that is fixed to the underlying muscular layer by a basement membrane. It originates from the lower esophagon of a normal male during adulthood.
+BLEU: 0.3784
+Target Cell Type: 'epithelial cell of esophagus'
+Predicted Cell Type: 'epithelial cell of esophagus'
+Cell Type Match: ✓
+
+--- Example 60 ---
+TARGET: This sample consists of a choroid plexus epithelial cell, specialized ependymal cell that is part of the choroid plexus epithelium, responsible for producing cerebrospinal fluid (CSF) by selectively filtering and modifying blood plasma components before secreting it into the brain and spinal cord. This cell is characterized by a brush border on its apical surface, which enhances the secretion of CSF. It originates from the choroid plexus of a male with malignant pancreatic neoplasm during advanced elderly stage.
+GENERATED: This sample consists of a choroid plexus epithelial cell of a male with malignant pancreatic neoplasm during advanced elderly stage.
+BLEU: 0.0478
+Target Cell Type: 'choroid plexus epithelial'
+Predicted Cell Type: 'choroid plexus epithelial cell of a male with malignant pancreatic neoplasm during advanced elderly stage'
+Cell Type Match: ✗
+
+--- Example 61 ---
+TARGET: This sample consists of a Kupffer cell, tissue-resident macrophage of the reticuloendothelial system found on the luminal surface of the hepatic sinusoids involved in erythrocyte clearance. Markers include F4/80+, CD11b-low, CD68-positive, sialoadhesin-positive, CD163/SRCR-positive. Irregular, with long processes including lamellipodia extending into the sinusoid lumen, have flattened nucleus with cytoplasm containing characteristic invaginations of the plasma membrane (vermiform bodies); lie within the sinusoid lumen attached to the endothelial surface; derived from the bone marrow, form a major part of the body's mononuclear phagocyte system. It originates from the liver of a normal female during early embryonic stage.
+GENERATED: This sample consists of a Kupffer cell, tissue-resident macrophage of the reticuloendothelial system found on the luminal surface of the hepatic sinusoids involved in erythrocyte clearance. Markers include F4/80+, CD11b-low, CD68-positive, sialoadhesin-positive, CD163/SRCR-positive. Irregular, with long processes including lamellipodia extending into the sinusoid lumen, have flattened nucleus with cytoplasm
+BLEU: 0.3832
+Target Cell Type: 'kupffer'
+Predicted Cell Type: 'kupffer'
+Cell Type Match: ✓
+
+--- Example 62 ---
+TARGET: This sample consists of a activated type II NK T cell, type II NK T cell that has been recently activated, secretes interferon-gamma and interleukin-4, and has the phenotype CD69-positive and downregulated NK markers. It originates from the kidney of a male with nonpapillary renal cell carcinoma during adulthood.
+GENERATED: This sample consists of a activated CD4-positive, alpha-beta T cell, A recently activated CD25-positive, CD62L-negative, CD127-negative, and CD69-positive T cell. It originates from the blood of a normal male during late embryonic stage.
+BLEU: 0.1628
+Target Cell Type: 'activated type ii nk t'
+Predicted Cell Type: 'activated cd4-positive'
+Cell Type Match: ✗
+
+--- Example 63 ---
+TARGET: This sample consists of a retinal bipolar neuron, bipolar neuron found in the retina and having connections with photoreceptors cells and neurons in the inner plexiform layer. It originates from the macula lutea proper of a normal female during elderly stage.
+GENERATED: This sample consists of a retinal bipolar neuron, bipolar neuron found in the retina and having connections with photoreceptors cells and neurons in the inner plexiform layer. It originates from the macula lutea proper of a normal female during elderly stage.
+BLEU: 1.0000
+Target Cell Type: 'retinal bipolar neuron'
+Predicted Cell Type: 'retinal bipolar neuron'
+Cell Type Match: ✓
+
+--- Example 64 ---
+TARGET: This sample consists of a malignant cell, neoplastic cell that is capable of entering a surrounding tissue. It originates from the lung of a male with non-small cell lung carcinoma.
+GENERATED: This sample consists of a malignant cell, neoplastic cell that is capable of entering a surrounding tissue. It originates from the lung of a male with non-small cell lung carcinoma.
+BLEU: 1.0000
+Target Cell Type: 'malignant'
+Predicted Cell Type: 'malignant'
+Cell Type Match: ✓
+
+--- Example 65 ---
+TARGET: This sample consists of a VIP GABAergic cortical interneuron, transcriptomically distinct cortical GABAergic neuron that expresses the vasocactive intestinal polypeptide and that has its soma located in the cerebral cortex. The standard transcriptomic reference data for this cell type can be found on the CellxGene census under the collection: 'Transcriptomic cytoarchitecture reveals principles of human neocortex organization', dataset: 'Supercluster: CGE-derived interneurons', Author Categories: 'CrossArea_subclass', cluster Vip. It originates from the neocortex of a normal male during adulthood.
+GENERATED: This sample consists of a VIP-GABAergic cortical interneuron, transcriptomically distinct cortical GABAergic neuron that expresses the vasocactive intestinal polypeptide and that has its soma located in the cerebral cortex. The standard transcriptomic reference data for this cell type can be found on the CellxGene census under the collection: 'Transcriptomic cytoarchitecture reveals principles of human neocortex organization', dataset: 'Supercluster: CGE-derived interneurons', Author Categories: '
+BLEU: 0.7547
+Target Cell Type: 'vip gabaergic cortical interneuron'
+Predicted Cell Type: 'vip-gabaergic cortical interneuron'
+Cell Type Match: ✗
+
+--- Example 66 ---
+TARGET: This sample consists of a microglial cell, transcriptomically distinct central nervous system macrophage found in the parenchyma of the central nervous system. Marker include CD11b-positive, F4/80-positive, and CD68-positive. It originates from the brain of a with glioblastoma.
+GENERATED: This sample consists of a microglial cell, transcriptomically distinct central nervous system macrophage found in the brain and spinal cord. Marker include CD11b-low, F4/80-positive, and CD68-positive. It originates from the prefrontal cortex of a female with Parkinson disease during advanced elderly stage.
+BLEU: 0.5379
+Target Cell Type: 'microglial'
+Predicted Cell Type: 'microglial'
+Cell Type Match: ✓
+
+--- Example 67 ---
+TARGET: This sample consists of a Purkinje cell, An inhibitory neuron and the sole output neuron of the cerebellar cortex, the Purkinje cell's soma is located between the granular and molecular layers of the cerebellum. It is one of the largest neural cells in the mammalian brain, ranging from 50 to 80 micrometres in diameter. Purkinje cells have planar, fan-shaped dendrites that branch extensively with little overlap. This cell type receives synaptic input from parallel fibres, which modulate high-frequency spike activity known as \. It originates from the cerebellum of a normal male during early embryonic stage.
+GENERATED: This sample consists of a Purkinje cell, An inhibitory neuron and the sole output neuron of the cerebellar cortex, the Purkinji cell's soma is located between the granular and molecular layers of the cerebral cortex. It is one of the largest neural cells in the mammalian brain, ranging from 50 to 80 micrometres in diameter. Purkinjie cells have planar, fan-shaped dendrites that branch extensively with little overlap. This cell type receives synaptic input
+BLEU: 0.6414
+Target Cell Type: 'purkinje'
+Predicted Cell Type: 'purkinje'
+Cell Type Match: ✓
+
+--- Example 68 ---
+TARGET: This sample consists of a astrocyte, class of large neuroglial (macroglial) cells in the central nervous system - the largest and most numerous neuroglial cells in the brain and spinal cord. Astrocytes (from'star' cells) are irregularly shaped with many long processes, including those with 'end feet' which form the glial (limiting) membrane and directly and indirectly contribute to the blood-brain barrier. They regulate the extracellular ionic and chemical environment, and'reactive astrocytes' (along with microglia) respond to injury. It originates from the prefrontal cortex of a female with Parkinson disease during advanced elderly stage.
+GENERATED: This sample consists of a astrocyte, class of large neuroglial (macroglial) cells in the central nervous system - the largest and most numerous neuroglia in the brain and spinal cord. Astrocytes (from'star' cells) are irregularly shaped with many long processes, including those with 'end feet' which form the glial (limiting) membrane and directly and indirectly contribute to the blood-brain barrier. They regulate the extracellular ionic and chemical environment
+BLEU: 0.6556
+Target Cell Type: 'astrocyte'
+Predicted Cell Type: 'astrocyte'
+Cell Type Match: ✓
+
+--- Example 69 ---
+TARGET: This sample consists of a intermediate monocyte, monocyte that has characteristics of both patrolling and inflammatory monocytes. It originates from the blood of a male with COVID-19 during middle age.
+GENERATED: This sample consists of a intermediate monocyte, monocyte that has characteristics of both patrolling and inflammatory monocytes. It originates from the blood of a male with COVID-19 during middle age.
+BLEU: 1.0000
+Target Cell Type: 'intermediate monocyte'
+Predicted Cell Type: 'intermediate monocyte'
+Cell Type Match: ✓
+
+--- Example 70 ---
+TARGET: This sample consists of a vascular associated smooth muscle cell, smooth muscle cell associated with the vasculature. It originates from the urinary bladder of a normal male during late embryonic stage.
+GENERATED: This sample consists of a vascular associated smooth muscle cell,smooth muscle cell associated with the vasculature. It originates from the urinary bladder of a normal male during late embryonic stage.
+BLEU: 0.8798
+Target Cell Type: 'vascular associated smooth muscle'
+Predicted Cell Type: 'vascular associated smooth muscle'
+Cell Type Match: ✓
+
+--- Example 71 ---
+TARGET: This sample consists of a glutamatergic neuron, neuron that is capable of some neurotansmission by glutamate secretion. It originates from the telencephalon of a normal male during late embryonic stage.
+GENERATED: This sample consists of a glutamatergic neuron, neuron that is capable of some neurotansmission by glutamate secretion. It originates from the telencephalon of a normal male during late embryonic stage.
+BLEU: 1.0000
+Target Cell Type: 'glutamatergic neuron'
+Predicted Cell Type: 'glutamatergic neuron'
+Cell Type Match: ✓
+
+--- Example 72 ---
+TARGET: This sample consists of a CD4-positive, alpha-beta T cell, A mature alpha-beta T cell that expresses an alpha-beta T cell receptor and the CD4 coreceptor. It originates from the kidney of a female with clear cell renal carcinoma during elderly stage.
+GENERATED: This sample consists of a CD4-positive, alpha-beta T cell, A T cell expressing an αβ T cell receptor and the CD4 coreceptor. It originates from the kidney of a female with clear cell renal carcinoma during elderly stage.
+BLEU: 0.7806
+Target Cell Type: 'cd4-positive'
+Predicted Cell Type: 'cd4-positive'
+Cell Type Match: ✓
+
+--- Example 73 ---
+TARGET: This sample consists of a CD4-positive, CD25-positive, alpha-beta regulatory T cell, A CD4-positive, CD25-positive, alpha-beta T cell that regulates overall immune responses as well as the responses of other T cell subsets through direct cell-cell contact and cytokine release. It originates from the kidney of a male with nonpapillary renal cell carcinoma during middle age.
+GENERATED: This sample consists of a CD4-positive, CD25-positive, alpha-beta regulatory T cell, A CD4-regulatory T cell that expresses an alpha-beta T cell receptor and the CD25 coreceptor. It originates from the kidney of a male with nonpapillary renal cell carcinoma during middle age.
+BLEU: 0.5081
+Target Cell Type: 'cd4-positive'
+Predicted Cell Type: 'cd4-positive'
+Cell Type Match: ✓
+
+--- Example 74 ---
+TARGET: This sample consists of a macrophage, mononuclear phagocyte present in variety of tissues, typically differentiated from monocytes, capable of phagocytosing a variety of extracellular particulate material, including immune complexes, microorganisms, and dead cells. It originates from the choroid plexus of a male with aspiration pneumonia during elderly stage.
+GENERATED: This sample consists of a macrophage, mononuclear phagocyte present in variety of tissues, typically differentiated from monocytes, capable of phagocytosing a variety of extracellular particulate material, including immune complexes, microorganisms, and dead cells. It originates from the choroid plexus of a male with aspiration pneumonia during elderly stage.
+BLEU: 1.0000
+Target Cell Type: 'macrophage'
+Predicted Cell Type: 'macrophage'
+Cell Type Match: ✓
+
+--- Example 75 ---
+TARGET: This sample consists of a fast muscle cell, muscle cell that can develop high tension rapidly. It is usually innervated by a single alpha neuron. It originates from the skeletal muscle organ of a normal individual during late embryonic stage.
+GENERATED: This sample consists of a fast muscle cell, muscle cell that can develop high tension rapidly. It is usually innervated by a single alpha neuron. It originates from the skeletal muscle organ of a normal individual during late embryonic stage.
+BLEU: 1.0000
+Target Cell Type: 'fast muscle'
+Predicted Cell Type: 'fast muscle'
+Cell Type Match: ✓
+
+--- Example 76 ---
+TARGET: This sample consists of a neuron, The basic cellular unit of nervous tissue. Each neuron consists of a body, an axon, and dendrites. Their purpose is to receive, conduct, and transmit impulses in the nervous system. It originates from the cerebral nuclei of a normal male during adulthood.
+GENERATED: This sample consists of a VIP GABAergic cortical interneuron, transcriptomically distinct cortical neuron expressing the vasocactive intestinal polypeptide and that has its soma located in the cerebral cortex. The standard transcriptomic reference data for this cell type can be found on the CellxGene census under the collection: 'Transcriptomic cytoarchitecture reveals principles of human neocortex organization', dataset: 'Supercluster: CGE-derived interneurons', Author Categories: 'CrossArea_subclass
+BLEU: 0.0769
+Target Cell Type: 'neuron'
+Predicted Cell Type: 'vip gabaergic cortical interneuron'
+Cell Type Match: ✗
+
+--- Example 77 ---
+TARGET: This sample consists of a supporting cell, cell whose primary function is to support other cell types. It originates from the gonad of a normal female during early embryonic stage.
+GENERATED: This sample consists of a supporting cell, cell whose primary function is to support other cell types. It originates from the gonad of a normal female during early embryonic stage.
+BLEU: 1.0000
+Target Cell Type: 'supporting'
+Predicted Cell Type: 'supporting'
+Cell Type Match: ✓
+
+--- Example 78 ---
+TARGET: This sample consists of a goblet cell, specialized, columnar, mucus secreting epithelial cell shaped like a flask or goblet. A narrow basal end contains the nucleus while the apical end is swollen by the accumulation of mucus laden secretory granules.  Short microvilli project from the apical plasma membrane. It originates from the hepatic cecum of a female with tubulovillous adenoma during middle age.
+GENERATED: This sample consists of a goblet cell, specialized, columnar, mucus secreting epithelial cell shaped like a flask or goblet. A narrow basal end contains the nucleus while the apical end is swollen by the accumulation of mucus laden secretory granules.  Short microvilli project from the apICAL plasma membrane. It originates from the hepatic cecum of a female with tubulovillous adenoma during middle age.
+BLEU: 0.9588
+Target Cell Type: 'goblet'
+Predicted Cell Type: 'goblet'
+Cell Type Match: ✓
+
+--- Example 79 ---
+TARGET: This sample consists of a transitional stage B cell, An immature B cell of an intermediate stage between the pre-B cell stage and the mature naive stage with the phenotype surface IgM-positive and CD19-positive, and are subject to the process of B cell selection. A transitional B cell migrates from the bone marrow into the peripheral circulation, and then to the spleen. It originates from the blood of a normal female during middle age.
+GENERATED: This sample consists of a transitional stage B cell, An immature B cell of an intermediate stage between the pre-B cell stage and the mature naive stage with the phenotype surface IgM-positive and CD19-positive, and are subject to the process of B cell selection. A transitional B cell migrates from the bone marrow into the peripheral circulation, and then to the spleen. It originates from the blood of a normal female during middle age.
+BLEU: 1.0000
+Target Cell Type: 'transitional stage b'
+Predicted Cell Type: 'transitional stage b'
+Cell Type Match: ✓
+
+--- Example 80 ---
+TARGET: This sample consists of a radial glial cell, cell present in the developing CNS. Functions as both a precursor cell and as a scaffold to support neuronal migration. It originates from the cerebral cortex of a normal male.
+GENERATED: This sample consists of a radial glial cell, cell present in the developing CNS. Functions as both a precursor cell and as a scaffold to support neuronal migration. It originates from the cerebral cortex of a normal male.
+BLEU: 1.0000
+Target Cell Type: 'radial glial'
+Predicted Cell Type: 'radial glial'
+Cell Type Match: ✓
+
+--- Example 81 ---
+TARGET: This sample consists of a double-positive, alpha-beta thymocyte, A thymocyte expressing the alpha-beta T cell receptor complex as well as both the CD4 and CD8 coreceptors. It originates from the thymus of a normal male during infancy.
+GENERATED: This sample consists of a double-positive, alpha-beta thymocytes, A thymocyte expressing the alpha-beta T cell receptor complex as well as both the CD4 and CD8 coreceptors. It originates from the thymus of a normal male during infancy.
+BLEU: 0.9279
+Target Cell Type: 'double-positive'
+Predicted Cell Type: 'double-positive'
+Cell Type Match: ✓
+
+--- Example 82 ---
+TARGET: This sample consists of a type I NK T cell, An alpha-beta T cell expressing NK cell markers that is CD1d restricted and expresses specific V-alpha chains. NK T cells of this type recognize the glycolipid alpha-galactosylceramide in the context of CD1d. It originates from the blood of a male with common variable immunodeficiency during adulthood.
+GENERATED: This sample consists of a type I NK T cell, An alpha-beta T cell expressing NK cell markers that is CD1d restricted and expresses specific V-alpha chains. NK T cells of this type recognize the glycolipid alpha-galactosylceramide in the context of CD1dG. It originates from the blood of a male with common variable immunodeficiency during adulthood.
+BLEU: 0.9534
+Target Cell Type: 'type i nk t'
+Predicted Cell Type: 'type i nk t'
+Cell Type Match: ✓
+
+--- Example 83 ---
+TARGET: This sample consists of a naive regulatory T cell, regulatory T cell that has not encountered antigen. It originates from the blood of a normal individual.
+GENERATED: This sample consists of a naive regulatory T cell, A naive T cell that regulates overall immune responses as well as the responses of other T cell subsets through direct cell-cell contact and cytokine release. It originates from the blood of a normal individual.
+BLEU: 0.3801
+Target Cell Type: 'naive regulatory t'
+Predicted Cell Type: 'naive regulatory t'
+Cell Type Match: ✓
+
+--- Example 84 ---
+TARGET: This sample consists of a conventional dendritic cell, Conventional dendritic cell is a dendritic cell that is CD11c-high. It originates from the gonad of a normal male during early embryonic stage.
+GENERATED: This sample consists of a conventional dendritic cell, Conventional dendric cell is a dendritic cells that is CD11c-high. It originates from the gonad of a normal male during early embryonic stage.
+BLEU: 0.8232
+Target Cell Type: 'conventional dendritic'
+Predicted Cell Type: 'conventional dendritic'
+Cell Type Match: ✓
+
+--- Example 85 ---
+TARGET: This sample consists of a Langerhans cell, Langerhans cell is a conventional dendritic cell that has plasma membrane part CD207. A Langerhans cell is a stellate dendritic cell of myeloid origin, that appears clear on light microscopy and has a dark-staining, indented nucleus and characteristic inclusions (Birbeck granules) in the cytoplasm; Langerhans cells are found principally in the stratum spinosum of the epidermis, but they also occur in other stratified epithelia and have been identified in the lung, lymph nodes, spleen, and thymus. It originates from the skin epidermis of a normal female during adulthood.
+GENERATED: This sample consists of a Langerhans cell, Lango is a mature, flat, irregularly shaped dendritic cell of myeloid origin, that appears clear on light microscopy and has a dark-staining, indented nucleus and characteristic inclusions (Birbeck granules) in the cytoplasm; Langers are found principally in the stratum spinosum of the epidermis, but they also occur in other stratified epithelia and have been identified in the lung, lymph
+BLEU: 0.5405
+Target Cell Type: 'langerhans'
+Predicted Cell Type: 'langerhans'
+Cell Type Match: ✓
+
+--- Example 86 ---
+TARGET: This sample consists of a natural killer cell, lymphocyte that can spontaneously kill a variety of target cells without prior antigenic activation via germline encoded activation receptors and also regulate immune responses via cytokine release and direct contact with other cells. It originates from the lung of a with pulmonary fibrosis.
+GENERATED: This sample consists of a natural killer cell, lymphocyte that can spontaneously kill a variety of target cells without prior antigenic activation via germline encoded activation receptors and also regulate immune responses via cytokine release and direct contact with other cells. It originates from the lung of a with pulmonary fibrosis.
+BLEU: 1.0000
+Target Cell Type: 'natural killer'
+Predicted Cell Type: 'natural killer'
+Cell Type Match: ✓
+
+--- Example 87 ---
+TARGET: This sample consists of a B cell, lymphocyte of B lineage that is capable of B cell mediated immunity. It originates from the blood of a male with hematologic disorder during elderly stage.
+GENERATED: This sample consists of a B cell, lymphocyte of B lineage that is capable of B cell mediated immunity. It originates from the blood of a male with hematologic disorder during elderly stage.
+BLEU: 1.0000
+Target Cell Type: 'b'
+Predicted Cell Type: 'b'
+Cell Type Match: ✓
+
+--- Example 88 ---
+TARGET: This sample consists of a alveolar macrophage, tissue-resident macrophage found in the alveoli of the lungs. Ingests small inhaled particles resulting in degradation and presentation of the antigen to immunocompetent cells. Markers include F4/80-positive, CD11b-/low, CD11c-positive, CD68-positive, sialoadhesin-positive, dectin-1-positive, MR-positive, CX3CR1-negative. It originates from the lung of a female with pleomorphic carcinoma during middle age.
+GENERATED: This sample consists of a alveolar macrophage, tissue-resident macrophage found in the alveoli of the lungs. Ingests small inhaled particles resulting in degradation and presentation of the antigen to immunocompetent cells. Markers include F4/80+, CD11b-low, CD11c-high, CD68-positive, sialoadhesin-positive, dectin-1-positive, MR-positive, CX3CR1-negative. It originates from the lung
+BLEU: 0.7382
+Target Cell Type: 'alveolar macrophage'
+Predicted Cell Type: 'alveolar macrophage'
+Cell Type Match: ✓
+
+--- Example 89 ---
+TARGET: This sample consists of a nasal mucosa goblet cell, goblet cell located in the nasal epithelium. It originates from the lung of a with COVID-19.
+GENERATED: This sample consists of a nasal mucosa goblet cell, mucous gland cell located in the nasal epithelium. It originates from the lung of a with pulmonary fibrosis.
+BLEU: 0.7801
+Target Cell Type: 'nasal mucosa goblet'
+Predicted Cell Type: 'nasal mucosa goblet'
+Cell Type Match: ✓
+
+--- Example 90 ---
+TARGET: This sample consists of a cortical cell of adrenal gland, cell of the adrenal cortex. Cell types include those that synthesize and secrete chemical derivatives (steroids) of cholesterol. It originates from the adrenal gland of a normal female during late embryonic stage.
+GENERATED: This sample consists of a cortical cell of adrenal gland, cell of the adrenal cortex. Cell types include those that synthesize and secrete chemical derivatives (steroids) of cholesterol. It originates from the adrenal gland of a normal female during late embryonic stage.
+BLEU: 1.0000
+Target Cell Type: 'cortical cell of adrenal gland'
+Predicted Cell Type: 'cortical cell of adrenal gland'
+Cell Type Match: ✓
+
+--- Example 91 ---
+TARGET: This sample consists of a regulatory T cell, T cell which regulates overall immune responses as well as the responses of other T cell subsets through direct cell-cell contact and cytokine release. It originates from the mesenteric lymph node of a normal male during elderly stage.
+GENERATED: This sample consists of a regulatory T cell, T cell which regulates overall immune responses as well as the responses of other T cell subsets through direct cell-cell contact and cytokine release. It originates from the mesenteric lymph node of a normal male during elderly stage.
+BLEU: 1.0000
+Target Cell Type: 'regulatory t'
+Predicted Cell Type: 'regulatory t'
+Cell Type Match: ✓
+
+--- Example 92 ---
+TARGET: This sample consists of a B cell, lymphocyte of B lineage that is capable of B cell mediated immunity. It originates from the blood of a male with COVID-19 during elderly stage.
+GENERATED: This sample consists of a B cell, lymphocyte of B lineage that is capable of B cell mediated immunity. It originates from the blood of a male with COVID-19 during elderly stage.
+BLEU: 1.0000
+Target Cell Type: 'b'
+Predicted Cell Type: 'b'
+Cell Type Match: ✓
+
+--- Example 93 ---
+TARGET: This sample consists of a endothelial tip cell, specialized endothelial cell that senses extracellular signals and guides the directed growth of blood vessels. It originates from the breast of a normal female during adulthood.
+GENERATED: This sample consists of a endothelial tip cell, specialized endothelial cell that senses extracellular signals and guides the directed growth of blood vessels. It originates from the breast of a normal female during adulthood.
+BLEU: 1.0000
+Target Cell Type: 'endothelial tip'
+Predicted Cell Type: 'endothelial tip'
+Cell Type Match: ✓
+
+--- Example 94 ---
+TARGET: This sample consists of a thymocyte, An immature T cell located in the thymus. It originates from the thymus of a normal male during infancy.
+GENERATED: This sample consists of a thymocyte, An immature T cell located in the thymus. It originates from the thyme of a normal male during infancy.
+BLEU: 0.8895
+Target Cell Type: 'thymocyte'
+Predicted Cell Type: 'thymocyte'
+Cell Type Match: ✓
+
+--- Example 95 ---
+TARGET: This sample consists of a CD16-positive, CD56-dim natural killer cell, human, A mature natural killer cell that has the phenotype CD56-low, CD16-positive and which is capable of cytotoxicity and cytokine production. It originates from the lung of a normal male during late embryonic stage.
+GENERATED: This sample consists of a CD16-positive, CD56-dim natural killer cell, human, adult, male with pulmonary fibrosis. It originates from the lung of a normal male during late embryonic stage.
+BLEU: 0.4530
+Target Cell Type: 'cd16-positive'
+Predicted Cell Type: 'cd16-positive'
+Cell Type Match: ✓
+
+--- Example 96 ---
+TARGET: This sample consists of a retinal rod cell, One of the two photoreceptor cell types of the vertebrate retina. In rods the photopigment is in stacks of membranous disks separate from the outer cell membrane. Rods are more sensitive to light than cones, but rod mediated vision has less spatial and temporal resolution than cone vision. It originates from the fovea centralis of a normal male during middle age.
+GENERATED: This sample consists of a retinal rod cell, One of the two photoreceptor cell types of the vertebrate retina. In rods the photopigment is in stacks of membranous disks separate from the outer cell membrane. Rods are more sensitive to light than cones, but rod mediated vision has less spatial and temporal resolution than cone vision. It originates from the fovea centralis of a normal male during middle age.
+BLEU: 1.0000
+Target Cell Type: 'retinal rod'
+Predicted Cell Type: 'retinal rod'
+Cell Type Match: ✓
+
+--- Example 97 ---
+TARGET: This sample consists of a mesenchymal cell, non-polarised cell precursor cell that is part of some mesenchyme, is associated with the cell matrix but is not connected to other cells and is capable of migration. It originates from the gonad of a normal male during early embryonic stage.
+GENERATED: This sample consists of a mesenchymal cell, non-polarised cell precursor cell that is part of some mesenchyme, is associated with the cell matrix but is not connected to other cells and is capable of migration. It originates from the gonad of a normal male during early embryonic stage.
+BLEU: 1.0000
+Target Cell Type: 'mesenchymal'
+Predicted Cell Type: 'mesenchymal'
+Cell Type Match: ✓
+
+--- Example 98 ---
+TARGET: This sample consists of a basal cell, Undifferentiated; mitotic stem cell for other epithelial cell types; rounded or elliptical with little cytoplasm and few organelles; contain cytokeratin intermediate filament. It originates from the breast of a normal female during adulthood.
+GENERATED: This sample consists of a basal cell, Undifferentiated; mitotic stem cell for other epithelial cell types; rounded or elliptical with little cytoplasm and few organelles; contain cytokeratin intermediate filament. It originates from the breast of a normal female during adulthood.
+BLEU: 1.0000
+Target Cell Type: 'basal'
+Predicted Cell Type: 'basal'
+Cell Type Match: ✓
+
+--- Example 99 ---
+TARGET: This sample consists of a naive B cell, naive B cell is a mature B cell that has the phenotype surface IgD-positive, surface IgM-positive, CD20-positive, CD27-negative and that has not yet been activated by antigen in the periphery. It originates from the blood of a normal female during early childhood.
+GENERATED: This sample consists of a naive B cell, mature B cell that has the phenotype surface IgD-low, surface IgM-high, CD20-positive, CD27-negative and that has not yet been activated by antigen in the periphery. It originates from the blood of a normal female during early childhood.
+BLEU: 0.7731
+Target Cell Type: 'naive b'
+Predicted Cell Type: 'naive b'
+Cell Type Match: ✓
+
+--- Example 100 ---
+TARGET: This sample consists of a lung endothelial cell, Any endothelial cell of vascular tree that is part of some lung. It originates from the upper lobe of left lung of a male with COVID-19 during advanced elderly stage.
+GENERATED: This sample consists of a lung fibroblast, connective tissue cell of the lung that secretes an extracellular matrix rich in collagen and other macromolecules. Flattened and irregular in outline with branching processes; appear fusiform or spindle-shaped. It originates from the lung of a normal male during late embryonic stage.
+BLEU: 0.1866
+Target Cell Type: 'lung endothelial'
+Predicted Cell Type: 'lung fibroblast'
+Cell Type Match: ✗
