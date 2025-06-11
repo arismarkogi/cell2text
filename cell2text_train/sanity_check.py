@@ -306,9 +306,11 @@ class Cell2TextSanityTrainer:
         self.model.train()
         step = 0
         
+        
         print("\nStarting overfitting training...")
         progress_bar = tqdm(desc="Sanity Training", total=self.args.max_steps)
         
+        epoch_loss = 0.0
         while step < self.args.max_steps:
             epoch_losses = []
             
@@ -328,24 +330,21 @@ class Cell2TextSanityTrainer:
                     "target": f"{self.args.target_loss:.4f}"
                 })
                 
-                # Check if target loss reached
-                if loss <= self.args.target_loss:
-                    print(f"\n🎉 Target loss {self.args.target_loss:.4f} reached at step {step}!")
-                    print(f"Final loss: {loss:.4f}")
-                    break
-                    
-                # Log every 10 steps for sanity check
-                if step % 10 == 0:
-                    avg_recent_loss = np.mean(self.losses[-10:])
-                    print(f"Step {step}: loss = {loss:.4f}, avg_10 = {avg_recent_loss:.4f}")
-                    
-            # If target reached, break outer loop too
-            if len(epoch_losses) > 0 and min(epoch_losses) <= self.args.target_loss:
+
+            # After completing one epoch
+            epoch_loss = np.mean(epoch_losses)
+            self.epoch_losses.append(epoch_loss)
+            print(f"Epoch {epoch}: avg_loss = {epoch_loss:.4f}")
+            epoch += 1
+
+            if epoch_loss <= self.args.target_loss:
+                print(f"\n🎉 Target loss {self.args.target_loss:.4f} reached at epoch {epoch}!")
+                print(f"Final epoch loss: {epoch_loss:.4f}")
                 break
         
         progress_bar.close()
         
-        final_loss = self.losses[-1] if self.losses else float('inf')
+        final_loss = epoch_loss
         print(f"\nSanity training completed!")
         print(f"Steps taken: {step}")
         print(f"Final loss: {final_loss:.4f}")
