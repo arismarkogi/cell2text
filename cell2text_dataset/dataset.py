@@ -28,7 +28,7 @@ class Cell2TextDataset(Dataset):
             top_k: If specified, only use top k gene expression tokens
         """
         self.data = load_from_disk(data_path)
-        self.data = self.data.select(range(8))
+        #self.data = self.data.select(range(8))
         self.tokenizer = tokenizer
         self.geneformer_tokenizer = geneformer_tokenizer
         self.system_message = system_message

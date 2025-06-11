@@ -1,3 +1,5 @@
 Remember to change the "cpu" to "cuda" in emb_extractor.py and pertuber_utils.py
 Maybe find a better prompt at dataset.py
-Change "struct_desc" to "free_text_desc" in the dataset.py after I finalize the dataset
+Change "struct_desc" to "natural_desc" in the dataset.py after I finalize the dataset
+THE TOP 8 at the dataset!!!!!!!!!!!
+Change the evalutation script, somehow add some metric to check if the cell type / tissue / disease is correct.
