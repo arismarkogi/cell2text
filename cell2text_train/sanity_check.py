@@ -21,7 +21,6 @@ from peft import (
     get_peft_model, 
     TaskType,
     PeftModel,
-    prepare_model_for_kbit_training
 )
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -64,7 +63,6 @@ class Cell2TextSanityTrainer:
         self.tokenizer = None
         self.train_loader = None
         self.optimizer = None
-        self.scheduler = None
         self.global_step = 0
         self.losses = []
         
@@ -157,10 +155,7 @@ class Cell2TextSanityTrainer:
             return
             
         print("Applying LoRA to decoder...")
-        
-        # First, prepare the model for k-bit training if needed
-        self.model.decoder = prepare_model_for_kbit_training(self.model.decoder)
-        
+                
         decoder_lora_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
             inference_mode=False,
@@ -200,8 +195,8 @@ class Cell2TextSanityTrainer:
         
         return trainable_params, all_params
         
-    def setup_optimizer_and_scheduler(self):
-        """Setup optimizer and learning rate scheduler"""
+    def setup_optimizer(self):
+        """Setup optimizer"""
         # Collect trainable parameters with different learning rates
         optimizer_grouped_parameters = []
         
@@ -234,15 +229,7 @@ class Cell2TextSanityTrainer:
         
         self.optimizer = AdamW(optimizer_grouped_parameters, weight_decay=self.args.weight_decay)
         
-        # Simple scheduler (optional for sanity check)
-        total_steps = self.args.max_steps
-        warmup_steps = int(total_steps * 0.05)  # Small warmup for sanity check
         
-        self.scheduler = get_linear_schedule_with_warmup(
-            self.optimizer, 
-            num_warmup_steps=warmup_steps,
-            num_training_steps=total_steps
-        )
         
     def train_step(self, batch):
         """Perform a single training step"""
@@ -273,7 +260,6 @@ class Cell2TextSanityTrainer:
         
         # Optimizer step
         self.optimizer.step()
-        self.scheduler.step()
         self.optimizer.zero_grad()
         
         self.global_step += 1
@@ -300,7 +286,7 @@ class Cell2TextSanityTrainer:
         self.print_model_parameters()
         
         self.model.to(self.device)
-        self.setup_optimizer_and_scheduler()
+        self.setup_optimizer()
         
         # Training loop - overfit until target loss
         self.model.train()
@@ -308,15 +294,16 @@ class Cell2TextSanityTrainer:
         
         
         print("\nStarting overfitting training...")
-        progress_bar = tqdm(desc="Sanity Training", total=self.args.max_steps)
+        progress_bar = tqdm(desc="Sanity Training", total=self.args.epochs)
         
         epoch_loss = 0.0
-        while step < self.args.max_steps:
+        epoch = 0
+        
+        while epoch < self.args.epochs:
             epoch_losses = []
             
             for batch in self.train_loader:
-                if step >= self.args.max_steps:
-                    break
+                
                     
                 loss = self.train_step(batch)
                 epoch_losses.append(loss)
@@ -333,7 +320,7 @@ class Cell2TextSanityTrainer:
 
             # After completing one epoch
             epoch_loss = np.mean(epoch_losses)
-            self.epoch_losses.append(epoch_loss)
+
             print(f"Epoch {epoch}: avg_loss = {epoch_loss:.4f}")
             epoch += 1
 
@@ -428,8 +415,8 @@ def create_argument_parser():
                         help="Number of samples to overfit on")
     parser.add_argument("--target_loss", type=float, default=0.01,
                         help="Target loss to reach (default: 0.01)")
-    parser.add_argument("--max_steps", type=int, default=1000,
-                        help="Maximum training steps")
+    parser.add_argument("--epochs", type=int, default=1000,
+                        help="Training epochs")
     parser.add_argument("--save_overfitted_model", action="store_true", default=True,
                         help="Save the overfitted model")
     parser.add_argument("--save_results", action="store_true", default=True,
