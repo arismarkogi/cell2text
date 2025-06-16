@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any
 import os
 from safetensors.torch import load_file
 
-from .projectors import LinearProjectionLayer, MLPProjectionLayer
+from .projectors import  MLPProjectionLayer
 from .geneformer_encoder import GeneformerModel, GeneformerConfig
 from .llama_decoder import Cell2TextLlamaModel, Cell2TextLlamaConfig
 

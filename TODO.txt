@@ -2,3 +2,5 @@ Maybe find a better prompt at dataset.py
 Change the evalutation script, somehow add some metric to check if the cell type / tissue / disease is correct.
 token dictionary path, fix this probably to pass as argument in the trian scripts
 Probably add the tissue general in the descriotons???
+Change the dataset creation scripts probably, 2 issues i) cancer cells, ii) multiple sequencing technilogies  (check scCello appendix).
+English aware projection layer and flamingo thing (porbably) from ChatNT paper
