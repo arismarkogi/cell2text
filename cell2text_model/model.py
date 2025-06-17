@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any
 import os
 from safetensors.torch import load_file
 
-from .projectors import  MLPProjectionLayer
+from .projectors import  MLPProjectionLayer, SimplifiedPerceiverResampler
 from .geneformer_encoder import GeneformerModel, GeneformerConfig
 from .llama_decoder import Cell2TextLlamaModel, Cell2TextLlamaConfig
 
@@ -54,14 +54,28 @@ class Cell2TextModel(PreTrainedModel):
 
         self.decoder = Cell2TextLlamaModel(self.cell2text_llama_config)
         
-        self.cell_to_embedding = MLPProjectionLayer(
-            input_dim=self.cell_encoder_hidden_size, 
-            hidden_dim=self.mlp_hidden_size, 
-            output_dim=self.decoder_hidden_size,
-            dropout_prob=self.mlp_dropout, 
-            bias=True
-        )
+        self.projector = config.projector
 
+        if self.projector == "mlp":
+
+            self.cell_to_embedding = MLPProjectionLayer(
+                input_dim=self.cell_encoder_hidden_size, 
+                hidden_dim=self.mlp_hidden_size, 
+                output_dim=self.decoder_hidden_size,
+                dropout_prob=self.mlp_dropout, 
+                bias=True
+            )
+
+        elif self.projector == "perceiver":
+            self.cell_to_embedding = SimplifiedPerceiverResampler(
+                input_dim = self.cell_encoder_hidden_size,
+                hidden_dim  = self.decoder_hidden_size,
+                num_latents=config.num_latents,
+                depth=config.perceiver_depth,
+                num_heads=config.num_heads,
+                ff_mult=config.ff_mult,
+                dropout=config.perceiver_dropout
+            )
         
         self.config = config
     
@@ -184,10 +198,11 @@ class Cell2TextModel(PreTrainedModel):
         """
         Utility to process encoder output: truncate top_k and project to decoder hidden size.
         """
-        # Truncate to top_k tokens
-        if self.top_k < cell_embeddings.shape[1]:
-            cell_embeddings = cell_embeddings[:, :self.top_k, :]
-        
+        if self.projector == "mlp":
+            # Truncate to top_k tokens
+            if self.top_k < cell_embeddings.shape[1]:
+                cell_embeddings = cell_embeddings[:, :self.top_k, :]
+            
         # Project to decoder hidden size
         cell_embeddings = self.cell_to_embedding(cell_embeddings)
         
@@ -247,8 +262,8 @@ class Cell2TextModel(PreTrainedModel):
         self,
         expression_tokens: Optional[torch.LongTensor] = None,
         expression_token_lengths: Optional[torch.LongTensor] = None,
-        input_ids: Optional[torch.LongTensor] = None,  # Changed from text_input_ids
-        attention_mask: Optional[torch.FloatTensor] = None,  # Changed from text_attention_mask
+        input_ids: Optional[torch.LongTensor] = None,  
+        attention_mask: Optional[torch.FloatTensor] = None,  
         labels: Optional[torch.LongTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = False,
@@ -268,14 +283,12 @@ class Cell2TextModel(PreTrainedModel):
 
         
                     
-        print(f"self.top_k: {self.top_k}")
-
         cell_embeddings = self.process_encoder_outputs(cell_embeddings)
 
         # Forward pass through decoder - using correct parameter names
         decoder_outputs = self.decoder(
-            input_ids=input_ids,  # Changed from text_input_ids
-            attention_mask=attention_mask,  # Changed from text_attention_mask
+            input_ids=input_ids,  
+            attention_mask=attention_mask, 
             cell_embeddings=cell_embeddings,
             labels=labels,
             use_cache=use_cache,
@@ -321,7 +334,6 @@ class Cell2TextModel(PreTrainedModel):
             expression_token_lengths=expression_token_lengths,
             return_dict=True
         )
-
         cell_embeddings = self.process_encoder_outputs(cell_embeddings)
                 
         

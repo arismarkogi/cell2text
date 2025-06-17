@@ -16,7 +16,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 class Cell2TextDataset(Dataset):
     def __init__(self, data_path, tokenizer, geneformer_tokenizer=None, 
                  system_message="You are a scientific assistant specialized in analyzing single-cell gene expression data. Given the gene expression profile, describe the cell type and its characteristics clearly and concisely in professional language.",
-                 placeholder_token='<|reserved_special_token_1|>', top_k=None):
+                 placeholder_token='<|reserved_special_token_1|>', top_k=None, projector=None, num_latents=None):
         """
         Dataset for cell expression data
         Args:
@@ -28,12 +28,13 @@ class Cell2TextDataset(Dataset):
             top_k: If specified, only use top k gene expression tokens
         """
         self.data = load_from_disk(data_path)
-        #self.data = self.data.select(range(8))
         self.tokenizer = tokenizer
         self.geneformer_tokenizer = geneformer_tokenizer
         self.system_message = system_message
         self.placeholder_token = placeholder_token
+        self.projector = projector
         self.top_k = top_k
+        self.num_latents = num_latents
         
     def __len__(self):
         return len(self.data)
@@ -55,11 +56,13 @@ class Cell2TextDataset(Dataset):
         
         description = sample["natural_desc"]
         
-        # Create chat template with placeholder tokens - use top_k for placeholders only
-        if self.top_k is not None:
-            placeholder_length = min(len(expression_ids), self.top_k)
-        else:
-            placeholder_length = len(expression_ids)
+        # Create chat template with placeholder tokens
+        if self.projector == "mlp" and self.top_k is not None:
+                placeholder_length = min(len(expression_ids), self.top_k)
+        
+        elif self.projector == "perceiver" and self.num_latents is not None:
+            placeholder_length = self.num_latents
+        
         placeholder_string = self.placeholder_token * placeholder_length
         
         user_message = f"Gene expression embeddings: {placeholder_string}"

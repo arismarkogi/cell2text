@@ -58,8 +58,8 @@ class SanityDataset(Dataset):
         return self.full_dataset[self.indices[idx]]
 
 
-class Cell2TextDeepSpeedSanityTrainer:
-    """DeepSpeed-enabled sanity check trainer that overfits on a small dataset"""
+class Cell2TextDeepSpeedTrainer:
+    """DeepSpeed-enabled trainer for Cell2Text model with support for both sanity check and full training"""
     
     def __init__(self, args):
         self.args = args
@@ -67,6 +67,7 @@ class Cell2TextDeepSpeedSanityTrainer:
         self.model = None
         self.tokenizer = None
         self.train_loader = None
+        self.val_loader = None
         self.model_engine = None
         self.optimizer = None
         self.lr_scheduler = None
@@ -97,30 +98,59 @@ class Cell2TextDeepSpeedSanityTrainer:
             self.tokenizer = None
             
     def setup_datasets(self):
-        """Setup small training dataset for sanity check"""
-        print(f"Loading dataset for sanity check...")
+        """Setup training and validation datasets"""
+        print(f"Loading dataset...")
         
-        # Load full dataset
-        full_dataset = Cell2TextDataset(self.args.train_data_path, self.tokenizer, top_k=self.args.top_k)
+        # Load full training dataset
+        if self.args.projector == "mlp":
+            top_k = self.args.top_k
+        else:  # perceiver
+            top_k = None  # Perceiver doesn't need top_k selection
+            
+        full_train_dataset = Cell2TextDataset(self.args.train_data_path, self.tokenizer, top_k=top_k, projector=self.args.projector, num_latents=self.args.num_latents)
         
-        # Create small subset
-        sanity_dataset = SanityDataset(full_dataset, num_samples=self.args.num_samples, seed=self.args.seed)
-        
-        self.train_loader = DataLoader(
-            sanity_dataset, 
-            batch_size=self.args.batch_size_per_device, 
-            shuffle=True,
-            collate_fn=full_dataset.collate_fn(mode="train")
-        )
-        print(f"Sanity dataset loaded. Size: {len(sanity_dataset)}")
-        
-        # Use the same small dataset for validation
-        self.val_loader = DataLoader(
-            sanity_dataset, 
-            batch_size=self.args.batch_size_per_device, 
-            shuffle=False,
-            collate_fn=full_dataset.collate_fn(mode="inference")
-        )
+        if self.args.mode == "sanity":
+            # Create small subset for sanity check
+            sanity_dataset = SanityDataset(full_train_dataset, num_samples=self.args.num_samples, seed=self.args.seed)
+            
+            self.train_loader = DataLoader(
+                sanity_dataset, 
+                batch_size=self.args.batch_size_per_device, 
+                shuffle=True,
+                collate_fn=full_train_dataset.collate_fn(mode="train")
+            )
+            print(f"Sanity dataset loaded. Size: {len(sanity_dataset)}")
+            
+            # Use the same small dataset for validation
+            self.val_loader = DataLoader(
+                sanity_dataset, 
+                batch_size=self.args.batch_size_per_device, 
+                shuffle=False,
+                collate_fn=full_train_dataset.collate_fn(mode="inference")
+            )
+        else:
+            # Full training mode
+            self.train_loader = DataLoader(
+                full_train_dataset, 
+                batch_size=self.args.batch_size_per_device, 
+                shuffle=True,
+                collate_fn=full_train_dataset.collate_fn(mode="train")
+            )
+            print(f"Full training dataset loaded. Size: {len(full_train_dataset)}")
+            
+            # Load validation dataset if provided
+            if self.args.val_data_path:
+                val_dataset = Cell2TextDataset(self.args.val_data_path, self.tokenizer, top_k=top_k)
+                self.val_loader = DataLoader(
+                    val_dataset, 
+                    batch_size=self.args.batch_size_per_device, 
+                    shuffle=False,
+                    collate_fn=val_dataset.collate_fn(mode="inference")
+                )
+                print(f"Validation dataset loaded. Size: {len(val_dataset)}")
+            else:
+                print("No validation dataset provided.")
+                self.val_loader = None
         
     def initialize_model(self):
         """Initialize the Cell2Text model with configuration"""
@@ -129,13 +159,24 @@ class Cell2TextDeepSpeedSanityTrainer:
         
         # Set required configuration parameters
         config.cell_encoder_hidden_size = self.args.encoder_hidden_size
-        config.mlp_hidden_size = self.args.mlp_hidden_size
-        config.mlp_dropout = self.args.mlp_dropout
         config.decoder_hidden_size = self.args.decoder_hidden_size
         config.geneformer_path = self.args.geneformer_path
         config.decoder_model_name_or_path = self.args.decoder_path
-        config.top_k = self.args.top_k
         config.token_dictionary_path = self.args.token_dictionary_path
+        
+        # Projector configuration
+        config.projector = self.args.projector
+        
+        if self.args.projector == "mlp":
+            config.mlp_hidden_size = self.args.mlp_hidden_size
+            config.mlp_dropout = self.args.mlp_dropout
+            config.top_k = self.args.top_k
+        elif self.args.projector == "perceiver":
+            config.num_latents = self.args.num_latents
+            config.perceiver_depth = self.args.perceiver_depth
+            config.num_heads = self.args.num_heads
+            config.ff_mult = self.args.ff_mult
+            config.perceiver_dropout = self.args.perceiver_dropout
         
         # Additional configuration parameters
         config.max_ncells = self.args.max_ncells
@@ -208,6 +249,8 @@ class Cell2TextDeepSpeedSanityTrainer:
         
     def create_deepspeed_config(self):
         """Create DeepSpeed configuration"""
+        total_steps = self.args.epochs * len(self.train_loader) // self.args.gradient_accumulation_steps
+        
         ds_config = {
             "train_batch_size": self.args.batch_size_per_device * self.args.gradient_accumulation_steps * torch.distributed.get_world_size() if torch.distributed.is_initialized() else self.args.batch_size_per_device * self.args.gradient_accumulation_steps,
             "train_micro_batch_size_per_gpu": self.args.batch_size_per_device,
@@ -229,7 +272,7 @@ class Cell2TextDeepSpeedSanityTrainer:
                     "warmup_min_lr": 0,
                     "warmup_max_lr": self.args.decoder_lr,
                     "warmup_num_steps": self.args.warmup_steps,
-                    "total_num_steps": self.args.epochs * len(self.train_loader) // self.args.gradient_accumulation_steps
+                    "total_num_steps": total_steps
                 }
             },
             
@@ -289,15 +332,19 @@ class Cell2TextDeepSpeedSanityTrainer:
         # Setup parameter groups for different learning rates
         parameters = []
         
-        # Projector parameters
-        for name, param in self.model.cell_to_embedding.named_parameters():
-            if param.requires_grad:
-                parameters.append({
-                    "params": [param],
-                    "lr": self.args.projector_lr,
-                    "name": name
-                })
-                print(f"Adding projector parameter: {name} ({param.numel():,} params) with lr={self.args.projector_lr}")
+        # Projector parameters (MLP or Perceiver)
+        projector_name = "cell_to_embedding" if self.args.projector == "mlp" else "perceiver_projector"
+        projector_module = getattr(self.model, projector_name, None)
+        
+        if projector_module:
+            for name, param in projector_module.named_parameters():
+                if param.requires_grad:
+                    parameters.append({
+                        "params": [param],
+                        "lr": self.args.projector_lr,
+                        "name": name
+                    })
+                    print(f"Adding projector parameter: {name} ({param.numel():,} params) with lr={self.args.projector_lr}")
         
         # Decoder parameters (including LoRA parameters)
         for name, param in self.model.decoder.named_parameters():
@@ -351,9 +398,39 @@ class Cell2TextDeepSpeedSanityTrainer:
         self.global_step += 1
         
         return loss.item()
+    
+    def validate(self):
+        """Run validation"""
+        if self.val_loader is None:
+            return None
+            
+        self.model_engine.eval()
+        val_losses = []
+        
+        with torch.no_grad():
+            for batch in self.val_loader:
+                expression_tokens = batch["expression_tokens"]
+                expression_token_lengths = batch["expression_token_lengths"]
+                text_input_ids = batch["input_ids"]
+                text_input_attention_mask = batch["attention_mask"]
+                labels = batch["labels"] if batch["labels"] is not None else None
+                
+                outputs = self.model_engine(
+                    expression_tokens=expression_tokens,
+                    expression_token_lengths=expression_token_lengths,
+                    input_ids=text_input_ids,
+                    attention_mask=text_input_attention_mask,
+                    labels=labels,
+                    return_dict=True
+                )
+                
+                val_losses.append(outputs.loss.item())
+        
+        self.model_engine.train()
+        return np.mean(val_losses)
         
     def sanity_train(self):
-        """Main sanity training loop - overfit on small dataset with DeepSpeed"""
+        """Sanity training loop - overfit on small dataset with DeepSpeed"""
         print("="*60)
         print("STARTING DEEPSPEED SANITY CHECK TRAINING")
         print("="*60)
@@ -362,19 +439,8 @@ class Cell2TextDeepSpeedSanityTrainer:
         print(f"Number of samples: {self.args.num_samples}")
         print(f"Batch size per device: {self.args.batch_size_per_device}")
         print(f"Gradient accumulation steps: {self.args.gradient_accumulation_steps}")
+        print(f"Projector type: {self.args.projector}")
         print("="*60)
-        
-        # Setup everything
-        self.setup_device()
-        self.load_tokenizer()
-        self.setup_datasets()
-        self.initialize_model()
-        self.freeze_model_components()
-        self.apply_lora_to_model()
-        self.print_model_parameters()
-        
-        # Setup DeepSpeed
-        self.setup_deepspeed_model()
         
         # Training loop - overfit until target loss
         self.model_engine.train()
@@ -428,7 +494,7 @@ class Cell2TextDeepSpeedSanityTrainer:
             print(f"Target reached: {'✓' if final_loss <= self.args.target_loss else '✗'}")
         
         # Save the overfitted model (only on rank 0)
-        if self.args.save_overfitted_model and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0):
+        if self.args.save_model and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0):
             checkpoint_dir = os.path.join(self.args.output_dir, "overfitted_sanity_model")
             self.model_engine.save_checkpoint(checkpoint_dir)
             
@@ -446,13 +512,110 @@ class Cell2TextDeepSpeedSanityTrainer:
             print(f"Overfitted model saved to: {checkpoint_dir}")
         
         return final_loss <= self.args.target_loss
+    
+    def full_train(self):
+        """Full training loop with DeepSpeed"""
+        print("="*60)
+        print("STARTING DEEPSPEED FULL TRAINING")
+        print("="*60)
+        print(f"Epochs: {self.args.epochs}")
+        print(f"Training samples: {len(self.train_loader.dataset)}")
+        print(f"Batch size per device: {self.args.batch_size_per_device}")
+        print(f"Gradient accumulation steps: {self.args.gradient_accumulation_steps}")
+        print(f"Projector type: {self.args.projector}")
+        print(f"Validation every: {self.args.eval_steps} steps")
+        print("="*60)
+        
+        self.model_engine.train()
+        
+        total_steps = self.args.epochs * len(self.train_loader)
+        progress_bar = tqdm(
+            desc="🚀 DeepSpeed Full Training", 
+            total=total_steps,
+            position=0,
+            leave=True,
+            file=sys.stdout,
+            disable=not (torch.distributed.get_rank() == 0 if torch.distributed.is_initialized() else True)
+        )
+        
+        best_val_loss = float('inf')
+        steps_since_improvement = 0
+        
+        for epoch in range(self.args.epochs):
+            epoch_losses = []
+            
+            for step, batch in enumerate(self.train_loader):
+                loss = self.train_step(batch)
+                epoch_losses.append(loss)
+                self.losses.append(loss)
+                
+                # Update progress bar
+                if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                    progress_bar.update(1)
+                    progress_bar.set_description(
+                        f"🚀 Full Training | Epoch: {epoch+1}/{self.args.epochs} | "
+                        f"Step: {step+1}/{len(self.train_loader)} | Loss: {loss:.4f}"
+                    )
+                
+                # Validation
+                if self.global_step % self.args.eval_steps == 0 and self.val_loader is not None:
+                    val_loss = self.validate()
+                    if val_loss is not None:
+                        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                            print(f"\nValidation Loss at step {self.global_step}: {val_loss:.4f}")
+                        
+                        # Early stopping check
+                        if val_loss < best_val_loss:
+                            best_val_loss = val_loss
+                            steps_since_improvement = 0
+                            
+                            # Save best model
+                            if self.args.save_model and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0):
+                                checkpoint_dir = os.path.join(self.args.output_dir, "best_model")
+                                self.model_engine.save_checkpoint(checkpoint_dir)
+                                print(f"Best model saved to: {checkpoint_dir}")
+                        else:
+                            steps_since_improvement += self.args.eval_steps
+                            
+                            if self.args.early_stopping > 0 and steps_since_improvement >= self.args.early_stopping:
+                                if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                                    print(f"\nEarly stopping triggered after {steps_since_improvement} steps without improvement")
+                                progress_bar.close()
+                                return
+                
+                # Save checkpoint periodically
+                if self.global_step % self.args.save_steps == 0 and self.args.save_model:
+                    if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                        checkpoint_dir = os.path.join(self.args.output_dir, f"checkpoint-{self.global_step}")
+                        self.model_engine.save_checkpoint(checkpoint_dir)
+                        print(f"Checkpoint saved to: {checkpoint_dir}")
+            
+            # End of epoch summary
+            epoch_loss = np.mean(epoch_losses)
+            if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                print(f"\nEpoch {epoch+1} completed. Average loss: {epoch_loss:.4f}")
+        
+        progress_bar.close()
+        
+        # Save final model
+        if self.args.save_model and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0):
+            checkpoint_dir = os.path.join(self.args.output_dir, "final_model")
+            self.model_engine.save_checkpoint(checkpoint_dir)
+            print(f"Final model saved to: {checkpoint_dir}")
+        
+        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+            print(f"\nFull training completed!")
         
     def run_evaluation(self):
-        """Run evaluation on the same 8 samples"""
+        """Run evaluation"""
         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
             print("\n" + "="*60)
-            print("RUNNING EVALUATION ON SANITY SAMPLES")
+            print("RUNNING EVALUATION")
             print("="*60)
+        
+        if self.val_loader is None:
+            print("No validation dataset available for evaluation.")
+            return {}
         
         # Use the enhanced evaluation function
         results = evaluate_cell2text_model(
@@ -460,30 +623,47 @@ class Cell2TextDeepSpeedSanityTrainer:
             val_loader=self.val_loader,
             tokenizer=self.tokenizer,
             device=self.model_engine.device,
-            print_examples=self.args.num_samples if (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0) else 0,
-            save_results=os.path.join(self.args.output_dir, "sanity_evaluation_results.json") if self.args.save_results and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0) else None
+            print_examples=self.args.num_samples if self.args.mode == "sanity" and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0) else 5,
+            save_results=os.path.join(self.args.output_dir, f"{self.args.mode}_evaluation_results.json") if self.args.save_results and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0) else None
         )
         
         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
             print("\n" + "="*60)
-            print("DEEPSPEED SANITY CHECK SUMMARY")
+            print(f"DEEPSPEED {self.args.mode.upper()} TRAINING SUMMARY")
             print("="*60)
-            print(f"Final training loss: {self.losses[-1]:.4f}")
-            print(f"Target loss: {self.args.target_loss:.4f}")
-            print(f"Target reached: {'✓' if self.losses[-1] <= self.args.target_loss else '✗'}")
-            print(f"BLEU score: {results['bleu']:.4f}")
-            print(f"Cell type accuracy: {results['cell_type_accuracy']:.4f}")
-            print(f"Cell type F1: {results['cell_type_f1']:.4f}")
+            print(f"Final training loss: {self.losses[-1] if self.losses else 'N/A':.4f}")
+            if self.args.mode == "sanity":
+                print(f"Target loss: {self.args.target_loss:.4f}")
+                print(f"Target reached: {'✓' if self.losses and self.losses[-1] <= self.args.target_loss else '✗'}")
+            print(f"BLEU score: {results.get('bleu', 0):.4f}")
+            print(f"Cell type accuracy: {results.get('cell_type_accuracy', 0):.4f}")
+            print(f"Cell type F1: {results.get('cell_type_f1', 0):.4f}")
         
         return results
         
-    def run_sanity_check(self):
-        """Run the complete sanity check pipeline with DeepSpeed"""
+    def run(self):
+        """Run the complete training pipeline with DeepSpeed"""
         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
-            print("Starting complete DeepSpeed sanity check pipeline...")
+            print(f"Starting DeepSpeed {self.args.mode} training pipeline...")
         
-        # Train to overfit
-        target_reached = self.sanity_train()
+        # Setup everything
+        self.setup_device()
+        self.load_tokenizer()
+        self.setup_datasets()
+        self.initialize_model()
+        self.freeze_model_components()
+        self.apply_lora_to_model()
+        self.print_model_parameters()
+        
+        # Setup DeepSpeed
+        self.setup_deepspeed_model()
+        
+        # Train based on mode
+        if self.args.mode == "sanity":
+            target_reached = self.sanity_train()
+        else:
+            self.full_train()
+            target_reached = True  # For compatibility
         
         # Evaluate
         results = self.run_evaluation()
@@ -492,14 +672,20 @@ class Cell2TextDeepSpeedSanityTrainer:
 
 
 def create_argument_parser():
-    """Create and return the argument parser for DeepSpeed sanity check"""
-    parser = argparse.ArgumentParser(description="DeepSpeed sanity check training for Cell2Text model")
+    """Create and return the argument parser for DeepSpeed training"""
+    parser = argparse.ArgumentParser(description="DeepSpeed training for Cell2Text model")
+    
+    # Mode selection
+    parser.add_argument("--mode", type=str, choices=["sanity", "full"], default="sanity",
+                        help="Training mode: 'sanity' for sanity check or 'full' for full training")
     
     # Data parameters
     parser.add_argument("--train_data_path", type=str, required=True,
                         help="Path to the parquet file containing training data")
-    parser.add_argument("--output_dir", type=str, default="./deepspeed_sanity_check",
-                        help="Directory to save sanity check results")
+    parser.add_argument("--val_data_path", type=str, default=None,
+                        help="Path to the parquet file containing validation data (for full training)")
+    parser.add_argument("--output_dir", type=str, default="./deepspeed_training",
+                        help="Directory to save training results")
     
     # Sanity check specific parameters
     parser.add_argument("--num_samples", type=int, default=8,
@@ -516,7 +702,7 @@ def create_argument_parser():
     # Model parameters
     parser.add_argument("--encoder_hidden_size", type=int, default=512,
                         help="Hidden size of the cell encoder")
-    parser.add_argument("--mlp_hidden_size", type=int, default=256,
+    parser.add_argument("--mlp_hidden_size", type=int, default=1024,
                         help="Hidden size of the 2-layer MLP cell-to-embedding projector")
     parser.add_argument("--mlp_dropout", type=float, default=0.1, 
                         help="Dropout probability at MLP projector")
@@ -593,35 +779,39 @@ def create_argument_parser():
     parser.add_argument("--local_rank", type=int, default=-1,
                         help="Local rank for distributed training (automatically set by DeepSpeed)")
     
+    # Projector type selection
+    parser.add_argument("--projector", type=str, choices=["mlp", "perceiver"], default="mlp",
+                        help="Type of projector to use: 'mlp' or 'perceiver'")
+    
+    # Perceiver-specific parameters
+    parser.add_argument("--num_latents", type=int, default=64,
+                        help="Number of latent vectors for Perceiver")
+    parser.add_argument("--perceiver_depth", type=int, default=6,
+                        help="Number of layers in Perceiver")
+    parser.add_argument("--num_heads", type=int, default=8,
+                        help="Number of attention heads in Perceiver")
+    parser.add_argument("--ff_mult", type=int, default=4,
+                        help="Feedforward multiplier in Perceiver")
+    parser.add_argument("--perceiver_dropout", type=float, default=0.1,
+                        help="Dropout probability in Perceiver")
+    
+    # Full training specific parameters
+    parser.add_argument("--eval_steps", type=int, default=500,
+                        help="Number of steps between evaluations")
+    parser.add_argument("--save_steps", type=int, default=1000,
+                        help="Number of steps between saving checkpoints")
+    parser.add_argument("--early_stopping", type=int, default=0,
+                        help="Number of steps without improvement before early stopping (0 to disable)")
+    parser.add_argument("--save_model", action="store_true", default=True,
+                        help="Save model checkpoints")
+    
     return parser
 
 
-def validate_args(args):
-    """Validate command line arguments"""
-    if args.use_lora_decoder:
-        try:
-            from peft import LoraConfig, get_peft_model, TaskType
-            print("PEFT library found. LoRA support enabled.")
-        except ImportError:
-            raise ImportError("PEFT library not found. Please install it with: pip install peft")
-    
-    try:
-        import deepspeed
-        print(f"DeepSpeed version: {deepspeed.__version__}")
-    except ImportError:
-        raise ImportError("DeepSpeed library not found. Please install it with: pip install deepspeed")
-    
-    if args.fp16 and args.bf16:
-        raise ValueError("Cannot enable both FP16 and BF16 at the same time")
-
-
 def main():
-    """Main function for DeepSpeed sanity check"""
+    """Main function for DeepSpeed training"""
     parser = create_argument_parser()
     args = parser.parse_args()
-    
-    # Validate arguments
-    validate_args(args)
     
     # Create output directory if it doesn't exist
     os.makedirs(args.output_dir, exist_ok=True)
@@ -631,21 +821,39 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
     
-    # Create trainer and run sanity check
-    trainer = Cell2TextDeepSpeedSanityTrainer(args)
-    target_reached, results = trainer.run_sanity_check()
+    # Create trainer and run training
+    trainer = Cell2TextDeepSpeedTrainer(args)
+    target_reached, results = trainer.run()
     
     # Final summary (only on rank 0)
     if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
         print("\n" + "="*60)
-        print("FINAL DEEPSPEED SANITY CHECK RESULTS")
+        print(f"FINAL DEEPSPEED {args.mode.upper()} TRAINING RESULTS")
         print("="*60)
-        
         print(f"\nKey metrics:")
-        print(f"  Training loss: {trainer.losses[-1]:.4f}")
-        print(f"  Validation loss: {results['loss']:.4f}")
-        print(f"  BLEU score: {results['bleu']:.4f}")
-        print(f"  Cell type accuracy: {results['cell_type_accuracy']:.4f}")
+        if trainer.losses:
+            print(f" Final training loss: {trainer.losses[-1]:.4f}")
+        if args.mode == "sanity":
+            print(f" Target loss: {args.target_loss:.4f}")
+            print(f" Target reached: {'✓' if target_reached else '✗'}")
+        print(f" BLEU score: {results.get('bleu', 0):.4f}")
+        print(f" Cell type accuracy: {results.get('cell_type_accuracy', 0):.4f}")
+        print(f" Cell type F1: {results.get('cell_type_f1', 0):.4f}")
+        
+        # Save final results summary
+        if args.save_results:
+            summary_path = os.path.join(args.output_dir, f"{args.mode}_training_summary.json")
+            summary = {
+                "mode": args.mode,
+                "target_reached": target_reached,
+                "final_training_loss": trainer.losses[-1] if trainer.losses else None,
+                "target_loss": args.target_loss if args.mode == "sanity" else None,
+                "evaluation_results": results,
+                "training_args": vars(args)
+            }
+            with open(summary_path, 'w') as f:
+                json.dump(summary, f, indent=2)
+            print(f"\nTraining summary saved to: {summary_path}")
 
 
 if __name__ == "__main__":

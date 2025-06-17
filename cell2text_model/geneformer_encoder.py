@@ -106,7 +106,6 @@ class GeneformerModel(
             summary_stat=self.config.summary_stat
         )
 
-        print("Shape of embs:", embs.shape)
 
         return embs
 

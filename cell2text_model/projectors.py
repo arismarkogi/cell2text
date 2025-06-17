@@ -1,5 +1,8 @@
 import torch.nn as nn
 import torch
+from einops import repeat
+from flash_attn import flash_attn_func
+from flash_attn.modules.mha import MHA
 
 
 class MLPProjectionLayer(nn.Module):
@@ -45,180 +48,211 @@ class MLPProjectionLayer(nn.Module):
         return self.projection(x)
 
 
-
-class SimplePerceiverResampler(nn.Module):
+class SimplifiedPerceiverResampler(nn.Module):
     """
-    Simple Perceiver resampler without question conditioning.
-    Just compresses Gene Expression Embeddings to fixed-size representation.
+    Simplified Perceiver Resampler using standard PyTorch components
     """
-    def __init__(self, cell_embedding_dim, output_dim, num_latents, num_layers, num_heads):
+    
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        num_latents: int = 128,
+        depth: int = 4,
+        num_heads: int = 8,
+        ff_mult: int = 4,
+        dropout: float = 0.1,
+    ):
+        """
+        Args:
+            input_dim: Dimension of input embeddings (e.g., gene embeddings)
+            output_dim: Dimension of output embeddings and latents
+            num_latents: Number of learnable latent queries
+            depth: Number of cross-attention + feedforward layers
+            num_heads: Number of attention heads
+            ff_mult: Feedforward dimension multiplier
+            dropout: Dropout rate
+        """
         super().__init__()
+        
+        self.input_dim = input_dim
+        self.output_dim = output_dim
         self.num_latents = num_latents
+        self.depth = depth
+        
+        # Learnable latent queries
         self.latents = nn.Parameter(torch.randn(num_latents, output_dim))
         
-        self.input_projection = nn.Linear(cell_embedding_dim, output_dim)
+        # Input projection to match latent dimension
+        self.input_projection = nn.Linear(input_dim, output_dim)
         
-        self.cross_attn = nn.MultiheadAttention(
-            embed_dim=output_dim,
+        # Stack of Perceiver layers
+        self.layers = nn.ModuleList([
+            PerceiverLayer(
+                dim=output_dim,
+                num_heads=num_heads,
+                ff_mult=ff_mult,
+                dropout=dropout,
+                attention_backend="auto"  # Will auto-select best available
+            ) for _ in range(depth)
+        ])
+        
+        # Final output normalization
+        self.final_norm = nn.LayerNorm(output_dim)
+        
+        # Initialize parameters
+        self._init_parameters()
+    
+    def _init_parameters(self):
+        """Initialize parameters"""
+        nn.init.normal_(self.latents, mean=0.0, std=0.02)
+        
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0.0)
+    
+    def forward(self, inputs: torch.Tensor, mask: torch.Tensor = None):
+        """
+        Forward pass
+        
+        Args:
+            inputs: [batch_size, seq_len, input_dim] - input embeddings
+            mask: [batch_size, seq_len] - attention mask (True = valid, False = padding)
+        
+        Returns:
+            [batch_size, num_latents, output_dim] - compressed representation
+        """
+        batch_size = inputs.size(0)
+        
+        # Project input to output dimension
+        projected_inputs = self.input_projection(inputs)
+        
+        # Prepare latents for batch
+        latents = repeat(self.latents, 'q d -> b q d', b=batch_size)
+        
+        # Apply Perceiver layers
+        for layer in self.layers:
+            latents = layer(latents, projected_inputs, mask)
+        
+        # Final normalization
+        output = self.final_norm(latents)
+        
+        return output
+
+
+class PerceiverLayer(nn.Module):
+    """
+    Single Perceiver layer with cross-attention and feedforward
+    Supports multiple attention backends: standard, PyTorch SDPA, Flash Attention
+    """
+    
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int = 8,
+        ff_mult: int = 4,
+        dropout: float = 0.1,
+        attention_backend: str = "auto"  # "standard", "pytorch_sdpa", "flash_attn", "auto"
+    ):
+        super().__init__()
+        
+        self.dim = dim
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.attention_backend = self._select_backend(attention_backend)
+        
+        # Attention projections
+        self.q_proj = nn.Linear(dim, dim, bias=False)
+        self.k_proj = nn.Linear(dim, dim, bias=False)
+        self.v_proj = nn.Linear(dim, dim, bias=False)
+        self.out_proj = nn.Linear(dim, dim, bias=False)
+        
+        # Alternative: use standard MultiheadAttention for simplicity
+        self.standard_attn = nn.MultiheadAttention(
+            embed_dim=dim,
             num_heads=num_heads,
+            dropout=dropout,
             batch_first=True
         )
         
-        self.layers = nn.ModuleList([
-            nn.TransformerEncoderLayer(
-                d_model=output_dim,
-                nhead=num_heads,
-                dim_feedforward=output_dim * 4,
-                batch_first=True
-            )
-            for _ in range(num_layers)
-        ])
-    
-    def forward(self, cell_embeddings):
-        """
-        cell_embeddings: [B, L, cell_embedding_dim]
-        Returns: [B, num_latents, output_dim]
-        """
-        B = cell_embeddings.size(0)
-        
-        # Project cell embeddings
-        projected_inputs = self.input_projection(cell_embeddings)
-        
-        # Prepare latents
-        latents = self.latents.unsqueeze(0).repeat(B, 1, 1)
-        
-        # Cross-attention: latents attend to cell
-        latents, _ = self.cross_attn(latents, projected_inputs, projected_inputs)
-        
-        # Self-attention layers
-        for layer in self.layers:
-            latents = layer(latents)
-            
-        return latents
-
-
-class EnglishAwarePerceiverResampler(nn.Module):
-    """
-    Perceiver resampler with question conditioning.
-    Modulates latents based on the input question.
-    """
-    def __init__(self, cell_embedding_dim, lm_embedding_dim, num_latents, num_layers, num_heads, question_dim):
-        super().__init__()
-        self.num_latents = num_latents
-        self.latents = nn.Parameter(torch.randn(num_latents, lm_embedding_dim))
-        
-        # Question conditioning
-        self.latent_modulation = nn.Linear(question_dim, lm_embedding_dim)
-        
-        self.input_projection = nn.Linear(cell_embedding_dim, lm_embedding_dim)
-        
-        self.cross_attn = nn.MultiheadAttention(
-            embed_dim=lm_embedding_dim,
-            num_heads=num_heads,
-            batch_first=True
+        # Flash Attention module
+        self.flash_mha = MHA(
+                embed_dim=dim,
+                num_heads=num_heads,
+                dropout=dropout,
+                batch_first=True,
+                causal=False  # Cross-attention is not causal
         )
         
-        self.layers = nn.ModuleList([
-            nn.TransformerEncoderLayer(
-                d_model=lm_embedding_dim,
-                nhead=num_heads,
-                dim_feedforward=lm_embedding_dim * 4,
-                batch_first=True
-            )
-            for _ in range(num_layers)
-        ])
-    
-    def forward(self, cell_embeddings, question_embedding):
-        """
-        cell_embeddings: [B, L, cell_embedding_dim]
-        question_embedding: [B, question_dim]
-        Returns: [B, num_latents, lm_embedding_dim]
-        """
-        B = cell_embeddings.size(0)
-        
-        # Project Cell embeddings
-        projected_inputs = self.input_projection(cell_embeddings)
-        
-        # Prepare and modulate latents with question
-        latents = self.latents.unsqueeze(0).repeat(B, 1, 1)
-        question_modulation = self.latent_modulation(question_embedding).unsqueeze(1)
-        latents = latents + question_modulation
-        
-        # Cross-attention: latents attend to Cell
-        latents, _ = self.cross_attn(latents, projected_inputs, projected_inputs)
-        
-        # Self-attention layers
-        for layer in self.layers:
-            latents = layer(latents)
-            
-        return latents
-
-
-class FiLMConditionedMLPProjector(nn.Module):
-    """
-    MLP projector with FiLM (Feature-wise Linear Modulation) conditioning.
-    Uses question to modulate features at each layer via scale and shift.
-    """
-    def __init__(self, cell_embedding_dim, hidden_dim, output_dim, question_dim, 
-                 num_layers=2, dropout_prob=0.0, bias=True):
-        super().__init__()
-        self.num_layers = num_layers
-        
-        # Main MLP layers
-        self.layers = nn.ModuleList()
-        dims = [cell_embedding_dim] + [hidden_dim] * (num_layers - 1) + [output_dim]
-        
-        for i in range(num_layers):
-            self.layers.append(nn.Linear(dims[i], dims[i + 1], bias=bias))
-        
-        # FiLM conditioning networks - generate scale and shift for each layer
-        self.film_networks = nn.ModuleList()
-        for i in range(num_layers):
-            # Each FiLM network outputs both scale (gamma) and shift (beta)
-            film_dim = dims[i + 1]
-            self.film_networks.append(
-                nn.Sequential(
-                    nn.Linear(question_dim, hidden_dim),
-                    nn.ReLU(),
-                    nn.Linear(hidden_dim, film_dim * 2)  # *2 for gamma and beta
-                )
-            )
+        # Feedforward network
+        self.feedforward = nn.Sequential(
+            nn.Linear(dim, dim * ff_mult),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(dim * ff_mult, dim),
+            nn.Dropout(dropout)
+        )
         
         # Layer norms
-        self.layer_norms = nn.ModuleList([
-            nn.LayerNorm(dims[i + 1]) for i in range(num_layers)
-        ])
+        self.norm1 = nn.LayerNorm(dim)  # Before cross-attention
+        self.norm2 = nn.LayerNorm(dim)  # Before feedforward
         
-        # Dropout
-        self.dropout = nn.Dropout(dropout_prob) if dropout_prob > 0 else nn.Identity()
+        self.dropout = nn.Dropout(dropout)
         
-    def forward(self, cell_embeddings, question_embedding):
+        
+   
+    
+    def _cross_attention_flash(self, latents: torch.Tensor, inputs: torch.Tensor, mask: torch.Tensor = None):
+        """Flash Attention implementation"""
+        # Flash Attention expects concatenated QKV for self-attention
+        # For cross-attention, we need to handle Q and KV separately
+        batch_size, num_latents, _ = latents.shape
+        _, seq_len, _ = inputs.shape
+        
+        # Project
+        q = self.q_proj(latents).view(batch_size, num_latents, self.num_heads, self.head_dim)
+        k = self.k_proj(inputs).view(batch_size, seq_len, self.num_heads, self.head_dim)
+        v = self.v_proj(inputs).view(batch_size, seq_len, self.num_heads, self.head_dim)
+        
+        # Flash attention expects (batch, seq_len, num_heads, head_dim)
+        # Use flash_attn_func for cross-attention
+        attn_out = flash_attn_func(
+            q, k, v,
+            dropout_p=self.dropout.p if self.training else 0.0,
+            causal=False
+        )
+        
+        # Reshape and project
+        attn_out = attn_out.view(batch_size, num_latents, self.dim)
+        return self.out_proj(attn_out)
+        
+    def forward(self, latents: torch.Tensor, inputs: torch.Tensor, mask: torch.Tensor = None):
         """
-        cell_embeddings: [B, L, cell_embedding_dim]
-        question_embedding: [B, question_dim]
-        Returns: [B, L, output_dim]
+        Args:
+            latents: [batch_size, num_latents, dim] - latent queries
+            inputs: [batch_size, seq_len, dim] - input sequence to attend to
+            mask: [batch_size, seq_len] - attention mask
+        
+        Returns:
+            [batch_size, num_latents, dim] - updated latents
         """
-        x = cell_embeddings
+        # Normalize before attention
+        norm_latents = self.norm1(latents)
         
-        for i, (layer, film_net, layer_norm) in enumerate(zip(self.layers, self.film_networks, self.layer_norms)):
-            # Apply linear transformation
-            x = layer(x)
-            
-            # Generate FiLM parameters
-            film_params = film_net(question_embedding)  # [B, film_dim * 2]
-            film_dim = film_params.size(-1) // 2
-            gamma = film_params[..., :film_dim].unsqueeze(1)  # [B, 1, film_dim]
-            beta = film_params[..., film_dim:].unsqueeze(1)   # [B, 1, film_dim]
-            
-            # Apply layer norm
-            x = layer_norm(x)
-            
-            # Apply FiLM modulation: x = gamma * x + beta
-            x = gamma * x + beta
-            
-            # Apply activation (except for last layer)
-            if i < len(self.layers) - 1:
-                x = torch.nn.functional.gelu(x)
-                x = self.dropout(x)
+        # Cross-attention with selected backend
+      
+        attn_out = self._cross_attention_flash(norm_latents, inputs, mask)
         
-        return x
+        # Residual connection
+        latents = latents + attn_out
+        
+        # Feedforward with residual connection
+        ff_out = self.feedforward(self.norm2(latents))
+        latents = latents + ff_out
+        
+        return latents
+
+
+      

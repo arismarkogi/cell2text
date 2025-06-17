@@ -143,6 +143,18 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
         **kwargs  # All other LlamaForCausalLM arguments
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         
+
+        device = self.device 
+
+        if input_ids is not None:
+            input_ids = input_ids.to(device)
+        if attention_mask is not None:
+            attention_mask = attention_mask.to(device)
+        if cell_embeddings is not None:
+            cell_embeddings = cell_embeddings.to(device)
+        if cell_attention_mask is not None:
+            cell_attention_mask = cell_attention_mask.to(device)
+
         if cell_embeddings is None:
             # Standard LLaMA forward without cell embeddings
             return self.llama(
@@ -177,7 +189,6 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
         # Remove inputs_embeds from kwargs to avoid duplicate argument error, i dont know what's happemning
         kwargs.pop('inputs_embeds', None)
 
-        print(f"Inside llama decoder, input_embeds.shape: {inputs_embeds.shape}")
 
         # Forward through LLaMA with prepared embeddings
         return self.llama(

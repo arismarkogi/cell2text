@@ -16,9 +16,24 @@ class Cell2TextConfig(PretrainedConfig):
         
         # Model dimensions
         cell_encoder_hidden_size=512, # Geneformer hidden_dim
-        top_k=512, # hyperparameter for the top_k selection of genes (tokens)
+        
+        
+        projector = "mlp", # ["mlp", "perceiver"]
+        
+        # When useing the "mlp"
         mlp_hidden_size=256, # projection layer hidden_dim
         mlp_dropout=0.05,
+        top_k=512, # hyperparameter for the top_k selection of genes (tokens)
+
+        # When using the "perceiver"
+        num_latents = 128,
+        preceiver_depth=4,
+        num_heads=8,
+        ff_mult=4,
+        perceiver_dropout=0.1,
+
+
+
         
         # Paths and files
         token_dictionary_path="/home/arismarkog/Desktop/cell2text/Geneformer/geneformer/token_dictionary_gc95M.pkl",
@@ -54,6 +69,14 @@ class Cell2TextConfig(PretrainedConfig):
         self.mlp_hidden_size = mlp_hidden_size
         self.mlp_dropout = mlp_dropout
         self.top_k = top_k
+        self.projector = projector
+
+
+        self.num_latents = num_latents
+        self.preceiver_depth = preceiver_depth
+        self.num_heads = num_heads
+        self.ff_mult = ff_mult
+        self.perceiver_dropout = perceiver_dropout
         
         # Paths
         self.token_dictionary_path = token_dictionary_path
