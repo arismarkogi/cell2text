@@ -1,8 +1,6 @@
 import torch.nn as nn
 import torch
 from einops import repeat
-from flash_attn import flash_attn_func
-from flash_attn.modules.mha import MHA
 
 
 class MLPProjectionLayer(nn.Module):
@@ -33,7 +31,6 @@ class MLPProjectionLayer(nn.Module):
             nn.LayerNorm(output_dim)
         ])
         self.projection = nn.Sequential(*layers)
-
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -92,8 +89,7 @@ class SimplifiedPerceiverResampler(nn.Module):
                 dim=output_dim,
                 num_heads=num_heads,
                 ff_mult=ff_mult,
-                dropout=dropout,
-                attention_backend="auto"  # Will auto-select best available
+                dropout=dropout
             ) for _ in range(depth)
         ])
         
@@ -145,7 +141,7 @@ class SimplifiedPerceiverResampler(nn.Module):
 class PerceiverLayer(nn.Module):
     """
     Single Perceiver layer with cross-attention and feedforward
-    Supports multiple attention backends: standard, PyTorch SDPA, Flash Attention
+    Uses PyTorch's optimized scaled dot-product attention when available
     """
     
     def __init__(
@@ -153,37 +149,22 @@ class PerceiverLayer(nn.Module):
         dim: int,
         num_heads: int = 8,
         ff_mult: int = 4,
-        dropout: float = 0.1,
-        attention_backend: str = "auto"  # "standard", "pytorch_sdpa", "flash_attn", "auto"
+        dropout: float = 0.1
     ):
         super().__init__()
         
         self.dim = dim
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
-        self.attention_backend = self._select_backend(attention_backend)
         
-        # Attention projections
-        self.q_proj = nn.Linear(dim, dim, bias=False)
-        self.k_proj = nn.Linear(dim, dim, bias=False)
-        self.v_proj = nn.Linear(dim, dim, bias=False)
-        self.out_proj = nn.Linear(dim, dim, bias=False)
+        assert dim % num_heads == 0, f"dim ({dim}) must be divisible by num_heads ({num_heads})"
         
-        # Alternative: use standard MultiheadAttention for simplicity
-        self.standard_attn = nn.MultiheadAttention(
+        # Cross-attention using PyTorch's MultiheadAttention
+        self.cross_attn = nn.MultiheadAttention(
             embed_dim=dim,
             num_heads=num_heads,
             dropout=dropout,
             batch_first=True
-        )
-        
-        # Flash Attention module
-        self.flash_mha = MHA(
-                embed_dim=dim,
-                num_heads=num_heads,
-                dropout=dropout,
-                batch_first=True,
-                causal=False  # Cross-attention is not causal
         )
         
         # Feedforward network
@@ -199,41 +180,12 @@ class PerceiverLayer(nn.Module):
         self.norm1 = nn.LayerNorm(dim)  # Before cross-attention
         self.norm2 = nn.LayerNorm(dim)  # Before feedforward
         
-        self.dropout = nn.Dropout(dropout)
-        
-        
-   
-    
-    def _cross_attention_flash(self, latents: torch.Tensor, inputs: torch.Tensor, mask: torch.Tensor = None):
-        """Flash Attention implementation"""
-        # Flash Attention expects concatenated QKV for self-attention
-        # For cross-attention, we need to handle Q and KV separately
-        batch_size, num_latents, _ = latents.shape
-        _, seq_len, _ = inputs.shape
-        
-        # Project
-        q = self.q_proj(latents).view(batch_size, num_latents, self.num_heads, self.head_dim)
-        k = self.k_proj(inputs).view(batch_size, seq_len, self.num_heads, self.head_dim)
-        v = self.v_proj(inputs).view(batch_size, seq_len, self.num_heads, self.head_dim)
-        
-        # Flash attention expects (batch, seq_len, num_heads, head_dim)
-        # Use flash_attn_func for cross-attention
-        attn_out = flash_attn_func(
-            q, k, v,
-            dropout_p=self.dropout.p if self.training else 0.0,
-            causal=False
-        )
-        
-        # Reshape and project
-        attn_out = attn_out.view(batch_size, num_latents, self.dim)
-        return self.out_proj(attn_out)
-        
     def forward(self, latents: torch.Tensor, inputs: torch.Tensor, mask: torch.Tensor = None):
         """
         Args:
             latents: [batch_size, num_latents, dim] - latent queries
             inputs: [batch_size, seq_len, dim] - input sequence to attend to
-            mask: [batch_size, seq_len] - attention mask
+            mask: [batch_size, seq_len] - attention mask (True = valid, False = padding)
         
         Returns:
             [batch_size, num_latents, dim] - updated latents
@@ -241,9 +193,20 @@ class PerceiverLayer(nn.Module):
         # Normalize before attention
         norm_latents = self.norm1(latents)
         
-        # Cross-attention with selected backend
-      
-        attn_out = self._cross_attention_flash(norm_latents, inputs, mask)
+        # Convert mask format if provided
+        # PyTorch MultiheadAttention expects key_padding_mask where True = ignore
+        key_padding_mask = None
+        if mask is not None:
+            key_padding_mask = ~mask  # Invert: True = valid -> False = valid
+        
+        # Cross-attention: latents attend to inputs
+        attn_out, _ = self.cross_attn(
+            query=norm_latents,
+            key=inputs,
+            value=inputs,
+            key_padding_mask=key_padding_mask,
+            need_weights=False
+        )
         
         # Residual connection
         latents = latents + attn_out
@@ -253,6 +216,3 @@ class PerceiverLayer(nn.Module):
         latents = latents + ff_out
         
         return latents
-
-
-      
