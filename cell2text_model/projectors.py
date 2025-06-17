@@ -169,10 +169,10 @@ class PerceiverLayer(nn.Module):
         
         # Feedforward network
         self.feedforward = nn.Sequential(
-            nn.Linear(dim, dim * ff_mult),
+            nn.Linear(dim, int(dim * ff_mult)),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(dim * ff_mult, dim),
+            nn.Linear(int(dim * ff_mult), dim),
             nn.Dropout(dropout)
         )
         

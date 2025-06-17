@@ -506,9 +506,23 @@ class Cell2TextDeepSpeedTrainer:
                 "target_reached": final_loss <= self.args.target_loss,
                 "losses": self.losses
             }
+            def convert_json_compat(obj):
+                if isinstance(obj, dict):
+                    return {k: convert_json_compat(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [convert_json_compat(v) for v in obj]
+                elif isinstance(obj, (np.float32, np.float64, np.floating)):
+                    return float(obj)
+                elif isinstance(obj, (np.int32, np.int64, np.integer)):
+                    return int(obj)
+                elif isinstance(obj, np.bool_):
+                    return bool(obj)
+                else:
+                    return obj
+
             with open(info_path, 'w') as f:
-                json.dump(info_dict, f, indent=2)
-            
+                json.dump(convert_json_compat(info_dict), f, indent=2)
+                        
             print(f"Overfitted model saved to: {checkpoint_dir}")
         
         return final_loss <= self.args.target_loss
@@ -623,7 +637,7 @@ class Cell2TextDeepSpeedTrainer:
             val_loader=self.val_loader,
             tokenizer=self.tokenizer,
             device=self.model_engine.device,
-            print_examples=self.args.num_samples if self.args.mode == "sanity" and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0) else 5,
+            print_examples=self.args.num_samples if self.args.mode == "sanity" and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0) else 8,
             save_results=os.path.join(self.args.output_dir, f"{self.args.mode}_evaluation_results.json") if self.args.save_results and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0) else None
         )
         
@@ -790,7 +804,7 @@ def create_argument_parser():
                         help="Number of layers in Perceiver")
     parser.add_argument("--num_heads", type=int, default=8,
                         help="Number of attention heads in Perceiver")
-    parser.add_argument("--ff_mult", type=int, default=4,
+    parser.add_argument("--ff_mult", type=float, default=4,
                         help="Feedforward multiplier in Perceiver")
     parser.add_argument("--perceiver_dropout", type=float, default=0.1,
                         help="Dropout probability in Perceiver")
@@ -851,8 +865,23 @@ def main():
                 "evaluation_results": results,
                 "training_args": vars(args)
             }
+            def convert_json_compat(obj):
+                if isinstance(obj, dict):
+                    return {k: convert_json_compat(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [convert_json_compat(v) for v in obj]
+                elif isinstance(obj, (np.float32, np.float64, np.floating)):
+                    return float(obj)
+                elif isinstance(obj, (np.int32, np.int64, np.integer)):
+                    return int(obj)
+                elif isinstance(obj, np.bool_):
+                    return bool(obj)
+                else:
+                    return obj
+
             with open(summary_path, 'w') as f:
-                json.dump(summary, f, indent=2)
+                json.dump(convert_json_compat(summary), f, indent=2)
+           
             print(f"\nTraining summary saved to: {summary_path}")
 
 

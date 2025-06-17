@@ -68,8 +68,8 @@ class Cell2TextModel(PreTrainedModel):
 
         elif self.projector == "perceiver":
             self.cell_to_embedding = SimplifiedPerceiverResampler(
-                input_dim = self.cell_encoder_hidden_size,
-                hidden_dim  = self.decoder_hidden_size,
+                input_dim=self.cell_encoder_hidden_size,
+                output_dim=self.decoder_hidden_size,
                 num_latents=config.num_latents,
                 depth=config.perceiver_depth,
                 num_heads=config.num_heads,
