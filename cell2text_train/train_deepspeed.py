@@ -63,6 +63,7 @@ class Cell2TextDeepSpeedTrainer:
     
     def __init__(self, args):
         self.args = args
+        self.experiment_name = getattr(args, 'experiment_name', None)
         self.device = None
         self.model = None
         self.tokenizer = None
@@ -324,7 +325,11 @@ class Cell2TextDeepSpeedTrainer:
         ds_config = self.create_deepspeed_config()
         
         # Save DeepSpeed config
-        config_path = os.path.join(self.args.output_dir, "deepspeed_config.json")
+        config_filename = "deepspeed_config.json"
+        if self.experiment_name:
+            config_filename = f"{self.experiment_name}_deepspeed_config.json"
+        
+        config_path = os.path.join(self.args.output_dir, config_filename)
         with open(config_path, 'w') as f:
             json.dump(ds_config, f, indent=2)
         print(f"DeepSpeed config saved to: {config_path}")
@@ -494,18 +499,26 @@ class Cell2TextDeepSpeedTrainer:
             print(f"Target reached: {'✓' if final_loss <= self.args.target_loss else '✗'}")
         
         # Save the overfitted model (only on rank 0)
-        if self.args.save_model :
-            checkpoint_dir = os.path.join(self.args.output_dir, "overfitted_sanity_model")
+        if self.args.save_model:
+            checkpoint_name = "overfitted_sanity_model"
+            if self.experiment_name:
+                checkpoint_name = f"{self.experiment_name}_overfitted_sanity_model"
+            
+            checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
             self.model_engine.save_checkpoint(checkpoint_dir)
             
-            # Also save additional info
+            # Save training info with experiment context
             info_path = os.path.join(checkpoint_dir, "training_info.json")
             info_dict = {
+                "experiment_name": self.experiment_name,
                 "final_loss": final_loss,
                 "epochs_taken": epoch,
                 "target_reached": final_loss <= self.args.target_loss,
-                "losses": self.losses
+                "losses": self.losses,
+                "training_mode": self.args.mode,
+                "projector_type": self.args.projector
             }
+
             def convert_json_compat(obj):
                 if isinstance(obj, dict):
                     return {k: convert_json_compat(v) for k, v in obj.items()}
@@ -583,11 +596,16 @@ class Cell2TextDeepSpeedTrainer:
                             best_val_loss = val_loss
                             steps_since_improvement = 0
                             
-                            # Save best model
+                            # Save best model with experiment name
                             if self.args.save_model:
-                                checkpoint_dir = os.path.join(self.args.output_dir, "best_model")
+                                checkpoint_name = "best_model"
+                                if self.experiment_name:
+                                    checkpoint_name = f"{self.experiment_name}_best_model"
+                                
+                                checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
                                 self.model_engine.save_checkpoint(checkpoint_dir)
                                 print(f"Best model saved to: {checkpoint_dir}")
+        
                         else:
                             steps_since_improvement += self.args.eval_steps
                             
@@ -611,8 +629,12 @@ class Cell2TextDeepSpeedTrainer:
         progress_bar.close()
         
         # Save final model
-        if self.args.save_model :
-            checkpoint_dir = os.path.join(self.args.output_dir, "final_model")
+        if self.args.save_model:
+            checkpoint_name = "final_model"
+            if self.experiment_name:
+                checkpoint_name = f"{self.experiment_name}_final_model"
+            
+            checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
             self.model_engine.save_checkpoint(checkpoint_dir)
             print(f"Final model saved to: {checkpoint_dir}")
         
@@ -630,14 +652,18 @@ class Cell2TextDeepSpeedTrainer:
             print("No validation dataset available for evaluation.")
             return {}
         
-        # Use the enhanced evaluation function
+        results_filename = f"{self.args.mode}_evaluation_results.json"
+        
+        if self.experiment_name:
+            results_filename = f"{self.experiment_name}_{results_filename}"
+        
         results = evaluate_cell2text_model(
-            model=self.model_engine.module,  # Get the actual model from DeepSpeed
+            model=self.model_engine.module,
             val_loader=self.val_loader,
             tokenizer=self.tokenizer,
             device=self.model_engine.device,
             print_examples=self.args.num_samples if self.args.mode == "sanity" and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0) else 8,
-            save_results=os.path.join(self.args.output_dir, f"{self.args.mode}_evaluation_results.json") if self.args.save_results else None
+            save_results=os.path.join(self.args.output_dir, results_filename) if self.args.save_results else None
         )
         
         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
@@ -687,6 +713,10 @@ class Cell2TextDeepSpeedTrainer:
 def create_argument_parser():
     """Create and return the argument parser for DeepSpeed training"""
     parser = argparse.ArgumentParser(description="DeepSpeed training for Cell2Text model")
+
+     # Add experiment naming parameter
+    parser.add_argument("--experiment_name", type=str, required=True,
+                        help="Name for the experiment (will be used in output directory and file names)")
     
     # Mode selection
     parser.add_argument("--mode", type=str, choices=["sanity", "full"], default="sanity",
@@ -825,6 +855,22 @@ def main():
     """Main function for DeepSpeed training"""
     parser = create_argument_parser()
     args = parser.parse_args()
+    
+    # Handle experiment naming
+    if args.experiment_name:
+        # Create experiment-specific output directory
+        base_output_dir = args.output_dir
+        args.output_dir = os.path.join(base_output_dir, args.experiment_name)
+        print(f"Using experiment name: {args.experiment_name}")
+        print(f"Output directory: {args.output_dir}")
+    else:
+        # Generate default experiment name with timestamp
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_name = f"{args.mode}_{args.projector}_{timestamp}"
+        args.output_dir = os.path.join(args.output_dir, default_name)
+        print(f"No experiment name provided. Using default: {default_name}")
+        print(f"Output directory: {args.output_dir}")
     
     # Create output directory if it doesn't exist
     os.makedirs(args.output_dir, exist_ok=True)
