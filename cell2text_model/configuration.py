@@ -15,7 +15,7 @@ class Cell2TextConfig(PretrainedConfig):
         summary_stat=None, # [None, "mean", "median", "exact_mean", "exact_median"]
         
         # Model dimensions
-        cell_encoder_hidden_size=512, # Geneformer hidden_dim
+        cell_encoder_hidden_size=1152, # Geneformer hidden_dim
         
         
         projector = "mlp", # ["mlp", "perceiver"]

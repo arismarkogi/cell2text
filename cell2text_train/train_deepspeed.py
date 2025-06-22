@@ -494,7 +494,7 @@ class Cell2TextDeepSpeedTrainer:
             print(f"Target reached: {'✓' if final_loss <= self.args.target_loss else '✗'}")
         
         # Save the overfitted model (only on rank 0)
-        if self.args.save_model and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0):
+        if self.args.save_model :
             checkpoint_dir = os.path.join(self.args.output_dir, "overfitted_sanity_model")
             self.model_engine.save_checkpoint(checkpoint_dir)
             
@@ -584,7 +584,7 @@ class Cell2TextDeepSpeedTrainer:
                             steps_since_improvement = 0
                             
                             # Save best model
-                            if self.args.save_model and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0):
+                            if self.args.save_model:
                                 checkpoint_dir = os.path.join(self.args.output_dir, "best_model")
                                 self.model_engine.save_checkpoint(checkpoint_dir)
                                 print(f"Best model saved to: {checkpoint_dir}")
@@ -597,12 +597,11 @@ class Cell2TextDeepSpeedTrainer:
                                 progress_bar.close()
                                 return
                 
-                # Save checkpoint periodically
-                if self.global_step % self.args.save_steps == 0 and self.args.save_model:
-                    if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
-                        checkpoint_dir = os.path.join(self.args.output_dir, f"checkpoint-{self.global_step}")
-                        self.model_engine.save_checkpoint(checkpoint_dir)
-                        print(f"Checkpoint saved to: {checkpoint_dir}")
+                # # Save checkpoint periodically
+                # if self.global_step % self.args.save_steps == 0 and self.args.save_model:
+                #         checkpoint_dir = os.path.join(self.args.output_dir, f"checkpoint-{self.global_step}")
+                #         self.model_engine.save_checkpoint(checkpoint_dir)
+                #         print(f"Checkpoint saved to: {checkpoint_dir}")
             
             # End of epoch summary
             epoch_loss = np.mean(epoch_losses)
@@ -612,7 +611,7 @@ class Cell2TextDeepSpeedTrainer:
         progress_bar.close()
         
         # Save final model
-        if self.args.save_model and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0):
+        if self.args.save_model :
             checkpoint_dir = os.path.join(self.args.output_dir, "final_model")
             self.model_engine.save_checkpoint(checkpoint_dir)
             print(f"Final model saved to: {checkpoint_dir}")
@@ -638,7 +637,7 @@ class Cell2TextDeepSpeedTrainer:
             tokenizer=self.tokenizer,
             device=self.model_engine.device,
             print_examples=self.args.num_samples if self.args.mode == "sanity" and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0) else 8,
-            save_results=os.path.join(self.args.output_dir, f"{self.args.mode}_evaluation_results.json") if self.args.save_results and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0) else None
+            save_results=os.path.join(self.args.output_dir, f"{self.args.mode}_evaluation_results.json") if self.args.save_results else None
         )
         
         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
@@ -708,13 +707,13 @@ def create_argument_parser():
                         help="Target loss to reach (default: 0.01)")
     parser.add_argument("--epochs", type=int, default=1000,
                         help="Training epochs")
-    parser.add_argument("--save_overfitted_model", action="store_true", default=True,
+    parser.add_argument("--save_overfitted_model", type=bool, default=True,
                         help="Save the overfitted model")
-    parser.add_argument("--save_results", action="store_true", default=True,
+    parser.add_argument("--save_results", type=bool, default=True,
                         help="Save evaluation results to JSON")
     
     # Model parameters
-    parser.add_argument("--encoder_hidden_size", type=int, default=512,
+    parser.add_argument("--encoder_hidden_size", type=int, default=1152,
                         help="Hidden size of the cell encoder")
     parser.add_argument("--mlp_hidden_size", type=int, default=1024,
                         help="Hidden size of the 2-layer MLP cell-to-embedding projector")
@@ -816,7 +815,7 @@ def create_argument_parser():
                         help="Number of steps between saving checkpoints")
     parser.add_argument("--early_stopping", type=int, default=0,
                         help="Number of steps without improvement before early stopping (0 to disable)")
-    parser.add_argument("--save_model", action="store_true", default=True,
+    parser.add_argument("--save_model", type=bool, default=True,
                         help="Save model checkpoints")
     
     return parser
