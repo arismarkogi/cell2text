@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any
 import os
 from safetensors.torch import load_file
 
-from .projectors import  MLPProjectionLayer, SimplifiedPerceiverResampler
+from .projectors import  MLPProjectionLayer, PerceiverIO
 from .geneformer_encoder import GeneformerModel, GeneformerConfig
 from .llama_decoder import Cell2TextLlamaModel, Cell2TextLlamaConfig
 
@@ -67,14 +67,15 @@ class Cell2TextModel(PreTrainedModel):
             )
 
         elif self.projector == "perceiver":
-            self.cell_to_embedding = SimplifiedPerceiverResampler(
+            self.cell_to_embedding = PerceiverIO(
                 input_dim=self.cell_encoder_hidden_size,
                 output_dim=self.decoder_hidden_size,
                 num_latents=config.num_latents,
-                depth=config.perceiver_depth,
-                num_heads=config.num_heads,
+                num_cross_attn_layers=config.perceiver_cross_attn_layers,
+                num_heads=config.perceiver_num_heads,
                 ff_mult=config.ff_mult,
-                dropout=config.perceiver_dropout
+                dropout=config.perceiver_dropout,
+                use_position_encoding=config.use_position_encoding
             )
         
         self.config = config

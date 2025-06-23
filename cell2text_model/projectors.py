@@ -30,13 +30,7 @@ class MLPProjectionLayer(nn.Module):
 
 class PerceiverIO(nn.Module):
     """
-    Proper Perceiver IO implementation with both cross-attention and self-attention
-    
-    Key differences from simplified version:
-    1. Separate cross-attention and self-attention phases
-    2. Self-attention between latents (the key Perceiver innovation)
-    3. More structured layer organization
-    4. Optional position encodings
+    Perceiver IO implementation with both cross-attention and self-attention
     """
     
     def __init__(
@@ -44,10 +38,10 @@ class PerceiverIO(nn.Module):
         input_dim: int,
         output_dim: int,
         num_latents: int = 128,
-        num_cross_attn_layers: int = 1,  # Usually just 1 cross-attention at start
-        num_self_attn_layers: int = 6,   # Multiple self-attention layers
+        num_cross_attn_layers: int = 1,  
+        num_self_attn_layers: int = 6,   
         num_heads: int = 8,
-        ff_mult: int = 4,
+        ff_mult: int = 2,
         dropout: float = 0.1,
         use_position_encoding: bool = True,
         max_seq_len: int = 10000,

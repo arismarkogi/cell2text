@@ -21,7 +21,7 @@ class Cell2TextConfig(PretrainedConfig):
         projector = "mlp", # ["mlp", "perceiver"]
         
         # When useing the "mlp"
-        mlp_hidden_size=256, # projection layer hidden_dim
+        mlp_hidden_size=2048, # projection layer hidden_dim
         mlp_dropout=0.05,
         top_k=512, # hyperparameter for the top_k selection of genes (tokens)
 
@@ -29,8 +29,11 @@ class Cell2TextConfig(PretrainedConfig):
         num_latents = 128,
         preceiver_depth=4,
         num_heads=8,
-        ff_mult=4,
+        ff_mult=2,
         perceiver_dropout=0.1,
+        use_position_encoding=True,
+        perceiver_cross_attn_layers=1,
+        perceiver_num_heads=4,
 
 
 
@@ -75,6 +78,9 @@ class Cell2TextConfig(PretrainedConfig):
         self.num_latents = num_latents
         self.preceiver_depth = preceiver_depth
         self.num_heads = num_heads
+        self.use_position_encoding=use_position_encoding
+        self.perceiver_cross_attn_layers = perceiver_cross_attn_layers
+        self.perceiver_num_heads = perceiver_num_heads
         self.ff_mult = ff_mult
         self.perceiver_dropout = perceiver_dropout
         
