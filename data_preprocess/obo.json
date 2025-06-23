@@ -78995,7 +78995,7 @@
     },
     "UBERON:0014284": {
         "name": "endopiriform nucleus",
-        "def": "An elongated nucleus consisting largely of multipolar spiny cells lying deep to the piriform cortex. \\nAccording to Price (1990; pp. 979-998 in The Human Nervous System, G. Paxinos, (Ed.), Academic Press, San Diego), it is part of the claustrum.",
+        "def": "An elongated nucleus consisting largely of multipolar spiny cells lying deep to the piriform cortex.  According to Price (1990; pp. 979-998 in The Human Nervous System, G. Paxinos, (Ed.), Academic Press, San Diego), it is part of the claustrum.",
         "synonym": [
             "endopiriform nucleus",
             "layer 4 of piriform cortex",
@@ -115572,7 +115572,7 @@
     },
     "UBERON:4200187": {
         "name": "obsolete hyperphalangy of manus",
-        "def": "Increase the number of phalanges per digit beyond their ancestral digital\\nformulas. Modified from Cooper and Dawson 2009.",
+        "def": "Increase the number of phalanges per digit beyond their ancestral digital formulas. Modified from Cooper and Dawson 2009.",
         "synonym": []
     },
     "UBERON:4200188": {
@@ -123215,7 +123215,7 @@
     },
     "CL:0000121": {
         "name": "Purkinje cell",
-        "def": "An inhibitory neuron and the sole output neuron of the cerebellar cortex, the Purkinje cell's soma is located between the granular and molecular layers of the cerebellum. It is one of the largest neural cells in the mammalian brain, ranging from 50 to 80 micrometres in diameter. Purkinje cells have planar, fan-shaped dendrites that branch extensively with little overlap. This cell type receives synaptic input from parallel fibres, which modulate high-frequency spike activity known as \\",
+        "def": "An inhibitory neuron and the sole output neuron of the cerebellar cortex, the Purkinje cell's soma is located between the granular and molecular layers of the cerebellum. It is one of the largest neural cells in the mammalian brain, ranging from 50 to 80 micrometres in diameter. Purkinje cells have planar, fan-shaped dendrites that branch extensively with little overlap. This cell type receives synaptic input from parallel fibres, which modulate high-frequency spike activity known as simple spikes and climbing fibres, which modulate infrequent calcium spike activity known as complex spikes. Purkinje cells are involved in motor coordination, particularly in correcting movements in progress.",
         "synonym": [
             "cerebellar Purkinje cell",
             "PC",
@@ -126222,7 +126222,7 @@
     },
     "CL:0000653": {
         "name": "podocyte",
-        "def": "A specialized kidney epithelial cell, contained within a glomerulus, that contains \\",
+        "def": "A specialized kidney epithelial cell, contained within a glomerulus, that contains foot processes that interdigitate with the foot processes of other podocytes.",
         "synonym": [
             "epithelial cell of visceral layer of glomerular capsule",
             "glomerular podocyte",
@@ -132539,7 +132539,7 @@
     },
     "CL:0002523": {
         "name": "mesonephric podocyte",
-        "def": "A specialized epithelial cell that contains \\",
+        "def": "A specialized epithelial cell that contains foot processes that interdigitate with the foot processes of other glomerular epithelial cells in the mesonephros.",
         "synonym": "mesonephric glomerular visceral epithelial cell"
     },
     "CL:0002524": {
@@ -132549,7 +132549,7 @@
     },
     "CL:0002525": {
         "name": "metanephric podocyte",
-        "def": "A specialized epithelial cell that contains \\",
+        "def": "A specialized epithelial cell that contains foot processes that interdigitate with the foot processes of other glomerular epithelial cells in the metanephros.",
         "synonym": "metanephric glomerular visceral epithelial cell"
     },
     "CL:0002526": {
@@ -135243,7 +135243,7 @@
     },
     "CL:0009114": {
         "name": "monocytoid B cell",
-        "def": "A B cell found in the perisinusoidal area of a lymph node. In humans, monocytoid B cells are a morphologically distinct B cell population\\n(oval nuclei, abundant cytoplasm, monocyte-like appearance), share many similarities with marginal zone B cells including marker expression, and are increased in disease settings.",
+        "def": "A B cell found in the perisinusoidal area of a lymph node. In humans, monocytoid B cells are a morphologically distinct B cell population (oval nuclei, abundant cytoplasm, monocyte-like appearance), share many similarities with marginal zone B cells including marker expression, and are increased in disease settings.",
         "synonym": []
     },
     "CL:0009115": {
@@ -135576,17 +135576,17 @@
     },
     "CL:0011104": {
         "name": "interplexiform cell",
-        "def": "A type of interneuron in the retinal inner nuclear layer which\\ncarries information from the inner plexiform layer and the outer\\nplexiform layer.",
+        "def": "A type of interneuron in the retinal inner nuclear layer which carries information from the inner plexiform layer and the outer plexiform layer.",
         "synonym": []
     },
     "CL:0011105": {
         "name": "dopamanergic interplexiform cell",
-        "def": "A type of interneuron in the retinal inner nuclear layer which\\ncarries information from the inner plexiform layer and the outer\\nplexiform layer, using dopamine.",
+        "def": "A type of interneuron in the retinal inner nuclear layer which carries information from the inner plexiform layer and the outer plexiform layer, using dopamine.",
         "synonym": []
     },
     "CL:0011106": {
         "name": "GABAnergic interplexiform cell",
-        "def": "A type of interneuron in the retinal inner nuclear layer which\\ncarries information from the inner plexiform layer and the outer\\nplexiform layer using GABA.",
+        "def": "A type of interneuron in the retinal inner nuclear layer which carries information from the inner plexiform layer and the outer plexiform layer using GABA.",
         "synonym": []
     },
     "CL:0011107": {
@@ -138567,7 +138567,7 @@
     },
     "CL:4023030": {
         "name": "L2/3/5 fan Martinotti sst GABAergic interneuron (Mmus)",
-        "def": "A sst GABAergic cortical interneuron that has \\",
+        "def": "A sst GABAergic cortical interneuron that has fanning-out Martinotti morphology that is found in layer 2/3/5 of the cerebral cortex. They have local axon arbor and long ascending axons that spreads horizontally and arborizes significantly in L1.",
         "synonym": "L2/3/5 fan Martinotti SST (Mus musculus)"
     },
     "CL:4023031": {
@@ -139299,7 +139299,7 @@
     },
     "CL:4030008": {
         "name": "pronephric podocyte",
-        "def": "A specialized epithelial cell that contains \\",
+        "def": "A specialized epithelial cell that contains foot processes that interdigitate with the foot processes of other glomerular epithelial cells in the pronephros.",
         "synonym": "pronephric glomerular visceral epithelial cell"
     },
     "CL:4030009": {
@@ -139423,7 +139423,7 @@
     },
     "CL:4030031": {
         "name": "interstitial cell",
-        "def": "Any cell that is located within the interstitium between the cells most prominent in defining a given tissue. \\",
+        "def": "Any cell that is located within the interstitium between the cells most prominent in defining a given tissue. Interstitial cell is a morphological term and refers to a variety of cells with differing origins and phenotypes.",
         "synonym": []
     },
     "CL:4030032": {
@@ -202895,7 +202895,7 @@
     },
     "PATO:0002317": {
         "name": "parallelogram",
-        "def": "A convex quadrilateral is a parallelogram if and only if any one of the following statements are true:\\n1. Each diagonal divides the quadrilateral into two congruent triangles with the same orientation.\\n2. The opposite sides are congruent in pairs.\\n3. The diagonals bisect each other.\\n4. The opposite angles are congruent in pairs.\\n5. The sum of the squares of the sides equals the sum of the squares of the diagonals. (This is the parallelogram law)\\n6.It possesses rotational symmetry.\\n7.One pair of opposite sides are parallel and congruent.\\n8.Two pairs of adjacent angles are supplementary.",
+        "def": "A convex quadrilateral is a parallelogram if and only if any one of the following statements are true: 1. Each diagonal divides the quadrilateral into two congruent triangles with the same orientation. 2. The opposite sides are congruent in pairs. 3. The diagonals bisect each other. 4. The opposite angles are congruent in pairs. 5. The sum of the squares of the sides equals the sum of the squares of the diagonals. (This is the parallelogram law) 6.It possesses rotational symmetry. 7.One pair of opposite sides are parallel and congruent. 8.Two pairs of adjacent angles are supplementary.",
         "synonym": []
     },
     "PATO:0002318": {
@@ -226815,7 +226815,7 @@
     },
     "PATO:0103001": {
         "name": "total mass",
-        "def": "A quantitative quality that represents the sum of all 'mass' qualities of the component parts that constitute a whole entity. The total mass quality inheres in the whole entity and reflects the aggregate measure of mass across all its components, such that changes in the mass of individual components may not necessarily correspond to equivalent changes in the total mass of the whole.\\n\\nExample of usage: \\",
+        "def": "A quantitative quality that represents the sum of all 'mass' qualities of the component parts that constitute a whole entity. The total mass quality inheres in the whole entity and reflects the aggregate measure of mass across all its components, such that changes in the mass of individual components may not necessarily correspond to equivalent changes in the total mass of the whole.  Example of usage: \\",
         "synonym": []
     },
     "PATO:0103002": {
@@ -226830,7 +226830,7 @@
     },
     "PATO:0103004": {
         "name": "total amount",
-        "def": "A quantitative quality that represents the sum of all 'amount' qualities of the component parts that constitute a whole entity. The total amount quality inheres in the whole entity and reflects the aggregate measure across all its components, such that changes in the amount of individual components may not necessarily correspond to equivalent changes in the total amount of the whole.\\n\\nExample of usage: \\",
+        "def": "A quantitative quality that represents the sum of all 'amount' qualities of the component parts that constitute a whole entity. The total amount quality inheres in the whole entity and reflects the aggregate measure across all its components, such that changes in the amount of individual components may not necessarily correspond to equivalent changes in the total amount of the whole.  Example of usage: \\",
         "synonym": []
     },
     "PATO:0103005": {

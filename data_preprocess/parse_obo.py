@@ -86,15 +86,48 @@ class OBOToJSONConverter:
                     # Convert to the desired JSON format
                     term_data = {
                         "name": term.name,
-                        "def": term.definition,
-                        "synonym": term.synonyms if len(term.synonyms) > 1 else (term.synonyms[0] if term.synonyms else [])
+                        "def": self._clean_definition(term.definition),
                     }
+                    
+                    # Only include synonym field if there are synonyms
+                    if term.synonyms:
+                        if len(term.synonyms) == 1:
+                            term_data["synonym"] = term.synonyms[0]
+                        else:
+                            term_data["synonym"] = term.synonyms
                     
                     self.terms[term.id] = term_data
                     self.stats['total_terms'] += 1
                     
                     if term.is_obsolete:
                         self.stats['obsolete_terms'] += 1
+    
+    def _clean_definition(self, definition: str) -> str:
+        """
+        Clean up definition text by removing unwanted formatting.
+        
+        Args:
+            definition: Raw definition string
+            
+        Returns:
+            Cleaned definition string
+        """
+        if not definition:
+            return ""
+        
+        # Replace literal \n with actual spaces
+        cleaned = definition.replace('\\n', ' ')
+        
+        # Remove trailing backslashes that might indicate incomplete parsing
+        cleaned = re.sub(r'\\+$', '', cleaned)
+        
+        # Normalize whitespace (replace multiple spaces/tabs with single space)
+        cleaned = re.sub(r'\s+', ' ', cleaned)
+        
+        # Strip leading/trailing whitespace
+        cleaned = cleaned.strip()
+        
+        return cleaned
     
     def _split_into_blocks(self, content: str) -> List[str]:
         """Split OBO content into blocks based on [Term], [Typedef], etc."""
@@ -118,12 +151,16 @@ class OBOToJSONConverter:
     def _parse_term_block(self, lines: List[str]) -> Optional[OBOTerm]:
         """Parse a [Term] block and return an OBOTerm object."""
         term_data = {}
+        current_def = ""
         
         for line in lines:
             if not line or line.startswith('!'):
                 continue
             
             if ':' not in line:
+                # This might be a continuation of the previous line
+                if current_def and line.strip():
+                    current_def += " " + line.strip()
                 continue
             
             key, value = line.split(':', 1)
@@ -136,19 +173,32 @@ class OBOToJSONConverter:
             elif key == 'name':
                 term_data['name'] = value
             elif key == 'def':
+                # Handle multi-line definitions
+                current_def = value
                 # Parse definition (remove quotes and extract)
-                def_match = re.match(r'"([^"]*)"', value)
+                def_match = re.match(r'"([^"]*)"', current_def)
                 if def_match:
                     term_data['definition'] = def_match.group(1)
                 else:
-                    term_data['definition'] = value
+                    # Handle cases where definition might span multiple lines or be malformed
+                    # Remove leading quote if present
+                    if current_def.startswith('"'):
+                        current_def = current_def[1:]
+                    # Find the end quote and references
+                    end_quote_match = re.search(r'"(\s*\[.*\])?$', current_def)
+                    if end_quote_match:
+                        term_data['definition'] = current_def[:end_quote_match.start()]
+                    else:
+                        term_data['definition'] = current_def
             elif key == 'synonym':
                 if 'synonyms' not in term_data:
                     term_data['synonyms'] = []
                 # Extract synonym text from quotes
                 syn_match = re.match(r'"([^"]*)"', value)
                 if syn_match:
-                    term_data['synonyms'].append(syn_match.group(1))
+                    synonym_text = syn_match.group(1).strip()
+                    if synonym_text:  # Only add non-empty synonyms
+                        term_data['synonyms'].append(synonym_text)
             elif key == 'is_obsolete':
                 term_data['is_obsolete'] = value.lower() == 'true'
         
@@ -208,7 +258,7 @@ class OBOToJSONConverter:
             if i >= n:
                 break
             
-            synonyms = term_data['synonym']
+            synonyms = term_data.get('synonym', '')
             syn_str = f" (synonyms: {synonyms})" if synonyms else ""
             print(f"  {term_id}: {term_data['name']}{syn_str}")
             if term_data['def']:

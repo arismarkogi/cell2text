@@ -773,7 +773,7 @@ def create_argument_parser():
                         help="Number of beams for beam search")
     
     # LoRA parameters
-    parser.add_argument("--use_lora_decoder", action="store_true", default=True,
+    parser.add_argument("--use_lora_decoder", type=bool, default=True,
                         help="Use LoRA for the text decoder (LLaMA)")
     
     # LoRA parameters for decoder
@@ -793,7 +793,7 @@ def create_argument_parser():
                         help="Additional modules to save for decoder LoRA")
     
     # Freezing parameters
-    parser.add_argument("--freeze_decoder", action="store_true", default=True,
+    parser.add_argument("--freeze_decoder", type=bool, default=True,
                         help="Freeze decoder parameters (only applies if not using LoRA for decoder)")
     
     # DeepSpeed specific parameters
@@ -803,9 +803,9 @@ def create_argument_parser():
                         help="Number of gradient accumulation steps")
     parser.add_argument("--zero_stage", type=int, default=2, choices=[0, 1, 2, 3],
                         help="DeepSpeed ZeRO optimization stage")
-    parser.add_argument("--fp16", action="store_true", default=False,
+    parser.add_argument("--fp16", type=bool, default=False,
                         help="Enable FP16 mixed precision training")
-    parser.add_argument("--bf16", action="store_true", default=False,
+    parser.add_argument("--bf16", type=bool, default=False,
                         help="Enable BF16 mixed precision training")
     
     # Training parameters (optimized for sanity check)
@@ -845,7 +845,7 @@ def create_argument_parser():
                         help="Dropout probability in Perceiver")
     
     # Full training specific parameters
-    parser.add_argument("--eval_steps", type=int, default=500,
+    parser.add_argument("--eval_steps", type=int, default=2000,
                         help="Number of steps between evaluations")
     parser.add_argument("--save_steps", type=int, default=1000,
                         help="Number of steps between saving checkpoints")

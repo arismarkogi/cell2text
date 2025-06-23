@@ -3,14 +3,17 @@ deepspeed --num_gpus 2 /home/arism/cell2text/cell2text_train/train_deepspeed.py 
   --train_data_path /home/arism/datasets/train \
   --val_data_path /home/arism/datasets/validation \
   --geneformer_path /home/arism/cell2text/Geneformer \
-  --decoder_path meta-llama/Llama-3.2-1B-Instruct \
+  --decoder_path meta-llama/Llama-3.2-3B-Instruct \
   --batch_size_per_device 8 \
   --gradient_accumulation_steps 4 \
-  --epochs 30 \
-  --decoder_hidden_size 2048 \
+  --top_k 256 \
+  --epochs 1 \
+  --decoder_hidden_size 3072 \
   --projector "mlp" \
+  --mlp_hidden_size 2048 \
   --mode "full" \
-  --experiment_name "full_mlp_95000_samples" \
+  --experiment_name "full_mlp_95000_samples_1epoch" \
+  --eval_steps 2000 \
   # --perceiver_depth 1 \
   # --num_latents 128 \
   # --num_heads 4 \

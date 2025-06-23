@@ -1,20 +1,12 @@
-import torch.nn as nn
 import torch
+import torch.nn as nn
 from einops import repeat
+import math
 
 
 class MLPProjectionLayer(nn.Module):
     """
     Creates a multi-layer perceptron (MLP) projection layer with GELU activation.
-
-    Args:
-        input_dim (int): The dimension of the input to the projection layer.
-        hidden_dim (int): The dimension of the hidden layer in the MLP.
-        output_dim (int): The dimension of the output from the projection layer.
-        dropout_prob (float, optional): The probability of dropout. If 0, dropout is not applied.
-            Default: 0.0
-        bias (bool, optional): If set to False, the linear layers will not learn an additive bias.
-            Default: True
     """
     def __init__(self, input_dim: int, hidden_dim: int, output_dim: int, dropout_prob: float = 0.0, bias: bool = True) -> None:
         super().__init__()
@@ -33,21 +25,18 @@ class MLPProjectionLayer(nn.Module):
         self.projection = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Performs the MLP projection.
-
-        Args:
-            x (torch.Tensor): The input tensor to project.
-
-        Returns:
-            torch.Tensor: The projected tensor.
-        """
         return self.projection(x)
 
 
-class SimplifiedPerceiverResampler(nn.Module):
+class PerceiverIO(nn.Module):
     """
-    Simplified Perceiver Resampler using standard PyTorch components
+    Proper Perceiver IO implementation with both cross-attention and self-attention
+    
+    Key differences from simplified version:
+    1. Separate cross-attention and self-attention phases
+    2. Self-attention between latents (the key Perceiver innovation)
+    3. More structured layer organization
+    4. Optional position encodings
     """
     
     def __init__(
@@ -55,42 +44,64 @@ class SimplifiedPerceiverResampler(nn.Module):
         input_dim: int,
         output_dim: int,
         num_latents: int = 128,
-        depth: int = 4,
+        num_cross_attn_layers: int = 1,  # Usually just 1 cross-attention at start
+        num_self_attn_layers: int = 6,   # Multiple self-attention layers
         num_heads: int = 8,
         ff_mult: int = 4,
         dropout: float = 0.1,
+        use_position_encoding: bool = True,
+        max_seq_len: int = 10000,
     ):
         """
         Args:
-            input_dim: Dimension of input embeddings (e.g., gene embeddings)
+            input_dim: Dimension of input embeddings
             output_dim: Dimension of output embeddings and latents
             num_latents: Number of learnable latent queries
-            depth: Number of cross-attention + feedforward layers
+            num_cross_attn_layers: Number of cross-attention layers (usually 1)
+            num_self_attn_layers: Number of self-attention layers (the main processing)
             num_heads: Number of attention heads
             ff_mult: Feedforward dimension multiplier
             dropout: Dropout rate
+            use_position_encoding: Whether to add positional encodings to inputs
+            max_seq_len: Maximum sequence length for position encodings
         """
         super().__init__()
         
         self.input_dim = input_dim
         self.output_dim = output_dim
         self.num_latents = num_latents
-        self.depth = depth
+        self.num_cross_attn_layers = num_cross_attn_layers
+        self.num_self_attn_layers = num_self_attn_layers
+        self.use_position_encoding = use_position_encoding
         
-        # Learnable latent queries
+        # Learnable latent queries (the "bottleneck")
         self.latents = nn.Parameter(torch.randn(num_latents, output_dim))
         
         # Input projection to match latent dimension
         self.input_projection = nn.Linear(input_dim, output_dim)
         
-        # Stack of Perceiver layers
-        self.layers = nn.ModuleList([
-            PerceiverLayer(
+        # Position encoding for inputs (optional but often helpful)
+        if use_position_encoding:
+            self.position_encoding = PositionalEncoding(output_dim, max_seq_len)
+        
+        # Cross-attention layers (encode inputs into latents)
+        self.cross_attention_layers = nn.ModuleList([
+            PerceiverCrossAttentionLayer(
                 dim=output_dim,
                 num_heads=num_heads,
                 ff_mult=ff_mult,
                 dropout=dropout
-            ) for _ in range(depth)
+            ) for _ in range(num_cross_attn_layers)
+        ])
+        
+        # Self-attention layers (process latents - this is the key Perceiver innovation)
+        self.self_attention_layers = nn.ModuleList([
+            PerceiverSelfAttentionLayer(
+                dim=output_dim,
+                num_heads=num_heads,
+                ff_mult=ff_mult,
+                dropout=dropout
+            ) for _ in range(num_self_attn_layers)
         ])
         
         # Final output normalization
@@ -111,26 +122,34 @@ class SimplifiedPerceiverResampler(nn.Module):
     
     def forward(self, inputs: torch.Tensor, mask: torch.Tensor = None):
         """
-        Forward pass
+        Forward pass through Perceiver
         
         Args:
             inputs: [batch_size, seq_len, input_dim] - input embeddings
             mask: [batch_size, seq_len] - attention mask (True = valid, False = padding)
         
         Returns:
-            [batch_size, num_latents, output_dim] - compressed representation
+            [batch_size, num_latents, output_dim] - processed latent representation
         """
         batch_size = inputs.size(0)
         
         # Project input to output dimension
         projected_inputs = self.input_projection(inputs)
         
-        # Prepare latents for batch
+        # Add position encoding if enabled
+        if self.use_position_encoding:
+            projected_inputs = self.position_encoding(projected_inputs)
+        
+        # Initialize latents for this batch
         latents = repeat(self.latents, 'q d -> b q d', b=batch_size)
         
-        # Apply Perceiver layers
-        for layer in self.layers:
-            latents = layer(latents, projected_inputs, mask)
+        # Phase 1: Cross-attention (encode inputs into latents)
+        for cross_layer in self.cross_attention_layers:
+            latents = cross_layer(latents, projected_inputs, mask)
+        
+        # Phase 2: Self-attention (process latents - the main computation)
+        for self_layer in self.self_attention_layers:
+            latents = self_layer(latents)
         
         # Final normalization
         output = self.final_norm(latents)
@@ -138,28 +157,18 @@ class SimplifiedPerceiverResampler(nn.Module):
         return output
 
 
-class PerceiverLayer(nn.Module):
+class PerceiverCrossAttentionLayer(nn.Module):
     """
-    Single Perceiver layer with cross-attention and feedforward
-    Uses PyTorch's optimized scaled dot-product attention when available
+    Cross-attention layer: latents attend to inputs
     """
     
-    def __init__(
-        self,
-        dim: int,
-        num_heads: int = 8,
-        ff_mult: int = 4,
-        dropout: float = 0.1
-    ):
+    def __init__(self, dim: int, num_heads: int = 8, ff_mult: int = 4, dropout: float = 0.1):
         super().__init__()
         
         self.dim = dim
         self.num_heads = num_heads
-        self.head_dim = dim // num_heads
         
-        assert dim % num_heads == 0, f"dim ({dim}) must be divisible by num_heads ({num_heads})"
-        
-        # Cross-attention using PyTorch's MultiheadAttention
+        # Cross-attention: latents (queries) attend to inputs (keys, values)
         self.cross_attn = nn.MultiheadAttention(
             embed_dim=dim,
             num_heads=num_heads,
@@ -176,7 +185,7 @@ class PerceiverLayer(nn.Module):
             nn.Dropout(dropout)
         )
         
-        # Layer norms
+        # Layer norms (pre-norm style)
         self.norm1 = nn.LayerNorm(dim)  # Before cross-attention
         self.norm2 = nn.LayerNorm(dim)  # Before feedforward
         
@@ -190,16 +199,14 @@ class PerceiverLayer(nn.Module):
         Returns:
             [batch_size, num_latents, dim] - updated latents
         """
-        # Normalize before attention
+        # Cross-attention with residual connection
         norm_latents = self.norm1(latents)
         
         # Convert mask format if provided
-        # PyTorch MultiheadAttention expects key_padding_mask where True = ignore
         key_padding_mask = None
         if mask is not None:
-            key_padding_mask = ~mask  # Invert: True = valid -> False = valid
+            key_padding_mask = ~mask  # Invert for PyTorch convention
         
-        # Cross-attention: latents attend to inputs
         attn_out, _ = self.cross_attn(
             query=norm_latents,
             key=inputs,
@@ -208,7 +215,6 @@ class PerceiverLayer(nn.Module):
             need_weights=False
         )
         
-        # Residual connection
         latents = latents + attn_out
         
         # Feedforward with residual connection
@@ -216,3 +222,92 @@ class PerceiverLayer(nn.Module):
         latents = latents + ff_out
         
         return latents
+
+
+class PerceiverSelfAttentionLayer(nn.Module):
+    """
+    Self-attention layer: latents attend to other latents
+    This is the key innovation of the Perceiver - processing in the latent space
+    """
+    
+    def __init__(self, dim: int, num_heads: int = 8, ff_mult: int = 4, dropout: float = 0.1):
+        super().__init__()
+        
+        self.dim = dim
+        self.num_heads = num_heads
+        
+        # Self-attention: latents attend to latents
+        self.self_attn = nn.MultiheadAttention(
+            embed_dim=dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True
+        )
+        
+        # Feedforward network
+        self.feedforward = nn.Sequential(
+            nn.Linear(dim, int(dim * ff_mult)),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(int(dim * ff_mult), dim),
+            nn.Dropout(dropout)
+        )
+        
+        # Layer norms (pre-norm style)
+        self.norm1 = nn.LayerNorm(dim)  # Before self-attention
+        self.norm2 = nn.LayerNorm(dim)  # Before feedforward
+        
+    def forward(self, latents: torch.Tensor):
+        """
+        Args:
+            latents: [batch_size, num_latents, dim] - latent queries
+        
+        Returns:
+            [batch_size, num_latents, dim] - updated latents
+        """
+        # Self-attention with residual connection
+        norm_latents = self.norm1(latents)
+        
+        attn_out, _ = self.self_attn(
+            query=norm_latents,
+            key=norm_latents,
+            value=norm_latents,
+            need_weights=False
+        )
+        
+        latents = latents + attn_out
+        
+        # Feedforward with residual connection
+        ff_out = self.feedforward(self.norm2(latents))
+        latents = latents + ff_out
+        
+        return latents
+
+
+class PositionalEncoding(nn.Module):
+    """
+    Sinusoidal positional encoding
+    """
+    
+    def __init__(self, dim: int, max_len: int = 10000):
+        super().__init__()
+        
+        pe = torch.zeros(max_len, dim)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, dim, 2).float() * (-math.log(10000.0) / dim))
+        
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        
+        self.register_buffer('pe', pe.unsqueeze(0))
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: [batch_size, seq_len, dim]
+        Returns:
+            [batch_size, seq_len, dim] with positional encoding added
+        """
+        seq_len = x.size(1)
+        return x + self.pe[:, :seq_len]
+
