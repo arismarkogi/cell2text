@@ -110,7 +110,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                            print_examples: int = 10,
                            save_results: str = None):
     """
-    Enhanced evaluation function with text printing and cell type accuracy
+    Enhanced evaluation function with text printing, cell type accuracy, and loss calculation
     
     Args:
         model: The Cell2TextModel to evaluate
@@ -125,6 +125,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     device = setup_device()
     model.eval()
     bleu_scores = []
+    val_losses = []  # Add loss tracking
     smooth = SmoothingFunction().method4
     
     # For cell type evaluation
@@ -144,9 +145,19 @@ def evaluate_cell2text_model(model: Cell2TextModel,
             expression_token_lengths = batch["expression_token_lengths"].to(device)
             text_input_ids = batch["input_ids"].to(device)
             text_attention_mask = batch["attention_mask"].to(device)
+            labels = batch["labels"].to(device) if batch["labels"] is not None else None
             
-            
-            
+            # Calculate loss if labels are available
+            if labels is not None:
+                outputs = model(
+                    expression_tokens=expression_tokens,
+                    expression_token_lengths=expression_token_lengths,
+                    input_ids=text_input_ids,
+                    attention_mask=text_attention_mask,
+                    labels=labels,
+                    return_dict=True
+                )
+                val_losses.append(outputs.loss.item())
             
             # Generate descriptions
             generated = model.generate_cell_description(
@@ -210,6 +221,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     
     # Calculate overall metrics
     avg_bleu = np.mean(bleu_scores) if bleu_scores else 0.0
+    avg_loss = np.mean(val_losses) if val_losses else None
     
     # Calculate cell type metrics
     cell_type_metrics = calculate_cell_type_metrics(predicted_cell_types, target_cell_types)
@@ -219,6 +231,10 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     print(f"VALIDATION RESULTS")
     print(f"{'='*60}")
     print(f"BLEU Score: {avg_bleu:.4f}")
+    if avg_loss is not None:
+        print(f"Validation Loss: {avg_loss:.4f}")
+    else:
+        print("Validation Loss: N/A (no labels provided)")
     print(f"\nCell Type Extraction Metrics:")
     print(f"  Accuracy: {cell_type_metrics['accuracy']:.4f}")
     print(f"  F1 Score: {cell_type_metrics['f1']:.4f}")
@@ -261,6 +277,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         results = {
             'overall_metrics': {
                 'bleu_score': avg_bleu,
+                'validation_loss': avg_loss,
                 'cell_type_metrics': cell_type_metrics
             },
             'examples': examples,
@@ -276,6 +293,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     
     return {
         'bleu': avg_bleu,
+        'validation_loss': avg_loss,
         'cell_type_accuracy': cell_type_metrics['accuracy'],
         'cell_type_f1': cell_type_metrics['f1'],
         'cell_type_precision': cell_type_metrics['precision'],

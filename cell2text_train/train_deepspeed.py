@@ -411,34 +411,22 @@ class Cell2TextDeepSpeedTrainer:
         return loss.item()
     
     def validate(self):
-        """Run validation"""
+        """Run validation using the full evaluation function"""
         if self.val_loader is None:
             return None
             
-        self.model_engine.eval()
-        val_losses = []
+        # Use the full evaluation function instead of simple loss calculation
+        results = evaluate_cell2text_model(
+            model=self.model_engine.module,
+            val_loader=self.val_loader,
+            tokenizer=self.tokenizer,
+            device=self.model_engine.device,
+            print_examples=0,  # Don't print examples during training validation
+            save_results=None  # Don't save during training validation
+        )
         
-        with torch.no_grad():
-            for batch in self.val_loader:
-                expression_tokens = batch["expression_tokens"]
-                expression_token_lengths = batch["expression_token_lengths"]
-                text_input_ids = batch["input_ids"]
-                text_input_attention_mask = batch["attention_mask"]
-                labels = batch["labels"] if batch["labels"] is not None else None
-                
-                outputs = self.model_engine(
-                    expression_tokens=expression_tokens,
-                    expression_token_lengths=expression_token_lengths,
-                    input_ids=text_input_ids,
-                    attention_mask=text_input_attention_mask,
-                    labels=labels,
-                    return_dict=True
-                )
-                
-                val_losses.append(outputs.loss.item())
-        
-        self.model_engine.train()
-        return np.mean(val_losses)
+        # Return the validation loss for early stopping logic
+        return results.get('validation_loss', None)
         
     def sanity_train(self):
         """Sanity training loop - overfit on small dataset with DeepSpeed"""
@@ -684,17 +672,16 @@ class Cell2TextDeepSpeedTrainer:
             save_results=os.path.join(self.args.output_dir, results_filename) if self.args.save_results else None
         )
         
-        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
-            print("\n" + "="*60)
-            print(f"DEEPSPEED {self.args.mode.upper()} TRAINING SUMMARY")
-            print("="*60)
-            print(f"Final training loss: {self.losses[-1] if self.losses else 'N/A':.4f}")
-            if self.args.mode == "sanity":
-                print(f"Target loss: {self.args.target_loss:.4f}")
-                print(f"Target reached: {'✓' if self.losses and self.losses[-1] <= self.args.target_loss else '✗'}")
-            print(f"BLEU score: {results.get('bleu', 0):.4f}")
-            print(f"Cell type accuracy: {results.get('cell_type_accuracy', 0):.4f}")
-            print(f"Cell type F1: {results.get('cell_type_f1', 0):.4f}")
+        print("\n" + "="*60)
+        print(f"DEEPSPEED {self.args.mode.upper()} TRAINING SUMMARY")
+        print("="*60)
+        print(f"Final training loss: {self.losses[-1] if self.losses else 'N/A':.4f}")
+        if self.args.mode == "sanity":
+            print(f"Target loss: {self.args.target_loss:.4f}")
+            print(f"Target reached: {'✓' if self.losses and self.losses[-1] <= self.args.target_loss else '✗'}")
+        print(f"BLEU score: {results.get('bleu', 0):.4f}")
+        print(f"Cell type accuracy: {results.get('cell_type_accuracy', 0):.4f}")
+        print(f"Cell type F1: {results.get('cell_type_f1', 0):.4f}")
         
         return results
         
