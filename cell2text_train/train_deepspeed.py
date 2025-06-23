@@ -141,7 +141,7 @@ class Cell2TextDeepSpeedTrainer:
             
             # Load validation dataset if provided
             if self.args.val_data_path:
-                val_dataset = Cell2TextDataset(self.args.val_data_path, self.tokenizer, top_k=top_k)
+                val_dataset = Cell2TextDataset(self.args.val_data_path, self.tokenizer, top_k=top_k, projector=self.args.projector, num_latents=self.args.num_latents)
                 self.val_loader = DataLoader(
                     val_dataset, 
                     batch_size=self.args.batch_size_per_device, 
@@ -604,9 +604,9 @@ class Cell2TextDeepSpeedTrainer:
                             
                             # Save best model with experiment name
                             if self.args.save_model:
-                                checkpoint_name = "best_model.pt"
+                                checkpoint_name = "best_model"
                                 if self.experiment_name:
-                                    checkpoint_name = f"{self.experiment_name}_best_model.pt"
+                                    checkpoint_name = f"{self.experiment_name}_best_model"
                                 
                                 checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
                                 self.model_engine.save_checkpoint(checkpoint_dir)
@@ -644,9 +644,9 @@ class Cell2TextDeepSpeedTrainer:
             if final_val_loss < best_val_loss:
                 best_val_loss = final_val_loss
                 if self.args.save_model:
-                    checkpoint_name = "best_model.pt"
+                    checkpoint_name = "best_model"
                     if self.experiment_name:
-                        checkpoint_name = f"{self.experiment_name}_best_model.pt"
+                        checkpoint_name = f"{self.experiment_name}_best_model"
                     
                     checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
                     self.model_engine.save_checkpoint(checkpoint_dir)
