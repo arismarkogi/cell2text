@@ -309,6 +309,12 @@ class Cell2TextDeepSpeedTrainer:
                 "stage3_max_reuse_distance": 1e9,
                 "gather_16bit_weights_on_model_save": True
             },
+            "activation_checkpointing": {
+                "partition_activations": True,
+                "cpu_checkpointing": False, 
+                "contiguous_memory_optimization": True,
+                "number_checkpoints": 4
+            },
             
             "gradient_clipping": self.args.max_grad_norm,
             "steps_per_print": 10,
@@ -751,7 +757,7 @@ def create_argument_parser():
                         help="Dropout probability at MLP projector")
     parser.add_argument("--decoder_hidden_size", type=int, default=2048,
                         help="Hidden size of the decoder")
-    parser.add_argument("--top_k", type=int, default=512,
+    parser.add_argument("--top_k", type=int, default=384,
                         help="select the top_k most expressed genes after the Geneformer encoder")
     parser.add_argument("--geneformer_path", type=str, required=True,
                         help="Path to pretrained Geneformer model")
@@ -793,7 +799,7 @@ def create_argument_parser():
     # DeepSpeed specific parameters
     parser.add_argument("--batch_size_per_device", type=int, default=2,
                         help="Batch size per device/GPU")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=1,
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=4,
                         help="Number of gradient accumulation steps")
     parser.add_argument("--zero_stage", type=int, default=2, choices=[0, 1, 2, 3],
                         help="DeepSpeed ZeRO optimization stage")
