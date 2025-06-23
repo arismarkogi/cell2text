@@ -145,19 +145,38 @@ def evaluate_cell2text_model(model: Cell2TextModel,
             expression_token_lengths = batch["expression_token_lengths"].to(device)
             text_input_ids = batch["input_ids"].to(device)
             text_attention_mask = batch["attention_mask"].to(device)
-            labels = batch["labels"].to(device) if batch["labels"] is not None else None
             
-            # Calculate loss if labels are available
-            if labels is not None:
-                outputs = model(
-                    expression_tokens=expression_tokens,
-                    expression_token_lengths=expression_token_lengths,
-                    input_ids=text_input_ids,
-                    attention_mask=text_attention_mask,
-                    labels=labels,
-                    return_dict=True
-                )
-                val_losses.append(outputs.loss.item())
+            # Calculate loss if we have target descriptions for reconstruction
+            val_loss = None
+            if "description_input_ids" in batch and batch["description_input_ids"] is not None:
+                # Create labels from description_input_ids for loss calculation
+                description_ids = batch["description_input_ids"].to(device)
+                
+                # Create combined input (prompt + description) and labels for loss calculation
+                combined_input_ids = torch.cat([text_input_ids, description_ids], dim=1)
+                combined_attention_mask = torch.cat([
+                    text_attention_mask, 
+                    torch.ones_like(description_ids, dtype=torch.bool)
+                ], dim=1)
+                
+                # Create labels: ignore prompt tokens (-100), use description tokens for loss
+                prompt_labels = torch.full_like(text_input_ids, fill_value=-100)
+                combined_labels = torch.cat([prompt_labels, description_ids], dim=1)
+                
+                # Forward pass with labels for loss calculation
+                try:
+                    outputs = model(
+                        expression_tokens=expression_tokens,
+                        expression_token_lengths=expression_token_lengths,
+                        input_ids=combined_input_ids,
+                        attention_mask=combined_attention_mask,
+                        labels=combined_labels,
+                        return_dict=True
+                    )
+                    val_loss = outputs.loss.item()
+                    val_losses.append(val_loss)
+                except Exception as e:
+                    print(f"Warning: Could not calculate loss - {e}")
             
             # Generate descriptions
             generated = model.generate_cell_description(
@@ -180,7 +199,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                 target = ""
                 if "description_input_ids" in batch and batch["description_input_ids"] is not None:
                     target_ids = batch["description_input_ids"][j]
-                    target_ids = target_ids[target_ids != -100]
+                    target_ids = target_ids[target_ids != tokenizer.pad_token_id]  # Remove padding
                     target = tokenizer.decode(target_ids, skip_special_tokens=True)
                 else:
                     print(f"Warning: No target text available for sample {j}")
@@ -214,7 +233,8 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                     'bleu_score': bleu,
                     'predicted_cell_type': pred_cell_type,
                     'target_cell_type': target_cell_type,
-                    'cell_type_match': pred_cell_type == target_cell_type
+                    'cell_type_match': pred_cell_type == target_cell_type,
+                    'loss': val_loss
                 }
                 examples.append(example)
             
@@ -234,7 +254,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     if avg_loss is not None:
         print(f"Validation Loss: {avg_loss:.4f}")
     else:
-        print("Validation Loss: N/A (no labels provided)")
+        print("Validation Loss: N/A (could not calculate)")
     print(f"\nCell Type Extraction Metrics:")
     print(f"  Accuracy: {cell_type_metrics['accuracy']:.4f}")
     print(f"  F1 Score: {cell_type_metrics['f1']:.4f}")
@@ -255,6 +275,8 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         print(f"Target Cell Type: '{example['target_cell_type']}'")
         print(f"Predicted Cell Type: '{example['predicted_cell_type']}'")
         print(f"Cell Type Match: {'✓' if example['cell_type_match'] else '✗'}")
+        if example['loss'] is not None:
+            print(f"Loss: {example['loss']:.4f}")
     
     # Print cell type distribution analysis
     print(f"\n{'='*60}")

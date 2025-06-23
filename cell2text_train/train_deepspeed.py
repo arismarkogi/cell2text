@@ -535,7 +535,7 @@ class Cell2TextDeepSpeedTrainer:
         return final_loss <= self.args.target_loss
     
     def full_train(self):
-        """Full training loop with DeepSpeed"""
+        """Full training loop with DeepSpeed and validation score storage"""
         print("="*60)
         print("STARTING DEEPSPEED FULL TRAINING")
         print("="*60)
@@ -549,6 +549,10 @@ class Cell2TextDeepSpeedTrainer:
         
         self.model_engine.train()
         
+        # Initialize validation tracking
+        validation_history = []
+        training_history = []
+        
         total_steps = self.args.epochs * len(self.train_loader)
         progress_bar = tqdm(
             desc="🚀 DeepSpeed Full Training", 
@@ -560,6 +564,9 @@ class Cell2TextDeepSpeedTrainer:
         )
         
         best_val_loss = float('inf')
+        best_val_bleu = 0.0
+        best_val_cell_type_acc = 0.0
+        best_val_cell_type_f1 = 0.0
         steps_since_improvement = 0
         
         for epoch in range(self.args.epochs):
@@ -569,6 +576,16 @@ class Cell2TextDeepSpeedTrainer:
                 loss = self.train_step(batch)
                 epoch_losses.append(loss)
                 self.losses.append(loss)
+                
+                # Store training step info
+                training_step_info = {
+                    'epoch': epoch + 1,
+                    'step': step + 1,
+                    'global_step': self.global_step,
+                    'loss': loss,
+                    'learning_rate': self.lr_scheduler.get_last_lr()[0] if self.lr_scheduler else self.args.decoder_lr
+                }
+                training_history.append(training_step_info)
                 
                 # Update progress bar
                 if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
@@ -580,40 +597,93 @@ class Cell2TextDeepSpeedTrainer:
                 
                 # Validation
                 if self.global_step % self.args.eval_steps == 0 and self.val_loader is not None:
-                    val_loss = self.validate()
-                    if val_loss is not None:
-                        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
-                            print(f"\nValidation Loss at step {self.global_step}: {val_loss:.4f}")
+                    self.model_engine.eval()
+                    
+                    # Run comprehensive validation
+                    val_results = self.validate()
+                    
+                    # Extract validation metrics
+                    val_loss = val_results if isinstance(val_results, float) else val_results.get('validation_loss', None)
+                    val_bleu = val_results.get('bleu', 0.0) if isinstance(val_results, dict) else 0.0
+                    val_cell_type_acc = val_results.get('cell_type_accuracy', 0.0) if isinstance(val_results, dict) else 0.0
+                    val_cell_type_f1 = val_results.get('cell_type_f1', 0.0) if isinstance(val_results, dict) else 0.0
+                    val_cell_type_precision = val_results.get('cell_type_precision', 0.0) if isinstance(val_results, dict) else 0.0
+                    val_cell_type_recall = val_results.get('cell_type_recall', 0.0) if isinstance(val_results, dict) else 0.0
+                    
+                    # Store validation results
+                    validation_record = {
+                        'epoch': epoch + 1,
+                        'step': step + 1,
+                        'global_step': self.global_step,
+                        'validation_loss': val_loss,
+                        'bleu_score': val_bleu,
+                        'cell_type_accuracy': val_cell_type_acc,
+                        'cell_type_f1': val_cell_type_f1,
+                        'cell_type_precision': val_cell_type_precision,
+                        'cell_type_recall': val_cell_type_recall,
+                        'training_loss': np.mean(self.losses[-self.args.eval_steps:]) if len(self.losses) >= self.args.eval_steps else np.mean(self.losses)
+                    }
+                    validation_history.append(validation_record)
+                    
+                    if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                        print(f"\nValidation at step {self.global_step}:")
+                        if val_loss is not None:
+                            print(f"  Loss: {val_loss:.4f}")
+                        print(f"  BLEU: {val_bleu:.4f}")
+                        print(f"  Cell Type Acc: {val_cell_type_acc:.4f}")
+                        print(f"  Cell Type F1: {val_cell_type_f1:.4f}")
+                    
+                    # Early stopping and best model tracking
+                    improved = False
+                    
+                    # Use validation loss as primary metric if available, otherwise use BLEU
+                    if val_loss is not None and val_loss < best_val_loss:
+                        best_val_loss = val_loss
+                        improved = True
+                    elif val_loss is None and val_bleu > best_val_bleu:
+                        best_val_bleu = val_bleu
+                        improved = True
+                    
+                    # Also track best scores for other metrics
+                    if val_bleu > best_val_bleu:
+                        best_val_bleu = val_bleu
+                    if val_cell_type_acc > best_val_cell_type_acc:
+                        best_val_cell_type_acc = val_cell_type_acc
+                    if val_cell_type_f1 > best_val_cell_type_f1:
+                        best_val_cell_type_f1 = val_cell_type_f1
+                    
+                    if improved:
+                        steps_since_improvement = 0
                         
-                        # Early stopping check
-                        if val_loss < best_val_loss:
-                            best_val_loss = val_loss
-                            steps_since_improvement = 0
+                        # Save best model with experiment name
+                        if self.args.save_model:
+                            checkpoint_name = "best_model"
+                            if self.experiment_name:
+                                checkpoint_name = f"{self.experiment_name}_best_model"
                             
-                            # Save best model with experiment name
-                            if self.args.save_model:
-                                checkpoint_name = "best_model"
-                                if self.experiment_name:
-                                    checkpoint_name = f"{self.experiment_name}_best_model"
-                                
-                                checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
-                                self.model_engine.save_checkpoint(checkpoint_dir)
-                                print(f"Best model saved to: {checkpoint_dir}")
-        
-                        else:
-                            steps_since_improvement += self.args.eval_steps
+                            checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
+                            self.model_engine.save_checkpoint(checkpoint_dir)
                             
-                            if self.args.early_stopping > 0 and steps_since_improvement >= self.args.early_stopping:
-                                if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
-                                    print(f"\nEarly stopping triggered after {steps_since_improvement} steps without improvement")
-                                progress_bar.close()
-                                return
-                
-                # # Save checkpoint periodically
-                # if self.global_step % self.args.save_steps == 0 and self.args.save_model:
-                #         checkpoint_dir = os.path.join(self.args.output_dir, f"checkpoint-{self.global_step}")
-                #         self.model_engine.save_checkpoint(checkpoint_dir)
-                #         print(f"Checkpoint saved to: {checkpoint_dir}")
+                            # Save validation history with the best model
+                            validation_history_path = os.path.join(checkpoint_dir, "validation_history.json")
+                            with open(validation_history_path, 'w') as f:
+                                json.dump(self._convert_json_compat(validation_history), f, indent=2)
+                            
+                            print(f"Best model saved to: {checkpoint_dir}")
+                            print(f"Validation history saved to: {validation_history_path}")
+                    else:
+                        steps_since_improvement += self.args.eval_steps
+                        
+                        if self.args.early_stopping > 0 and steps_since_improvement >= self.args.early_stopping:
+                            if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                                print(f"\nEarly stopping triggered after {steps_since_improvement} steps without improvement")
+                            progress_bar.close()
+                            
+                            # Save final training and validation history
+                            self._save_training_history(training_history, validation_history)
+                            return
+                    
+                    self.model_engine.train()  # Switch back to training mode
             
             # End of epoch summary
             epoch_loss = np.mean(epoch_losses)
@@ -623,29 +693,161 @@ class Cell2TextDeepSpeedTrainer:
         progress_bar.close()
         
         # Final evaluation before closing
-        final_val_loss = None
+        final_val_results = None
         if self.val_loader is not None:
-            final_val_loss = self.validate()
+            self.model_engine.eval()
+            final_val_results = self.validate()
+            
+            # Extract final validation metrics
+            final_val_loss = final_val_results if isinstance(final_val_results, float) else final_val_results.get('validation_loss', None)
+            final_val_bleu = final_val_results.get('bleu', 0.0) if isinstance(final_val_results, dict) else 0.0
+            final_val_cell_type_acc = final_val_results.get('cell_type_accuracy', 0.0) if isinstance(final_val_results, dict) else 0.0
+            final_val_cell_type_f1 = final_val_results.get('cell_type_f1', 0.0) if isinstance(final_val_results, dict) else 0.0
+            final_val_cell_type_precision = final_val_results.get('cell_type_precision', 0.0) if isinstance(final_val_results, dict) else 0.0
+            final_val_cell_type_recall = final_val_results.get('cell_type_recall', 0.0) if isinstance(final_val_results, dict) else 0.0
+            
+            # Add final validation to history
+            final_validation_record = {
+                'epoch': self.args.epochs,
+                'step': 'final',
+                'global_step': self.global_step,
+                'validation_loss': final_val_loss,
+                'bleu_score': final_val_bleu,
+                'cell_type_accuracy': final_val_cell_type_acc,
+                'cell_type_f1': final_val_cell_type_f1,
+                'cell_type_precision': final_val_cell_type_precision,
+                'cell_type_recall': final_val_cell_type_recall,
+                'training_loss': np.mean(self.losses[-100:]) if len(self.losses) >= 100 else np.mean(self.losses),
+                'is_final': True
+            }
+            validation_history.append(final_validation_record)
+            
             if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
-                print(f"\nFinal Validation Loss: {final_val_loss:.4f}")
+                print(f"\nFinal Validation Results:")
+                if final_val_loss is not None:
+                    print(f"  Loss: {final_val_loss:.4f}")
+                print(f"  BLEU: {final_val_bleu:.4f}")
+                print(f"  Cell Type Acc: {final_val_cell_type_acc:.4f}")
+                print(f"  Cell Type F1: {final_val_cell_type_f1:.4f}")
 
-            if final_val_loss < best_val_loss:
+            # Check if final model is better than the best saved model
+            final_improved = False
+            if final_val_loss is not None and final_val_loss < best_val_loss:
                 best_val_loss = final_val_loss
-                if self.args.save_model:
-                    checkpoint_name = "best_model"
-                    if self.experiment_name:
-                        checkpoint_name = f"{self.experiment_name}_best_model"
-                    
-                    checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
-                    self.model_engine.save_checkpoint(checkpoint_dir)
-                    print(f"New best model saved after final evaluation to: {checkpoint_dir}")
-            else:
+                final_improved = True
+            elif final_val_loss is None and final_val_bleu > best_val_bleu:
+                best_val_bleu = final_val_bleu
+                final_improved = True
+                
+            if final_improved and self.args.save_model:
+                checkpoint_name = "best_model"
+                if self.experiment_name:
+                    checkpoint_name = f"{self.experiment_name}_best_model"
+                
+                checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
+                self.model_engine.save_checkpoint(checkpoint_dir)
+                print(f"New best model saved after final evaluation to: {checkpoint_dir}")
+            elif not final_improved:
                 print("Final model did not outperform the best model. No new best model saved.")
         else:
             print("No validation loader available, skipping final evaluation.")
         
+        # Save complete training and validation history
+        self._save_training_history(training_history, validation_history)
+        
         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
             print(f"\nFull training completed!")
+            print(f"Best validation loss: {best_val_loss:.4f}")
+            print(f"Best BLEU score: {best_val_bleu:.4f}")
+            print(f"Best cell type accuracy: {best_val_cell_type_acc:.4f}")
+            print(f"Best cell type F1: {best_val_cell_type_f1:.4f}")
+
+    def _save_training_history(self, training_history, validation_history):
+        """Save training and validation history to files"""
+        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+            # Save complete training history
+            training_history_path = os.path.join(self.args.output_dir, "training_history.json")
+            with open(training_history_path, 'w') as f:
+                json.dump(self._convert_json_compat(training_history), f, indent=2)
+            
+            # Save validation history
+            validation_history_path = os.path.join(self.args.output_dir, "validation_history.json")
+            with open(validation_history_path, 'w') as f:
+                json.dump(self._convert_json_compat(validation_history), f, indent=2)
+            
+            # Save summary statistics
+            summary_stats = self._compute_training_summary(training_history, validation_history)
+            summary_path = os.path.join(self.args.output_dir, "training_summary_stats.json")
+            with open(summary_path, 'w') as f:
+                json.dump(self._convert_json_compat(summary_stats), f, indent=2)
+            
+            print(f"Training history saved to: {training_history_path}")
+            print(f"Validation history saved to: {validation_history_path}")
+            print(f"Training summary stats saved to: {summary_path}")
+
+    def _compute_training_summary(self, training_history, validation_history):
+        """Compute summary statistics from training and validation history"""
+        summary = {
+            'training_stats': {},
+            'validation_stats': {},
+            'best_metrics': {}
+        }
+        
+        if training_history:
+            losses = [entry['loss'] for entry in training_history]
+            summary['training_stats'] = {
+                'total_steps': len(training_history),
+                'final_loss': losses[-1] if losses else None,
+                'min_loss': min(losses) if losses else None,
+                'max_loss': max(losses) if losses else None,
+                'avg_loss': np.mean(losses) if losses else None,
+                'loss_std': np.std(losses) if losses else None
+            }
+        
+        if validation_history:
+            val_losses = [entry['validation_loss'] for entry in validation_history if entry['validation_loss'] is not None]
+            bleu_scores = [entry['bleu_score'] for entry in validation_history]
+            cell_type_accs = [entry['cell_type_accuracy'] for entry in validation_history]
+            cell_type_f1s = [entry['cell_type_f1'] for entry in validation_history]
+            
+            summary['validation_stats'] = {
+                'total_evaluations': len(validation_history),
+                'avg_bleu': np.mean(bleu_scores) if bleu_scores else None,
+                'avg_cell_type_accuracy': np.mean(cell_type_accs) if cell_type_accs else None,
+                'avg_cell_type_f1': np.mean(cell_type_f1s) if cell_type_f1s else None,
+            }
+            
+            if val_losses:
+                summary['validation_stats']['avg_val_loss'] = np.mean(val_losses)
+                summary['validation_stats']['min_val_loss'] = min(val_losses)
+                summary['validation_stats']['max_val_loss'] = max(val_losses)
+            
+            # Best metrics
+            summary['best_metrics'] = {
+                'best_bleu': max(bleu_scores) if bleu_scores else None,
+                'best_cell_type_accuracy': max(cell_type_accs) if cell_type_accs else None,
+                'best_cell_type_f1': max(cell_type_f1s) if cell_type_f1s else None,
+            }
+            
+            if val_losses:
+                summary['best_metrics']['best_val_loss'] = min(val_losses)
+        
+        return summary
+
+    def _convert_json_compat(self, obj):
+        """Convert numpy types to JSON-compatible types"""
+        if isinstance(obj, dict):
+            return {k: self._convert_json_compat(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_json_compat(v) for v in obj]
+        elif isinstance(obj, (np.float32, np.float64, np.floating)):
+            return float(obj)
+        elif isinstance(obj, (np.int32, np.int64, np.integer)):
+            return int(obj)
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        else:
+            return obj
         
     def run_evaluation(self):
         """Run evaluation"""

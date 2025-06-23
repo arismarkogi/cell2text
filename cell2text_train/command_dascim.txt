@@ -13,7 +13,7 @@ deepspeed --num_gpus 2 /home/arism/cell2text/cell2text_train/train_deepspeed.py 
   --mlp_hidden_size 2048 \
   --mode "full" \
   --experiment_name "full_mlp_95000_samples_1epoch_topk256_batchsizeperdevie4_gradacc8_mlphiddensize2048" \
-  --eval_steps  1500 \
+  --eval_steps  50 \
    --num_latents 256 \
    --num_heads 4 \
    --ff_mult 1.5
