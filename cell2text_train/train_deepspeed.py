@@ -604,9 +604,9 @@ class Cell2TextDeepSpeedTrainer:
                             
                             # Save best model with experiment name
                             if self.args.save_model:
-                                checkpoint_name = "best_model"
+                                checkpoint_name = "best_model.pt"
                                 if self.experiment_name:
-                                    checkpoint_name = f"{self.experiment_name}_best_model"
+                                    checkpoint_name = f"{self.experiment_name}_best_model.pt"
                                 
                                 checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
                                 self.model_engine.save_checkpoint(checkpoint_dir)
@@ -634,15 +634,27 @@ class Cell2TextDeepSpeedTrainer:
         
         progress_bar.close()
         
-        # Save final model
-        if self.args.save_model:
-            checkpoint_name = "final_model"
-            if self.experiment_name:
-                checkpoint_name = f"{self.experiment_name}_final_model"
-            
-            checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
-            self.model_engine.save_checkpoint(checkpoint_dir)
-            print(f"Final model saved to: {checkpoint_dir}")
+        # Final evaluation before closing
+        final_val_loss = None
+        if self.val_loader is not None:
+            final_val_loss = self.validate()
+            if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                print(f"\nFinal Validation Loss: {final_val_loss:.4f}")
+
+            if final_val_loss < best_val_loss:
+                best_val_loss = final_val_loss
+                if self.args.save_model:
+                    checkpoint_name = "best_model.pt"
+                    if self.experiment_name:
+                        checkpoint_name = f"{self.experiment_name}_best_model.pt"
+                    
+                    checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
+                    self.model_engine.save_checkpoint(checkpoint_dir)
+                    print(f"New best model saved after final evaluation to: {checkpoint_dir}")
+            else:
+                print("Final model did not outperform the best model. No new best model saved.")
+        else:
+            print("No validation loader available, skipping final evaluation.")
         
         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
             print(f"\nFull training completed!")

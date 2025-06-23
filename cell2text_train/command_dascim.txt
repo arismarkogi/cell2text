@@ -7,12 +7,12 @@ deepspeed --num_gpus 2 /home/arism/cell2text/cell2text_train/train_deepspeed.py 
   --batch_size_per_device 8 \
   --gradient_accumulation_steps 4 \
   --top_k 256 \
-  --epochs 1 \
+  --epochs 2 \
   --decoder_hidden_size 3072 \
-  --projector "perceiver" \
+  --projector "mlp" \
   --mlp_hidden_size 2048 \
   --mode "full" \
-  --experiment_name "full_mlp_95000_samples_1epoch" \
+  --experiment_name "full_mlp_95000_samples_2epochs_topk256" \
   --eval_steps 2000 \
    --num_latents 128 \
    --num_heads 4 \
