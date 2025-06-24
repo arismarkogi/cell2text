@@ -504,7 +504,7 @@ class Cell2TextDeepSpeedTrainer:
             checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
             
             # Use DeepSpeed's save_checkpoint instead of manual state_dict saving
-            self.model_engine.save_checkpoint(checkpoint_dir, tag=checkpoint_name)
+            self.model_engine.save_checkpoint(checkpoint_dir, tag=checkpoint_name, exclude_frozen_parameters=True)
             
             # Save training info with experiment context (only on rank 0)
             if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
@@ -674,7 +674,7 @@ class Cell2TextDeepSpeedTrainer:
                             checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
                             
                             # Use DeepSpeed's save_checkpoint function
-                            self.model_engine.save_checkpoint(checkpoint_dir, tag=checkpoint_name)
+                            self.model_engine.save_checkpoint(checkpoint_dir, tag=checkpoint_name, exclude_frozen_parameters=True)
                             
                             # On Rank 0, save supplementary files
                             if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
@@ -763,7 +763,7 @@ class Cell2TextDeepSpeedTrainer:
                 checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
                 
                 # Use DeepSpeed's save_checkpoint function
-                self.model_engine.save_checkpoint(checkpoint_dir, tag=checkpoint_name)
+                self.model_engine.save_checkpoint(checkpoint_dir, tag=checkpoint_name, exclude_frozen_parameters=True)
                 
                 if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
                     print(f"New best model saved after final evaluation to: {checkpoint_dir}")
