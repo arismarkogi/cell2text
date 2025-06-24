@@ -985,6 +985,21 @@ class Cell2TextDeepSpeedTrainer:
         results = self.run_evaluation()
         
         return target_reached, results
+    
+    def _convert_json_compat(self, obj):
+        if isinstance(obj, dict):
+            return {k: self._convert_json_compat(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_json_compat(v) for v in obj]
+        elif isinstance(obj, (np.float32, np.float64, np.floating)):
+            return float(obj)
+        elif isinstance(obj, (np.int32, np.int64, np.integer)):
+            return int(obj)
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        else:
+            return obj
+
 
 
 def create_argument_parser():
