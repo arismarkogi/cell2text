@@ -44,9 +44,9 @@ class Cell2TextConfig(PretrainedConfig):
         
         # Generation parameters - Fixed parameter names to match Cell2TextLlamaConfig
         max_new_tokens=500,  # Changed from max_length
-        num_beams=4,
+        num_beams=1,
         early_stopping=True,
-        no_repeat_ngram_size=3,
+        no_repeat_ngram_size=2,
         temperature=1.0,
         top_p=1.0,
         

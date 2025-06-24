@@ -315,7 +315,13 @@ class Cell2TextDeepSpeedTrainer:
                 "contiguous_memory_optimization": True,
                 "number_checkpoints": 4
             },
-            
+            "checkpoint": {
+                "save_optimizer_states": False,
+                "save_lr_scheduler_states": False,
+                "load_optimizer_states": False,
+                "load_lr_scheduler_states": False
+            },
+                        
             "gradient_clipping": self.args.max_grad_norm,
             "steps_per_print": 10,
             "wall_clock_breakdown": False
@@ -970,7 +976,7 @@ def create_argument_parser():
                         help="Maximum number of cells")
     parser.add_argument("--max_length", type=int, default=500,
                         help="Maximum length of generated text")
-    parser.add_argument("--num_beams", type=int, default=4,
+    parser.add_argument("--num_beams", type=int, default=1,
                         help="Number of beams for beam search")
     
     # LoRA parameters
