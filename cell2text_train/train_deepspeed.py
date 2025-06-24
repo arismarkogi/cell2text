@@ -499,7 +499,7 @@ class Cell2TextDeepSpeedTrainer:
             print(f"Target reached: {'✓' if final_loss <= self.args.target_loss else '✗'}")
         
         # Save the overfitted model (only on rank 0)
-        if self.args.save_model:
+        if self.args.save_model and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0):
             checkpoint_name = "overfitted_sanity_model"
             if self.experiment_name:
                 checkpoint_name = f"{self.experiment_name}_overfitted_sanity_model"
@@ -662,7 +662,7 @@ class Cell2TextDeepSpeedTrainer:
                         steps_since_improvement = 0
                         
                         # Save best model with experiment name
-                        if self.args.save_model:
+                        if self.args.save_model and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0):
                             checkpoint_name = "best_model"
                             if self.experiment_name:
                                 checkpoint_name = f"{self.experiment_name}_best_model"
@@ -745,7 +745,7 @@ class Cell2TextDeepSpeedTrainer:
                 best_val_bleu = final_val_bleu
                 final_improved = True
                 
-            if final_improved and self.args.save_model:
+            if final_improved and self.args.save_model and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0):
                 checkpoint_name = "best_model"
                 if self.experiment_name:
                     checkpoint_name = f"{self.experiment_name}_best_model"
