@@ -74,9 +74,7 @@ class Cell2TextDeepSpeedTrainer:
         self.lr_scheduler = None
         self.global_step = 0
         self.losses = []
-        
-        # Initialize DeepSpeed
-        deepspeed.init_distributed()
+         
         
     def setup_device(self):
         """Setup device for training with DeepSpeed"""
@@ -252,15 +250,15 @@ class Cell2TextDeepSpeedTrainer:
         """Create DeepSpeed configuration"""
         total_steps = self.args.epochs * len(self.train_loader) // self.args.gradient_accumulation_steps
         
+
         ds_config = {
-            "train_batch_size": self.args.batch_size_per_device * self.args.gradient_accumulation_steps * torch.distributed.get_world_size() if torch.distributed.is_initialized() else self.args.batch_size_per_device * self.args.gradient_accumulation_steps,
             "train_micro_batch_size_per_gpu": self.args.batch_size_per_device,
             "gradient_accumulation_steps": self.args.gradient_accumulation_steps,
             
             "optimizer": {
                 "type": "AdamW",
                 "params": {
-                    "lr": self.args.decoder_lr,  # Will be overridden by parameter groups
+                    "lr": self.args.decoder_lr,  
                     "betas": [0.9, 0.999],
                     "eps": 1e-8,
                     "weight_decay": self.args.weight_decay
@@ -498,45 +496,47 @@ class Cell2TextDeepSpeedTrainer:
             print(f"Final loss: {final_loss:.4f}")
             print(f"Target reached: {'✓' if final_loss <= self.args.target_loss else '✗'}")
         
-        # Save the overfitted model (only on rank 0)
-        if self.args.save_model and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0):
+        if self.args.save_model:
             checkpoint_name = "overfitted_sanity_model"
             if self.experiment_name:
                 checkpoint_name = f"{self.experiment_name}_overfitted_sanity_model"
             
             checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
-            self.model_engine.save_checkpoint(checkpoint_dir)
             
-            # Save training info with experiment context
-            info_path = os.path.join(checkpoint_dir, "training_info.json")
-            info_dict = {
-                "experiment_name": self.experiment_name,
-                "final_loss": final_loss,
-                "epochs_taken": epoch,
-                "target_reached": final_loss <= self.args.target_loss,
-                "losses": self.losses,
-                "training_mode": self.args.mode,
-                "projector_type": self.args.projector
-            }
+            # Use DeepSpeed's save_checkpoint instead of manual state_dict saving
+            self.model_engine.save_checkpoint(checkpoint_dir, tag=checkpoint_name)
+            
+            # Save training info with experiment context (only on rank 0)
+            if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                info_path = os.path.join(checkpoint_dir, "training_info.json")
+                info_dict = {
+                    "experiment_name": self.experiment_name,
+                    "final_loss": final_loss,
+                    "epochs_taken": epoch,
+                    "target_reached": final_loss <= self.args.target_loss,
+                    "losses": self.losses,
+                    "training_mode": self.args.mode,
+                    "projector_type": self.args.projector
+                }
 
-            def convert_json_compat(obj):
-                if isinstance(obj, dict):
-                    return {k: convert_json_compat(v) for k, v in obj.items()}
-                elif isinstance(obj, list):
-                    return [convert_json_compat(v) for v in obj]
-                elif isinstance(obj, (np.float32, np.float64, np.floating)):
-                    return float(obj)
-                elif isinstance(obj, (np.int32, np.int64, np.integer)):
-                    return int(obj)
-                elif isinstance(obj, np.bool_):
-                    return bool(obj)
-                else:
-                    return obj
+                def convert_json_compat(obj):
+                    if isinstance(obj, dict):
+                        return {k: convert_json_compat(v) for k, v in obj.items()}
+                    elif isinstance(obj, list):
+                        return [convert_json_compat(v) for v in obj]
+                    elif isinstance(obj, (np.float32, np.float64, np.floating)):
+                        return float(obj)
+                    elif isinstance(obj, (np.int32, np.int64, np.integer)):
+                        return int(obj)
+                    elif isinstance(obj, np.bool_):
+                        return bool(obj)
+                    else:
+                        return obj
 
-            with open(info_path, 'w') as f:
-                json.dump(convert_json_compat(info_dict), f, indent=2)
-                        
-            print(f"Overfitted model saved to: {checkpoint_dir}")
+                with open(info_path, 'w') as f:
+                    json.dump(convert_json_compat(info_dict), f, indent=2)
+                            
+                print(f"Overfitted model saved to: {checkpoint_dir}")
         
         return final_loss <= self.args.target_loss
     
@@ -658,25 +658,35 @@ class Cell2TextDeepSpeedTrainer:
                     if val_cell_type_f1 > best_val_cell_type_f1:
                         best_val_cell_type_f1 = val_cell_type_f1
                     
+
+                    if torch.distributed.is_initialized():
+                        torch.distributed.barrier()
+                    
+                    
                     if improved:
                         steps_since_improvement = 0
                         
-                        # Save best model with experiment name
-                        if self.args.save_model and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0):
+                        if self.args.save_model:
                             checkpoint_name = "best_model"
                             if self.experiment_name:
                                 checkpoint_name = f"{self.experiment_name}_best_model"
                             
                             checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
-                            self.model_engine.save_checkpoint(checkpoint_dir)
                             
-                            # Save validation history with the best model
-                            validation_history_path = os.path.join(checkpoint_dir, "validation_history.json")
-                            with open(validation_history_path, 'w') as f:
-                                json.dump(self._convert_json_compat(validation_history), f, indent=2)
+                            # Use DeepSpeed's save_checkpoint function
+                            self.model_engine.save_checkpoint(checkpoint_dir, tag=checkpoint_name)
                             
-                            print(f"Best model saved to: {checkpoint_dir}")
-                            print(f"Validation history saved to: {validation_history_path}")
+                            # On Rank 0, save supplementary files
+                            if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                                # Save validation history
+                                validation_history_path = os.path.join(checkpoint_dir, "validation_history.json")
+                                with open(validation_history_path, 'w') as f:
+                                    json.dump(self._convert_json_compat(validation_history), f, indent=2)
+                                
+                                print(f"Best model checkpoint saved to: {checkpoint_dir}")
+                                print(f"Validation history saved to: {validation_history_path}")
+
+
                     else:
                         steps_since_improvement += self.args.eval_steps
                         
@@ -745,16 +755,21 @@ class Cell2TextDeepSpeedTrainer:
                 best_val_bleu = final_val_bleu
                 final_improved = True
                 
-            if final_improved and self.args.save_model and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0):
+            if final_improved and self.args.save_model:
                 checkpoint_name = "best_model"
                 if self.experiment_name:
                     checkpoint_name = f"{self.experiment_name}_best_model"
                 
                 checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
-                self.model_engine.save_checkpoint(checkpoint_dir)
-                print(f"New best model saved after final evaluation to: {checkpoint_dir}")
+                
+                # Use DeepSpeed's save_checkpoint function
+                self.model_engine.save_checkpoint(checkpoint_dir, tag=checkpoint_name)
+                
+                if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                    print(f"New best model saved after final evaluation to: {checkpoint_dir}")
             elif not final_improved:
-                print("Final model did not outperform the best model. No new best model saved.")
+                if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                    print("Final model did not outperform the best model. No new best model saved.")
         else:
             print("No validation loader available, skipping final evaluation.")
         
@@ -769,91 +784,140 @@ class Cell2TextDeepSpeedTrainer:
             print(f"Best cell type F1: {best_val_cell_type_f1:.4f}")
 
     def _save_training_history(self, training_history, validation_history):
-        """Save training and validation history to files"""
+        """Save training and validation history to files with enhanced metrics tracking"""
         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
-            # Save complete training history
-            training_history_path = os.path.join(self.args.output_dir, "training_history.json")
+            # Enhanced training history with loss progression
+            enhanced_training_history = {
+                'training_steps': training_history,
+                'loss_progression': {
+                    'all_losses': self.losses,
+                    'loss_statistics': {
+                        'initial_loss': self.losses[0] if self.losses else None,
+                        'final_loss': self.losses[-1] if self.losses else None,
+                        'min_loss': min(self.losses) if self.losses else None,
+                        'max_loss': max(self.losses) if self.losses else None,
+                        'avg_loss': np.mean(self.losses) if self.losses else None,
+                        'loss_std': np.std(self.losses) if self.losses else None,
+                        'total_steps': len(self.losses)
+                    }
+                }
+            }
+            
+            # Enhanced validation history with metric progressions
+            enhanced_validation_history = {
+                'validation_steps': validation_history,
+                'metric_progressions': {}
+            }
+            
+            if validation_history:
+                # Extract metric progressions
+                metrics_to_track = [
+                    'validation_loss', 'bleu_score', 'cell_type_accuracy', 
+                    'cell_type_f1', 'cell_type_precision', 'cell_type_recall'
+                ]
+                
+                for metric in metrics_to_track:
+                    values = [entry.get(metric) for entry in validation_history if entry.get(metric) is not None]
+                    if values:
+                        enhanced_validation_history['metric_progressions'][metric] = {
+                            'all_values': values,
+                            'statistics': {
+                                'initial_value': values[0],
+                                'final_value': values[-1],
+                                'best_value': min(values) if 'loss' in metric else max(values),
+                                'worst_value': max(values) if 'loss' in metric else min(values),
+                                'avg_value': np.mean(values),
+                                'std_value': np.std(values),
+                                'total_evaluations': len(values),
+                                'improvement': values[-1] - values[0] if len(values) > 1 else 0
+                            }
+                        }
+            
+            # Save enhanced histories
+            training_history_path = os.path.join(self.args.output_dir, "enhanced_training_history.json")
             with open(training_history_path, 'w') as f:
-                json.dump(self._convert_json_compat(training_history), f, indent=2)
+                json.dump(self._convert_json_compat(enhanced_training_history), f, indent=2)
             
-            # Save validation history
-            validation_history_path = os.path.join(self.args.output_dir, "validation_history.json")
+            validation_history_path = os.path.join(self.args.output_dir, "enhanced_validation_history.json")
             with open(validation_history_path, 'w') as f:
-                json.dump(self._convert_json_compat(validation_history), f, indent=2)
+                json.dump(self._convert_json_compat(enhanced_validation_history), f, indent=2)
             
-            # Save summary statistics
-            summary_stats = self._compute_training_summary(training_history, validation_history)
-            summary_path = os.path.join(self.args.output_dir, "training_summary_stats.json")
+            # Save summary statistics (enhanced version)
+            summary_stats = self._compute_enhanced_training_summary(enhanced_training_history, enhanced_validation_history)
+            summary_path = os.path.join(self.args.output_dir, "enhanced_training_summary_stats.json")
             with open(summary_path, 'w') as f:
                 json.dump(self._convert_json_compat(summary_stats), f, indent=2)
             
-            print(f"Training history saved to: {training_history_path}")
-            print(f"Validation history saved to: {validation_history_path}")
-            print(f"Training summary stats saved to: {summary_path}")
+            print(f"Enhanced training history saved to: {training_history_path}")
+            print(f"Enhanced validation history saved to: {validation_history_path}")
+            print(f"Enhanced training summary stats saved to: {summary_path}")
 
-    def _compute_training_summary(self, training_history, validation_history):
-        """Compute summary statistics from training and validation history"""
+
+    def _compute_enhanced_training_summary(self, enhanced_training_history, enhanced_validation_history):
+        """Compute enhanced summary statistics from training and validation history"""
         summary = {
             'training_stats': {},
             'validation_stats': {},
-            'best_metrics': {}
+            'best_metrics': {},
+            'training_progression': {},
+            'validation_progression': {}
         }
         
-        if training_history:
-            losses = [entry['loss'] for entry in training_history]
-            summary['training_stats'] = {
-                'total_steps': len(training_history),
-                'final_loss': losses[-1] if losses else None,
-                'min_loss': min(losses) if losses else None,
-                'max_loss': max(losses) if losses else None,
-                'avg_loss': np.mean(losses) if losses else None,
-                'loss_std': np.std(losses) if losses else None
-            }
+        # Enhanced training stats
+        if enhanced_training_history.get('loss_progression'):
+            loss_stats = enhanced_training_history['loss_progression']['loss_statistics']
+            summary['training_stats'] = loss_stats.copy()
+            
+            # Add progression analysis
+            if enhanced_training_history['loss_progression']['all_losses']:
+                losses = enhanced_training_history['loss_progression']['all_losses']
+                summary['training_progression'] = {
+                    'loss_trend': 'decreasing' if losses[-1] < losses[0] else 'increasing',
+                    'loss_reduction_percentage': ((losses[0] - losses[-1]) / losses[0] * 100) if losses[0] != 0 else 0,
+                    'convergence_point': self._find_convergence_point(losses)
+                }
         
-        if validation_history:
-            val_losses = [entry['validation_loss'] for entry in validation_history if entry['validation_loss'] is not None]
-            bleu_scores = [entry['bleu_score'] for entry in validation_history]
-            cell_type_accs = [entry['cell_type_accuracy'] for entry in validation_history]
-            cell_type_f1s = [entry['cell_type_f1'] for entry in validation_history]
+        # Enhanced validation stats
+        if enhanced_validation_history.get('metric_progressions'):
+            metric_progs = enhanced_validation_history['metric_progressions']
             
-            summary['validation_stats'] = {
-                'total_evaluations': len(validation_history),
-                'avg_bleu': np.mean(bleu_scores) if bleu_scores else None,
-                'avg_cell_type_accuracy': np.mean(cell_type_accs) if cell_type_accs else None,
-                'avg_cell_type_f1': np.mean(cell_type_f1s) if cell_type_f1s else None,
-            }
+            summary['validation_stats'] = {}
+            summary['validation_progression'] = {}
+            summary['best_metrics'] = {}
             
-            if val_losses:
-                summary['validation_stats']['avg_val_loss'] = np.mean(val_losses)
-                summary['validation_stats']['min_val_loss'] = min(val_losses)
-                summary['validation_stats']['max_val_loss'] = max(val_losses)
-            
-            # Best metrics
-            summary['best_metrics'] = {
-                'best_bleu': max(bleu_scores) if bleu_scores else None,
-                'best_cell_type_accuracy': max(cell_type_accs) if cell_type_accs else None,
-                'best_cell_type_f1': max(cell_type_f1s) if cell_type_f1s else None,
-            }
-            
-            if val_losses:
-                summary['best_metrics']['best_val_loss'] = min(val_losses)
+            for metric, data in metric_progs.items():
+                stats = data['statistics']
+                summary['validation_stats'][f'{metric}_stats'] = stats
+                summary['best_metrics'][f'best_{metric}'] = stats['best_value']
+                
+                # Progression analysis
+                if len(data['all_values']) > 1:
+                    values = data['all_values']
+                    summary['validation_progression'][f'{metric}_trend'] = {
+                        'direction': 'improving' if stats['improvement'] > 0 and 'loss' not in metric else 
+                                   'improving' if stats['improvement'] < 0 and 'loss' in metric else 'degrading',
+                        'improvement_percentage': abs(stats['improvement'] / values[0] * 100) if values[0] != 0 else 0,
+                        'stability': 'stable' if stats['std_value'] < (stats['avg_value'] * 0.1) else 'unstable'
+                    }
         
         return summary
-
-    def _convert_json_compat(self, obj):
-        """Convert numpy types to JSON-compatible types"""
-        if isinstance(obj, dict):
-            return {k: self._convert_json_compat(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [self._convert_json_compat(v) for v in obj]
-        elif isinstance(obj, (np.float32, np.float64, np.floating)):
-            return float(obj)
-        elif isinstance(obj, (np.int32, np.int64, np.integer)):
-            return int(obj)
-        elif isinstance(obj, np.bool_):
-            return bool(obj)
-        else:
-            return obj
+    
+    def _find_convergence_point(self, losses, window_size=100, threshold=0.01):
+        """Find the point where loss starts to converge"""
+        if len(losses) < window_size * 2:
+            return None
+        
+        for i in range(window_size, len(losses) - window_size):
+            window1 = losses[i-window_size:i]
+            window2 = losses[i:i+window_size]
+            
+            avg1 = np.mean(window1)
+            avg2 = np.mean(window2)
+            
+            if abs(avg1 - avg2) / avg1 < threshold:
+                return i
+        
+        return None
         
     def run_evaluation(self):
         """Run evaluation"""
@@ -1004,7 +1068,7 @@ def create_argument_parser():
                         help="Freeze decoder parameters (only applies if not using LoRA for decoder)")
     
     # DeepSpeed specific parameters
-    parser.add_argument("--batch_size_per_device", type=int, default=2,
+    parser.add_argument("--batch_size_per_device", type=int, default=8,
                         help="Batch size per device/GPU")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=4,
                         help="Number of gradient accumulation steps")
