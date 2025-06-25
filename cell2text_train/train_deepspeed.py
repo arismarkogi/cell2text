@@ -1,4 +1,4 @@
-#!/home/arism/miniconda3/envs/cell2text_env/bin/python
+#!/home/arism/miniconda3/envs/cell2text_env/bin/python3
 
 import torch
 import pandas as pd
@@ -131,7 +131,7 @@ class Cell2TextDeepSpeedTrainer:
                 sanity_dataset, 
                 batch_size=self.args.batch_size_per_device, 
                 shuffle=(None),      
-                                
+                num_workers=0,
                 collate_fn=full_train_dataset.collate_fn(mode="train")
             )
             print(f"Sanity dataset loaded. Size: {len(sanity_dataset)}")
@@ -141,6 +141,7 @@ class Cell2TextDeepSpeedTrainer:
                 sanity_dataset, 
                 batch_size=self.args.batch_size_per_device, 
                 shuffle=(None),
+                num_workers=0,
                 collate_fn=full_train_dataset.collate_fn(mode="inference")
             )
         else:
@@ -149,6 +150,7 @@ class Cell2TextDeepSpeedTrainer:
                 full_train_dataset, 
                 batch_size=self.args.batch_size_per_device, 
                 shuffle=True,
+                num_workers=0,
                 collate_fn=full_train_dataset.collate_fn(mode="train")
             )
             print(f"Full training dataset loaded. Size: {len(full_train_dataset)}")
@@ -162,9 +164,10 @@ class Cell2TextDeepSpeedTrainer:
                                                  num_latents=self.args.num_latents)
                 
                 self.val_loader = DataLoader(
-                    val_dataset, 
+                    val_dataset,
                     batch_size=self.args.batch_size_per_device, 
                     shuffle=False,
+                    num_workers=0,
                     collate_fn=val_dataset.collate_fn(mode="inference")
                 )
                 print(f"Validation dataset loaded. Size: {len(val_dataset)}")
@@ -316,7 +319,11 @@ class Cell2TextDeepSpeedTrainer:
         
 
         print("Preparing train_loader and model...")
-        self.model, self.train_loader,  self.val_loader, self.optimizer, self.lr_scheduler = self.accelerator.prepare(self.model,  self.train_loader, self.val_loader, self.optimizer, self.lr_scheduler))
+        self.model, self.train_loader,  self.val_loader, self.optimizer, self.lr_scheduler = self.accelerator.prepare(self.model,  
+                                                                                                                      self.train_loader, 
+                                                                                                                      self.val_loader,
+                                                                                                                      self.optimizer, 
+                                                                                                                      self.lr_scheduler)
 
  
         
