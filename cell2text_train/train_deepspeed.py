@@ -1,3 +1,5 @@
+#!/home/arism/miniconda3/envs/cell2text_env/bin/python
+
 import torch
 import pandas as pd
 import numpy as np
@@ -79,6 +81,7 @@ class Cell2TextDeepSpeedTrainer:
         self.accelerator = Accelerator(
             gradient_accumulation_steps=args.gradient_accumulation_steps,
             mixed_precision='fp16' if args.fp16 else ('bf16' if args.bf16 else 'no'),
+
             log_with=None,  # Add logging if needed
         )
         self.device = self.accelerator.device
@@ -119,8 +122,6 @@ class Cell2TextDeepSpeedTrainer:
                                                projector=self.args.projector, 
                                                num_latents=self.args.num_latents)
         
-        use_ddp = torch.distributed.is_available() and torch.distributed.is_initialized()
-        train_sampler = DistributedSampler(full_train_dataset, shuffle=True) if use_ddp else None
         
         if self.args.mode == "sanity":
             # Create small subset for sanity check
@@ -129,8 +130,8 @@ class Cell2TextDeepSpeedTrainer:
             self.train_loader = DataLoader(
                 sanity_dataset, 
                 batch_size=self.args.batch_size_per_device, 
-                shuffle=(train_sampler is None),      
-                sampler=train_sampler,                
+                shuffle=(None),      
+                                
                 collate_fn=full_train_dataset.collate_fn(mode="train")
             )
             print(f"Sanity dataset loaded. Size: {len(sanity_dataset)}")
@@ -139,8 +140,7 @@ class Cell2TextDeepSpeedTrainer:
             self.val_loader = DataLoader(
                 sanity_dataset, 
                 batch_size=self.args.batch_size_per_device, 
-                shuffle=(train_sampler is None),
-                sampler=train_sampler,
+                shuffle=(None),
                 collate_fn=full_train_dataset.collate_fn(mode="inference")
             )
         else:
@@ -161,7 +161,6 @@ class Cell2TextDeepSpeedTrainer:
                                                  projector=self.args.projector, 
                                                  num_latents=self.args.num_latents)
                 
-                val_sampler = DistributedSampler(val_dataset, shuffle=False) if use_ddp else None
                 self.val_loader = DataLoader(
                     val_dataset, 
                     batch_size=self.args.batch_size_per_device, 
@@ -270,13 +269,14 @@ class Cell2TextDeepSpeedTrainer:
     
     def setup_model_and_optimizer(self):
         """Setup model, optimizer, and prepare with Accelerate"""
+        print("Setting up optimizer...")
+        
         # Create optimizer with different parameter groups
         parameters = []
         
         # Projector parameters
         projector_name = "cell_to_embedding" if self.args.projector == "mlp" else "perceiver_projector"
         projector_module = getattr(self.model, projector_name, None)
-        
         if projector_module:
             for name, param in projector_module.named_parameters():
                 if param.requires_grad:
@@ -293,14 +293,17 @@ class Cell2TextDeepSpeedTrainer:
                     "lr": self.args.decoder_lr
                 })
         
+        print(f"Created {len(parameters)} parameter groups")
+        
         # Create optimizer
         self.optimizer = AdamW(
             parameters,
-            lr=self.args.decoder_lr,  # Default LR
+            lr=self.args.decoder_lr,
             weight_decay=self.args.weight_decay,
             betas=(0.9, 0.999),
             eps=1e-8
         )
+        print("Optimizer created")
         
         # Create scheduler
         total_steps = self.args.epochs * len(self.train_loader) // self.args.gradient_accumulation_steps
@@ -309,14 +312,15 @@ class Cell2TextDeepSpeedTrainer:
             num_warmup_steps=self.args.warmup_steps,
             num_training_steps=total_steps
         )
+        print("Scheduler created")
         
-        # Prepare everything with Accelerate
-        self.model, self.optimizer, self.train_loader, self.lr_scheduler = self.accelerator.prepare(
-            self.model, self.optimizer, self.train_loader, self.lr_scheduler
-        )
+
+        print("Preparing train_loader and model...")
+        self.model, self.train_loader,  self.val_loader, self.optimizer, self.lr_scheduler = self.accelerator.prepare(self.model,  self.train_loader, self.val_loader, self.optimizer, self.lr_scheduler))
+
+ 
         
-        if self.val_loader:
-            self.val_loader = self.accelerator.prepare(self.val_loader)
+    print("All components prepared successfully!")
         
         
     def train_step(self, batch):
@@ -930,6 +934,7 @@ class Cell2TextDeepSpeedTrainer:
         
     def run(self):
         """Run the complete training pipeline with DeepSpeed"""
+        target_reached = True
         if not self.accelerator.is_main_process:
             print(f"Starting DeepSpeed {self.args.mode} training pipeline...")
         
@@ -950,7 +955,6 @@ class Cell2TextDeepSpeedTrainer:
             else:
                 self.full_train()
                 target_reached = True
-        
         # Evaluate
         results = self.run_evaluation()
         

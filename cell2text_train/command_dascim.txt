@@ -1,4 +1,5 @@
-deepspeed --num_gpus 2 /home/arism/cell2text/cell2text_train/train_deepspeed.py \
+accelerate launch --config_file /home/arism/config_2gpus.yaml \
+  python3 /home/arism/cell2text/cell2text_train/train_deepspeed.py \
   --token_dictionary_path /home/arism/cell2text/Geneformer/geneformer/token_dictionary_gc104M.pkl \
   --train_data_path /home/arism/datasets/train \
   --val_data_path /home/arism/datasets/validation \
@@ -14,6 +15,5 @@ deepspeed --num_gpus 2 /home/arism/cell2text/cell2text_train/train_deepspeed.py 
   --mode "full" \
   --num_beams 1 \
   --experiment_name "full_mlp_95000_samples_1epoch_topk256_batchsizeperdevie4_gradacc8_mlphiddensize2048" \
-  --eval_steps  2750 \
-  --zero_stage 1 
-
+  --eval_steps 30 \
+  --zero_stage 1
