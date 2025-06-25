@@ -1,5 +1,5 @@
 Maybe find a better prompt at dataset.py
-Change the evalutation script, somehow add some metric to check if the cell type / tissue / disease is correct.
-token dictionary path, fix this probably to pass as argument in the trian scripts
-Probably add the tissue general in the descriotons???
+token dictionary path, fix this probably to NOT pass as argument in the trian scripts
 Change the dataset creation scripts probably, 2 issues i) cancer cells, ii) multiple sequencing technilogies  (check scCello appendix).
+add some of the generated text descriptions at the validation.json
+Rewrite training with accelerate instead of deepspeed only

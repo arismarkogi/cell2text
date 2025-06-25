@@ -14,6 +14,6 @@ deepspeed --num_gpus 2 /home/arism/cell2text/cell2text_train/train_deepspeed.py 
   --mode "full" \
   --num_beams 1 \
   --experiment_name "full_mlp_95000_samples_1epoch_topk256_batchsizeperdevie4_gradacc8_mlphiddensize2048" \
-  --eval_steps  3000 \
-  --zero_stage 2 
+  --eval_steps  2000 \
+  --zero_stage 1 
 

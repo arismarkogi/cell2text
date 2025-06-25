@@ -15,6 +15,8 @@ from tqdm import tqdm
 import sys
 import random
 import json
+from torch.utils.data.distributed import DistributedSampler
+
 
 # DeepSpeed imports
 import deepspeed
@@ -106,7 +108,13 @@ class Cell2TextDeepSpeedTrainer:
         else:  # perceiver
             top_k = None  # Perceiver doesn't need top_k selection
             
-        full_train_dataset = Cell2TextDataset(self.args.train_data_path, self.tokenizer, top_k=top_k, projector=self.args.projector, num_latents=self.args.num_latents)
+        full_train_dataset = Cell2TextDataset(self.args.train_data_path,
+                                               self.tokenizer, top_k=top_k, 
+                                               projector=self.args.projector, 
+                                               num_latents=self.args.num_latents)
+        
+        use_ddp = torch.distributed.is_available() and torch.distributed.is_initialized()
+        train_sampler = DistributedSampler(full_train_dataset, shuffle=True) if use_ddp else None
         
         if self.args.mode == "sanity":
             # Create small subset for sanity check
@@ -115,7 +123,8 @@ class Cell2TextDeepSpeedTrainer:
             self.train_loader = DataLoader(
                 sanity_dataset, 
                 batch_size=self.args.batch_size_per_device, 
-                shuffle=True,
+                shuffle=(train_sampler is None),      
+                sampler=train_sampler,                
                 collate_fn=full_train_dataset.collate_fn(mode="train")
             )
             print(f"Sanity dataset loaded. Size: {len(sanity_dataset)}")
@@ -124,7 +133,8 @@ class Cell2TextDeepSpeedTrainer:
             self.val_loader = DataLoader(
                 sanity_dataset, 
                 batch_size=self.args.batch_size_per_device, 
-                shuffle=False,
+                shuffle=(train_sampler is None),
+                sampler=train_sampler,
                 collate_fn=full_train_dataset.collate_fn(mode="inference")
             )
         else:
@@ -139,7 +149,13 @@ class Cell2TextDeepSpeedTrainer:
             
             # Load validation dataset if provided
             if self.args.val_data_path:
-                val_dataset = Cell2TextDataset(self.args.val_data_path, self.tokenizer, top_k=top_k, projector=self.args.projector, num_latents=self.args.num_latents)
+                val_dataset = Cell2TextDataset(self.args.val_data_path, 
+                                               self.tokenizer,
+                                                 top_k=top_k, 
+                                                 projector=self.args.projector, 
+                                                 num_latents=self.args.num_latents)
+                
+                val_sampler = DistributedSampler(val_dataset, shuffle=False) if use_ddp else None
                 self.val_loader = DataLoader(
                     val_dataset, 
                     batch_size=self.args.batch_size_per_device, 
@@ -425,7 +441,7 @@ class Cell2TextDeepSpeedTrainer:
             val_loader=self.val_loader,
             tokenizer=self.tokenizer,
             device=self.model_engine.device,
-            print_examples=0,  # Don't print examples during training validation
+            print_examples=10,  # Don't print examples during training validation
             save_results=None  # Don't save during training validation
         )
         
@@ -555,6 +571,13 @@ class Cell2TextDeepSpeedTrainer:
         
         self.model_engine.train()
         
+
+        # put this once at the top of full_train()
+        is_distributed = torch.distributed.is_initialized()
+        rank          = torch.distributed.get_rank() if is_distributed else 0
+        is_main       = (rank == 0)
+
+
         # Initialize validation tracking
         validation_history = []
         training_history = []
@@ -576,6 +599,10 @@ class Cell2TextDeepSpeedTrainer:
         steps_since_improvement = 0
         
         for epoch in range(self.args.epochs):
+
+            if isinstance(self.train_loader.sampler, DistributedSampler):
+                self.train_loader.sampler.set_epoch(epoch)
+            
             epoch_losses = []
             
             for step, batch in enumerate(self.train_loader):
@@ -603,11 +630,20 @@ class Cell2TextDeepSpeedTrainer:
                 
                 # Validation
                 if self.global_step % self.args.eval_steps == 0 and self.val_loader is not None:
-                    self.model_engine.eval()
                     
-                    # Run comprehensive validation
-                    val_results = self.validate()
+
+                    if is_main:                          # ← only rank-0 runs it
+                        self.model_engine.eval()
+                        val_results = self.validate()
+                    else:
+                        val_results = None
                     
+                    # keep everyone in sync so ranks reach the next train step together
+                    if is_distributed:
+                        torch.distributed.barrier()
+                    
+                    if not is_main:
+                        continue
                     # Extract validation metrics
                     val_loss = val_results if isinstance(val_results, float) else val_results.get('validation_loss', None)
                     val_bleu = val_results.get('bleu', 0.0) if isinstance(val_results, dict) else 0.0
@@ -659,9 +695,6 @@ class Cell2TextDeepSpeedTrainer:
                         best_val_cell_type_f1 = val_cell_type_f1
                     
 
-                    if torch.distributed.is_initialized():
-                        torch.distributed.barrier()
-                    
                     
                     if improved:
                         steps_since_improvement = 0

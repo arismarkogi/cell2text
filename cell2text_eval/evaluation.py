@@ -9,6 +9,9 @@ from transformers import PreTrainedTokenizer
 from sklearn.metrics import f1_score, precision_score, recall_score
 from collections import Counter
 import json
+import torch.distributed as dist
+from torch.distributed import ReduceOp
+
 
 class CellTypeExtractor:
     """Extract cell types from generated descriptions for evaluation"""
