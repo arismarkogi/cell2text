@@ -9,8 +9,7 @@ from transformers import PreTrainedTokenizer
 from sklearn.metrics import f1_score, precision_score, recall_score
 from collections import Counter
 import json
-import torch.distributed as dist
-from torch.distributed import ReduceOp
+from accelerate import Accelerator
 
 
 class CellTypeExtractor:
@@ -66,9 +65,6 @@ class CellTypeExtractor:
         
         return normalized
 
-def setup_device():
-        """Setup device for training"""
-        return torch.device("cuda" if torch.cuda.is_available()  else "cpu")
 
 
 def calculate_cell_type_metrics(predicted_types, target_types):
@@ -110,6 +106,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                            val_loader: DataLoader, 
                            tokenizer: PreTrainedTokenizer, 
                            device: str,
+                           accelerator: Accelerator = None,  
                            print_examples: int = 10,
                            save_results: str = None):
     """
@@ -125,7 +122,15 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     """
     
     
-    device = setup_device()
+    
+    if accelerator is not None:
+        device = accelerator.device
+        # Get the unwrapped model if it's wrapped by Accelerate
+        if hasattr(model, 'module'):
+            model = model.module
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     model.eval()
     bleu_scores = []
     val_losses = []  # Add loss tracking
@@ -143,17 +148,28 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     
     with torch.no_grad():
         for batch_idx, batch in enumerate(val_progress_bar):
-            # Move batch to device
-            expression_tokens = batch["expression_tokens"].to(device)
-            expression_token_lengths = batch["expression_token_lengths"].to(device)
-            text_input_ids = batch["input_ids"].to(device)
-            text_attention_mask = batch["attention_mask"].to(device)
+            if accelerator is None:
+                # Only move to device manually if not using Accelerate
+                expression_tokens = batch["expression_tokens"].to(device)
+                expression_token_lengths = batch["expression_token_lengths"].to(device)
+                text_input_ids = batch["input_ids"].to(device)
+                text_attention_mask = batch["attention_mask"].to(device)
+            else:
+                # Accelerate handles device placement
+                expression_tokens = batch["expression_tokens"]
+                expression_token_lengths = batch["expression_token_lengths"]
+                text_input_ids = batch["input_ids"]
+                text_attention_mask = batch["attention_mask"]
             
             # Calculate loss if we have target descriptions for reconstruction
             val_loss = None
+           
             if "description_input_ids" in batch and batch["description_input_ids"] is not None:
                 # Create labels from description_input_ids for loss calculation
-                description_ids = batch["description_input_ids"].to(device)
+                if accelerator is None:
+                    description_ids = batch["description_input_ids"].to(device)
+                else:
+                    description_ids = batch["description_input_ids"]
                 
                 # Create combined input (prompt + description) and labels for loss calculation
                 combined_input_ids = torch.cat([text_input_ids, description_ids], dim=1)
@@ -242,6 +258,58 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                 examples.append(example)
             
     
+    # Handle distributed evaluation - gather metrics from all processes
+    if accelerator is not None and accelerator.num_processes > 1:
+        # Convert lists to tensors for gathering
+        bleu_tensor = torch.tensor(bleu_scores, device=accelerator.device) if bleu_scores else torch.tensor([], device=accelerator.device)
+        val_losses_tensor = torch.tensor(val_losses, device=accelerator.device) if val_losses else torch.tensor([], device=accelerator.device)
+        
+        # Gather BLEU scores from all processes
+        all_bleu_scores = accelerator.gather_for_metrics(bleu_tensor)
+        bleu_scores = all_bleu_scores.cpu().numpy().tolist() if len(all_bleu_scores) > 0 else []
+        
+        # Gather validation losses from all processes
+        if len(val_losses_tensor) > 0:
+            all_val_losses = accelerator.gather_for_metrics(val_losses_tensor)
+            val_losses = all_val_losses.cpu().numpy().tolist()
+        else:
+            val_losses = []
+        
+        
+        # Create padded tensors for cell type predictions (using a vocabulary mapping)
+        # First, create a vocabulary of all unique cell types across processes
+        all_cell_types = list(set(predicted_cell_types + target_cell_types))
+        
+        # Create mapping from cell type to index
+        cell_type_to_idx = {cell_type: idx for idx, cell_type in enumerate(all_cell_types)}
+        
+        # Convert predictions to indices
+        pred_indices = [cell_type_to_idx[ct] for ct in predicted_cell_types]
+        target_indices = [cell_type_to_idx[ct] for ct in target_cell_types]
+        
+        # Convert to tensors
+        pred_tensor = torch.tensor(pred_indices, device=accelerator.device) if pred_indices else torch.tensor([], device=accelerator.device, dtype=torch.long)
+        target_tensor = torch.tensor(target_indices, device=accelerator.device) if target_indices else torch.tensor([], device=accelerator.device, dtype=torch.long)
+        
+        # Gather cell type predictions
+        if len(pred_tensor) > 0:
+            all_pred_indices = accelerator.gather_for_metrics(pred_tensor)
+            all_target_indices = accelerator.gather_for_metrics(target_tensor)
+            
+            # Convert back to cell type strings
+            predicted_cell_types = [all_cell_types[idx] for idx in all_pred_indices.cpu().numpy()]
+            target_cell_types = [all_cell_types[idx] for idx in all_target_indices.cpu().numpy()]
+        else:
+            predicted_cell_types = []
+            target_cell_types = []
+        
+        # We'll only use examples from the main process for printing to avoid confusion
+        if not accelerator.is_main_process:
+            examples = []
+    
+
+            
+    
     # Calculate overall metrics
     avg_bleu = np.mean(bleu_scores) if bleu_scores else 0.0
     avg_loss = np.mean(val_losses) if val_losses else None
@@ -249,72 +317,76 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     # Calculate cell type metrics
     cell_type_metrics = calculate_cell_type_metrics(predicted_cell_types, target_cell_types)
     
-    # Print overall results
-    print(f"\n{'='*60}")
-    print(f"VALIDATION RESULTS")
-    print(f"{'='*60}")
-    print(f"BLEU Score: {avg_bleu:.4f}")
-    if avg_loss is not None:
-        print(f"Validation Loss: {avg_loss:.4f}")
-    else:
-        print("Validation Loss: N/A (could not calculate)")
-    print(f"\nCell Type Extraction Metrics:")
-    print(f"  Accuracy: {cell_type_metrics['accuracy']:.4f}")
-    print(f"  F1 Score: {cell_type_metrics['f1']:.4f}")
-    print(f"  Precision: {cell_type_metrics['precision']:.4f}")
-    print(f"  Recall: {cell_type_metrics['recall']:.4f}")
-    print(f"  Total Samples: {cell_type_metrics['total_samples']}")
-    
-    # Print example predictions
-    print(f"\n{'='*60}")
-    print(f"EXAMPLE PREDICTIONS (showing first {min(print_examples, len(examples))})")
-    print(f"{'='*60}")
-    
-    for i, example in enumerate(examples[:print_examples]):
-        print(f"\n--- Example {i+1} ---")
-        print(f"TARGET: {example['target']}")
-        print(f"GENERATED: {example['generated']}")
-        print(f"BLEU: {example['bleu_score']:.4f}")
-        print(f"Target Cell Type: '{example['target_cell_type']}'")
-        print(f"Predicted Cell Type: '{example['predicted_cell_type']}'")
-        print(f"Cell Type Match: {'✓' if example['cell_type_match'] else '✗'}")
-        if example['loss'] is not None:
-            print(f"Loss: {example['loss']:.4f}")
-    
-    # Print cell type distribution analysis
-    print(f"\n{'='*60}")
-    print(f"CELL TYPE ANALYSIS")
-    print(f"{'='*60}")
-    
-    target_counter = Counter(target_cell_types)
-    pred_counter = Counter(predicted_cell_types)
-    
-    print(f"\nTop 10 Target Cell Types:")
-    for cell_type, count in target_counter.most_common(10):
-        print(f"  {cell_type}: {count}")
-    
-    print(f"\nTop 10 Predicted Cell Types:")
-    for cell_type, count in pred_counter.most_common(10):
-        print(f"  {cell_type}: {count}")
-    
-    # Save detailed results if requested
-    if save_results:
-        results = {
-            'overall_metrics': {
-                'bleu_score': avg_bleu,
-                'validation_loss': avg_loss,
-                'cell_type_metrics': cell_type_metrics
-            },
-            'examples': examples,
-            'cell_type_distribution': {
-                'target': dict(target_counter),
-                'predicted': dict(pred_counter)
-            }
-        }
+    should_print = accelerator is None or accelerator.is_main_process
+
+    if should_print:
         
-        with open(save_results, 'w') as f:
-            json.dump(results, f, indent=2)
-        print(f"\nDetailed results saved to: {save_results}")
+        # Print overall results
+        print(f"\n{'='*60}")
+        print(f"VALIDATION RESULTS")
+        print(f"{'='*60}")
+        print(f"BLEU Score: {avg_bleu:.4f}")
+        if avg_loss is not None:
+            print(f"Validation Loss: {avg_loss:.4f}")
+        else:
+            print("Validation Loss: N/A (could not calculate)")
+        print(f"\nCell Type Extraction Metrics:")
+        print(f"  Accuracy: {cell_type_metrics['accuracy']:.4f}")
+        print(f"  F1 Score: {cell_type_metrics['f1']:.4f}")
+        print(f"  Precision: {cell_type_metrics['precision']:.4f}")
+        print(f"  Recall: {cell_type_metrics['recall']:.4f}")
+        print(f"  Total Samples: {cell_type_metrics['total_samples']}")
+        
+        # Print example predictions
+        print(f"\n{'='*60}")
+        print(f"EXAMPLE PREDICTIONS (showing first {min(print_examples, len(examples))})")
+        print(f"{'='*60}")
+        
+        for i, example in enumerate(examples[:print_examples]):
+            print(f"\n--- Example {i+1} ---")
+            print(f"TARGET: {example['target']}")
+            print(f"GENERATED: {example['generated']}")
+            print(f"BLEU: {example['bleu_score']:.4f}")
+            print(f"Target Cell Type: '{example['target_cell_type']}'")
+            print(f"Predicted Cell Type: '{example['predicted_cell_type']}'")
+            print(f"Cell Type Match: {'✓' if example['cell_type_match'] else '✗'}")
+            if example['loss'] is not None:
+                print(f"Loss: {example['loss']:.4f}")
+        
+        # Print cell type distribution analysis
+        print(f"\n{'='*60}")
+        print(f"CELL TYPE ANALYSIS")
+        print(f"{'='*60}")
+        
+        target_counter = Counter(target_cell_types)
+        pred_counter = Counter(predicted_cell_types)
+        
+        print(f"\nTop 10 Target Cell Types:")
+        for cell_type, count in target_counter.most_common(10):
+            print(f"  {cell_type}: {count}")
+        
+        print(f"\nTop 10 Predicted Cell Types:")
+        for cell_type, count in pred_counter.most_common(10):
+            print(f"  {cell_type}: {count}")
+        
+        # Save detailed results if requested
+        if save_results:
+            results = {
+                'overall_metrics': {
+                    'bleu_score': avg_bleu,
+                    'validation_loss': avg_loss,
+                    'cell_type_metrics': cell_type_metrics
+                },
+                'examples': examples,
+                'cell_type_distribution': {
+                    'target': dict(target_counter),
+                    'predicted': dict(pred_counter)
+                }
+            }
+            
+            with open(save_results, 'w') as f:
+                json.dump(results, f, indent=2)
+            print(f"\nDetailed results saved to: {save_results}")
     
     return {
         'bleu': avg_bleu,

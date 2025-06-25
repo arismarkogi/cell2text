@@ -18,9 +18,9 @@ import json
 from torch.utils.data.distributed import DistributedSampler
 
 
-# DeepSpeed imports
-import deepspeed
-from deepspeed.ops.adam import DeepSpeedCPUAdam
+# Accelerate imports
+from accelerate import Accelerator
+from accelerate.utils import set_seed
 
 # LoRA imports
 from peft import (
@@ -71,11 +71,17 @@ class Cell2TextDeepSpeedTrainer:
         self.tokenizer = None
         self.train_loader = None
         self.val_loader = None
-        self.model_engine = None
         self.optimizer = None
         self.lr_scheduler = None
         self.global_step = 0
         self.losses = []
+
+        self.accelerator = Accelerator(
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
+            mixed_precision='fp16' if args.fp16 else ('bf16' if args.bf16 else 'no'),
+            log_with=None,  # Add logging if needed
+        )
+        self.device = self.accelerator.device
          
         
     def setup_device(self):
@@ -261,109 +267,13 @@ class Cell2TextDeepSpeedTrainer:
                 trainable_params += param.numel()
         
         return trainable_params, all_params
-        
-    def create_deepspeed_config(self):
-        """Create DeepSpeed configuration"""
-        total_steps = self.args.epochs * len(self.train_loader) // self.args.gradient_accumulation_steps
-        
-
-        ds_config = {
-            "train_micro_batch_size_per_gpu": self.args.batch_size_per_device,
-            "gradient_accumulation_steps": self.args.gradient_accumulation_steps,
-            
-            "optimizer": {
-                "type": "AdamW",
-                "params": {
-                    "lr": self.args.decoder_lr,  
-                    "betas": [0.9, 0.999],
-                    "eps": 1e-8,
-                    "weight_decay": self.args.weight_decay
-                }
-            },
-            
-            "scheduler": {
-                "type": "WarmupDecayLR",
-                "params": {
-                    "warmup_min_lr": 0,
-                    "warmup_max_lr": self.args.decoder_lr,
-                    "warmup_num_steps": self.args.warmup_steps,
-                    "total_num_steps": total_steps
-                }
-            },
-            
-            "fp16": {
-                "enabled": self.args.fp16,
-                "auto_cast": False,
-                "loss_scale": 0,
-                "initial_scale_power": 16,
-                "loss_scale_window": 1000,
-                "hysteresis": 2,
-                "min_loss_scale": 1
-            },
-            
-            "bf16": {
-                "enabled": self.args.bf16
-            },
-            
-            "zero_optimization": {
-                "stage": self.args.zero_stage,
-                "offload_optimizer": {
-                    "device": "cpu" if self.args.zero_stage >= 2 else "none"
-                },
-                "offload_param": {
-                    "device": "cpu" if self.args.zero_stage == 3 else "none"
-                },
-                "overlap_comm": True,
-                "contiguous_gradients": True,
-                "sub_group_size": 1e9,
-                "reduce_bucket_size": 5e8,
-                "stage3_prefetch_bucket_size": 5e7,
-                "stage3_param_persistence_threshold": 1e5,
-                "stage3_max_live_parameters": 1e9,
-                "stage3_max_reuse_distance": 1e9,
-                "gather_16bit_weights_on_model_save": True
-            },
-            "activation_checkpointing": {
-                "partition_activations": True,
-                "cpu_checkpointing": False, 
-                "contiguous_memory_optimization": True,
-                "number_checkpoints": 4
-            },
-            "checkpoint": {
-                "save_optimizer_states": False,
-                "save_lr_scheduler_states": False,
-                "load_optimizer_states": False,
-                "load_lr_scheduler_states": False
-            },
-                        
-            "gradient_clipping": self.args.max_grad_norm,
-            "steps_per_print": 10,
-            "wall_clock_breakdown": False
-        }
-        
-        return ds_config
-        
-    def setup_deepspeed_model(self):
-        """Setup model with DeepSpeed"""
-        print("Setting up DeepSpeed model...")
-        
-        # Create DeepSpeed config
-        ds_config = self.create_deepspeed_config()
-        
-        # Save DeepSpeed config
-        config_filename = "deepspeed_config.json"
-        if self.experiment_name:
-            config_filename = f"{self.experiment_name}_deepspeed_config.json"
-        
-        config_path = os.path.join(self.args.output_dir, config_filename)
-        with open(config_path, 'w') as f:
-            json.dump(ds_config, f, indent=2)
-        print(f"DeepSpeed config saved to: {config_path}")
-        
-        # Setup parameter groups for different learning rates
+    
+    def setup_model_and_optimizer(self):
+        """Setup model, optimizer, and prepare with Accelerate"""
+        # Create optimizer with different parameter groups
         parameters = []
         
-        # Projector parameters (MLP or Perceiver)
+        # Projector parameters
         projector_name = "cell_to_embedding" if self.args.projector == "mlp" else "perceiver_projector"
         projector_module = getattr(self.model, projector_name, None)
         
@@ -372,80 +282,88 @@ class Cell2TextDeepSpeedTrainer:
                 if param.requires_grad:
                     parameters.append({
                         "params": [param],
-                        "lr": self.args.projector_lr,
-                        "name": name
+                        "lr": self.args.projector_lr
                     })
-                    print(f"Adding projector parameter: {name} ({param.numel():,} params) with lr={self.args.projector_lr}")
         
-        # Decoder parameters (including LoRA parameters)
+        # Decoder parameters
         for name, param in self.model.decoder.named_parameters():
             if param.requires_grad:
                 parameters.append({
                     "params": [param],
-                    "lr": self.args.decoder_lr,
-                    "name": name
+                    "lr": self.args.decoder_lr
                 })
-                print(f"Adding decoder parameter: {name} ({param.numel():,} params) with lr={self.args.decoder_lr}")
         
-        if not parameters:
-            raise ValueError("No trainable parameters found! Check your LoRA configuration and parameter freezing.")
-        
-        print(f"Total parameter groups for DeepSpeed: {len(parameters)}")
-        
-        # Initialize DeepSpeed
-        self.model_engine, self.optimizer, _, self.lr_scheduler = deepspeed.initialize(
-            model=self.model,
-            model_parameters=parameters,
-            config=ds_config
+        # Create optimizer
+        self.optimizer = AdamW(
+            parameters,
+            lr=self.args.decoder_lr,  # Default LR
+            weight_decay=self.args.weight_decay,
+            betas=(0.9, 0.999),
+            eps=1e-8
         )
         
-        print("DeepSpeed model initialized successfully!")
+        # Create scheduler
+        total_steps = self.args.epochs * len(self.train_loader) // self.args.gradient_accumulation_steps
+        self.lr_scheduler = get_linear_schedule_with_warmup(
+            self.optimizer,
+            num_warmup_steps=self.args.warmup_steps,
+            num_training_steps=total_steps
+        )
+        
+        # Prepare everything with Accelerate
+        self.model, self.optimizer, self.train_loader, self.lr_scheduler = self.accelerator.prepare(
+            self.model, self.optimizer, self.train_loader, self.lr_scheduler
+        )
+        
+        if self.val_loader:
+            self.val_loader = self.accelerator.prepare(self.val_loader)
+        
         
     def train_step(self, batch):
-        """Perform a single training step with DeepSpeed"""
-        # Move data to device (DeepSpeed handles this automatically)
-        expression_tokens = batch["expression_tokens"]
-        expression_token_lengths = batch["expression_token_lengths"]
-        text_input_ids = batch["input_ids"]
-        text_input_attention_mask = batch["attention_mask"]
-        labels = batch["labels"] if batch["labels"] is not None else None
-        
-        # Forward pass
-        outputs = self.model_engine(
-            expression_tokens=expression_tokens,
-            expression_token_lengths=expression_token_lengths,
-            input_ids=text_input_ids,
-            attention_mask=text_input_attention_mask,
-            labels=labels,
-            return_dict=True
-        )
-        
-        loss = outputs.loss
-        
-        # DeepSpeed handles backward pass and optimization
-        self.model_engine.backward(loss)
-        self.model_engine.step()
+        """Perform a single training step with Accelerate"""
+        with self.accelerator.accumulate(self.model):
+            # Forward pass
+            outputs = self.model(
+                expression_tokens=batch["expression_tokens"],
+                expression_token_lengths=batch["expression_token_lengths"],
+                input_ids=batch["input_ids"],
+                attention_mask=batch["attention_mask"],
+                labels=batch["labels"],
+                return_dict=True
+            )
+            
+            loss = outputs.loss
+            
+            # Backward pass
+            self.accelerator.backward(loss)
+            
+            # Gradient clipping
+            if self.args.max_grad_norm > 0:
+                self.accelerator.clip_grad_norm_(self.model.parameters(), self.args.max_grad_norm)
+            
+            # Optimizer step
+            self.optimizer.step()
+            self.lr_scheduler.step()
+            self.optimizer.zero_grad()
         
         self.global_step += 1
-        
         return loss.item()
     
     def validate(self):
         """Run validation using the full evaluation function"""
         if self.val_loader is None:
             return None
-            
-        # Use the full evaluation function instead of simple loss calculation
+        
         results = evaluate_cell2text_model(
-            model=self.model_engine.module,
+            model=self.model,  
             val_loader=self.val_loader,
             tokenizer=self.tokenizer,
-            device=self.model_engine.device,
-            print_examples=10,  # Don't print examples during training validation
-            save_results=None  # Don't save during training validation
+            device=self.accelerator.device,
+            accelerator=self.accelerator,  
+            print_examples=10,
+            save_results=None
         )
         
-        # Return the validation loss for early stopping logic
         return results.get('validation_loss', None)
         
     def sanity_train(self):
@@ -462,7 +380,7 @@ class Cell2TextDeepSpeedTrainer:
         print("="*60)
         
         # Training loop - overfit until target loss
-        self.model_engine.train()
+        self.model.train()
         
         print("\nStarting overfitting training with DeepSpeed...")
         progress_bar = tqdm(
@@ -489,7 +407,7 @@ class Cell2TextDeepSpeedTrainer:
             epoch_loss = np.mean(epoch_losses)
             
             # Only update progress bar on rank 0
-            if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+            if not self.accelerator.is_main_process:
                 progress_bar.update(1)
                 progress_bar.set_description(
                     f"🚀 DeepSpeed Sanity Training | 📊 Epoch: {epoch+1}/{self.args.epochs} | "
@@ -499,7 +417,7 @@ class Cell2TextDeepSpeedTrainer:
             epoch += 1
 
             if epoch_loss <= self.args.target_loss:
-                if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                if not self.accelerator.is_main_process:
                     print(f"\n🎉 Target loss {self.args.target_loss:.4f} reached at epoch {epoch}!")
                     print(f"Final epoch loss: {epoch_loss:.4f}")
                 break
@@ -507,7 +425,7 @@ class Cell2TextDeepSpeedTrainer:
         progress_bar.close()
         
         final_loss = epoch_loss
-        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+        if not self.accelerator.is_main_process:
             print(f"\nDeepSpeed sanity training completed!")
             print(f"Final loss: {final_loss:.4f}")
             print(f"Target reached: {'✓' if final_loss <= self.args.target_loss else '✗'}")
@@ -519,11 +437,18 @@ class Cell2TextDeepSpeedTrainer:
             
             checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
             
-            # Use DeepSpeed's save_checkpoint instead of manual state_dict saving
-            self.model_engine.save_checkpoint(checkpoint_dir, tag=checkpoint_name, exclude_frozen_parameters=True)
+            self.accelerator.save_model(self.model, checkpoint_dir)
+
+            checkpoint_state = {
+                'optimizer': self.optimizer.state_dict(),
+                'lr_scheduler': self.lr_scheduler.state_dict(),
+                'global_step': self.global_step,
+                'losses': self.losses
+            }
+            self.accelerator.save(checkpoint_state, os.path.join(checkpoint_dir, "training_state.pt"))
             
             # Save training info with experiment context (only on rank 0)
-            if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+            if not self.accelerator.is_main_process:
                 info_path = os.path.join(checkpoint_dir, "training_info.json")
                 info_dict = {
                     "experiment_name": self.experiment_name,
@@ -569,7 +494,7 @@ class Cell2TextDeepSpeedTrainer:
         print(f"Validation every: {self.args.eval_steps} steps")
         print("="*60)
         
-        self.model_engine.train()
+        self.model.train()
         
 
         # put this once at the top of full_train()
@@ -621,7 +546,7 @@ class Cell2TextDeepSpeedTrainer:
                 training_history.append(training_step_info)
                 
                 # Update progress bar
-                if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                if not self.accelerator.is_main_process:
                     progress_bar.update(1)
                     progress_bar.set_description(
                         f"🚀 Full Training | Epoch: {epoch+1}/{self.args.epochs} | "
@@ -633,15 +558,12 @@ class Cell2TextDeepSpeedTrainer:
                     
 
                     if is_main:                          # ← only rank-0 runs it
-                        self.model_engine.eval()
+                        self.model.eval()
                         val_results = self.validate()
                     else:
                         val_results = None
                     
-                    # keep everyone in sync so ranks reach the next train step together
-                    if is_distributed:
-                        torch.distributed.barrier()
-                    
+                   
                     if not is_main:
                         continue
                     # Extract validation metrics
@@ -667,7 +589,7 @@ class Cell2TextDeepSpeedTrainer:
                     }
                     validation_history.append(validation_record)
                     
-                    if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                    if not self.accelerator.is_main_process:
                         print(f"\nValidation at step {self.global_step}:")
                         if val_loss is not None:
                             print(f"  Loss: {val_loss:.4f}")
@@ -706,11 +628,19 @@ class Cell2TextDeepSpeedTrainer:
                             
                             checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
                             
-                            # Use DeepSpeed's save_checkpoint function
-                            self.model_engine.save_checkpoint(checkpoint_dir, tag=checkpoint_name, exclude_frozen_parameters=True)
+                            self.accelerator.save_model(self.model, checkpoint_dir)
+
+                            # For additional state:
+                            checkpoint_state = {
+                                'optimizer': self.optimizer.state_dict(),
+                                'lr_scheduler': self.lr_scheduler.state_dict(),
+                                'global_step': self.global_step,
+                                'losses': self.losses
+                            }
+                            self.accelerator.save(checkpoint_state, os.path.join(checkpoint_dir, "training_state.pt"))
                             
                             # On Rank 0, save supplementary files
-                            if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                            if not self.accelerator.is_main_process:
                                 # Save validation history
                                 validation_history_path = os.path.join(checkpoint_dir, "validation_history.json")
                                 with open(validation_history_path, 'w') as f:
@@ -724,7 +654,7 @@ class Cell2TextDeepSpeedTrainer:
                         steps_since_improvement += self.args.eval_steps
                         
                         if self.args.early_stopping > 0 and steps_since_improvement >= self.args.early_stopping:
-                            if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                            if not self.accelerator.is_main_process:
                                 print(f"\nEarly stopping triggered after {steps_since_improvement} steps without improvement")
                             progress_bar.close()
                             
@@ -732,11 +662,11 @@ class Cell2TextDeepSpeedTrainer:
                             self._save_training_history(training_history, validation_history)
                             return
                     
-                    self.model_engine.train()  # Switch back to training mode
+                    self.model.train()  # Switch back to training mode
             
             # End of epoch summary
             epoch_loss = np.mean(epoch_losses)
-            if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+            if not self.accelerator.is_main_process:
                 print(f"\nEpoch {epoch+1} completed. Average loss: {epoch_loss:.4f}")
         
         progress_bar.close()
@@ -744,7 +674,7 @@ class Cell2TextDeepSpeedTrainer:
         # Final evaluation before closing
         final_val_results = None
         if self.val_loader is not None:
-            self.model_engine.eval()
+            self.model.eval()
             final_val_results = self.validate()
             
             # Extract final validation metrics
@@ -771,7 +701,7 @@ class Cell2TextDeepSpeedTrainer:
             }
             validation_history.append(final_validation_record)
             
-            if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+            if not self.accelerator.is_main_process:
                 print(f"\nFinal Validation Results:")
                 if final_val_loss is not None:
                     print(f"  Loss: {final_val_loss:.4f}")
@@ -795,13 +725,21 @@ class Cell2TextDeepSpeedTrainer:
                 
                 checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
                 
-                # Use DeepSpeed's save_checkpoint function
-                self.model_engine.save_checkpoint(checkpoint_dir, tag=checkpoint_name, exclude_frozen_parameters=True)
+                self.accelerator.save_model(self.model, checkpoint_dir)
+
+                # For additional state:
+                checkpoint_state = {
+                    'optimizer': self.optimizer.state_dict(),
+                    'lr_scheduler': self.lr_scheduler.state_dict(),
+                    'global_step': self.global_step,
+                    'losses': self.losses
+                }
+                self.accelerator.save(checkpoint_state, os.path.join(checkpoint_dir, "training_state.pt"))
                 
-                if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                if not self.accelerator.is_main_process:
                     print(f"New best model saved after final evaluation to: {checkpoint_dir}")
             elif not final_improved:
-                if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+                if not self.accelerator.is_main_process:
                     print("Final model did not outperform the best model. No new best model saved.")
         else:
             print("No validation loader available, skipping final evaluation.")
@@ -809,7 +747,7 @@ class Cell2TextDeepSpeedTrainer:
         # Save complete training and validation history
         self._save_training_history(training_history, validation_history)
         
-        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+        if not self.accelerator.is_main_process:
             print(f"\nFull training completed!")
             print(f"Best validation loss: {best_val_loss:.4f}")
             print(f"Best BLEU score: {best_val_bleu:.4f}")
@@ -818,7 +756,7 @@ class Cell2TextDeepSpeedTrainer:
 
     def _save_training_history(self, training_history, validation_history):
         """Save training and validation history to files with enhanced metrics tracking"""
-        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+        if not self.accelerator.is_main_process:
             # Enhanced training history with loss progression
             enhanced_training_history = {
                 'training_steps': training_history,
@@ -954,7 +892,7 @@ class Cell2TextDeepSpeedTrainer:
         
     def run_evaluation(self):
         """Run evaluation"""
-        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+        if not self.accelerator.is_main_process:
             print("\n" + "="*60)
             print("RUNNING EVALUATION")
             print("="*60)
@@ -973,7 +911,7 @@ class Cell2TextDeepSpeedTrainer:
             val_loader=self.val_loader,
             tokenizer=self.tokenizer,
             device=self.model_engine.device,
-            print_examples=self.args.num_samples if self.args.mode == "sanity" and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0) else 8,
+            print_examples=self.args.num_samples if self.args.mode == "sanity" and (not self.accelerator.is_main_process) else 8,
             save_results=os.path.join(self.args.output_dir, results_filename) if self.args.save_results else None
         )
         
@@ -992,27 +930,26 @@ class Cell2TextDeepSpeedTrainer:
         
     def run(self):
         """Run the complete training pipeline with DeepSpeed"""
-        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+        if not self.accelerator.is_main_process:
             print(f"Starting DeepSpeed {self.args.mode} training pipeline...")
         
-        # Setup everything
-        self.setup_device()
-        self.load_tokenizer()
-        self.setup_datasets()
-        self.initialize_model()
-        self.freeze_model_components()
-        self.apply_lora_to_model()
-        self.print_model_parameters()
-        
-        # Setup DeepSpeed
-        self.setup_deepspeed_model()
-        
-        # Train based on mode
-        if self.args.mode == "sanity":
-            target_reached = self.sanity_train()
-        else:
-            self.full_train()
-            target_reached = True  # For compatibility
+            """Main training method"""
+            self.setup_device()  # This now just sets up accelerator
+            self.load_tokenizer()
+            self.setup_datasets()
+            self.initialize_model()
+            self.freeze_model_components()
+            self.apply_lora_to_model()
+            self.print_model_parameters()
+            
+            # Replace setup_deepspeed_model() with:
+            self.setup_model_and_optimizer()
+            
+            if self.args.mode == "sanity":
+                target_reached= self.sanity_train()
+            else:
+                self.full_train()
+                target_reached = True
         
         # Evaluate
         results = self.run_evaluation()
@@ -1210,7 +1147,7 @@ def main():
     target_reached, results = trainer.run()
     
     # Final summary (only on rank 0)
-    if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+    if not trainer.accelerator.is_main_process:
         print("\n" + "="*60)
         print(f"FINAL DEEPSPEED {args.mode.upper()} TRAINING RESULTS")
         print("="*60)
