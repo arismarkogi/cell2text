@@ -1,5 +1,5 @@
-accelerate launch --config_file /home/arism/config_2gpus.yaml \
-    /home/arism/cell2text/cell2text_train/train_deepspeed.py \
+accelerate launch --config_file  /home/arism/config_2gpus.yaml \
+    accelerate launch --num_processes=2 /home/arism/cell2text/cell2text_train/train_deepspeed.py \
     --token_dictionary_path /home/arism/cell2text/Geneformer/geneformer/token_dictionary_gc104M.pkl \
     --train_data_path /home/arism/datasets/train \
     --val_data_path /home/arism/datasets/validation \
