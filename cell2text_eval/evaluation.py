@@ -277,16 +277,24 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                     }
                     examples.append(example)
     
+    
     # Gather metrics from all processes if using DDP
     if use_ddp and world_size > 1:
+        
+        print("BEFORE GATHERING BLEU SCORES")
+        
         # Gather BLEU scores
         all_bleu_scores = gather_distributed_metrics(bleu_scores, world_size, rank)
         
+        print("BEFORE GATHERING VALIDATION LOSSES")
         # Gather validation losses
         all_val_losses = gather_distributed_metrics(val_losses, world_size, rank)
         
+        print("BEFORE GATHERING CELL TYPE PREDICTION")
         # Gather cell type predictions
         all_predicted_cell_types = gather_distributed_strings(predicted_cell_types, world_size, rank)
+
+        print("BEFORE GATHERING TARGET CELL TYPES")
         all_target_cell_types = gather_distributed_strings(target_cell_types, world_size, rank)
         
         # Use gathered metrics

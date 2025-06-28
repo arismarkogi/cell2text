@@ -320,7 +320,7 @@ class Cell2TextDDPTrainer:
         
         # Wrap with DDP
         if self.world_size > 1:
-            self.model = DDP(self.model, device_ids=[self.rank], find_unused_parameters=True)
+            self.model = DDP(self.model, device_ids=[self.rank], find_unused_parameters=False)
             model_for_params = self.model.module
         else:
             model_for_params = self.model
