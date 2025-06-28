@@ -1,4 +1,5 @@
 import torch
+import torch.distributed as dist
 import numpy as np
 import re
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
@@ -9,7 +10,6 @@ from transformers import PreTrainedTokenizer
 from sklearn.metrics import f1_score, precision_score, recall_score
 from collections import Counter
 import json
-from accelerate import Accelerator
 
 
 class CellTypeExtractor:
@@ -58,7 +58,6 @@ class CellTypeExtractor:
         # Remove common prefixes/suffixes that might cause mismatches
         suffixes_to_remove = ["cell", "cells"]
         
-        
         for suffix in suffixes_to_remove:
             if normalized.endswith(" " + suffix):
                 normalized = normalized[:-len(" " + suffix)]
@@ -66,20 +65,8 @@ class CellTypeExtractor:
         return normalized
 
 
-
 def calculate_cell_type_metrics(predicted_types, target_types):
     """Calculate precision, recall, and F1 for cell type extraction"""
-    
-    # Get unique cell types
-    all_types = list(set(predicted_types + target_types))
-    
-    # Convert to binary classification for each cell type
-    y_true = []
-    y_pred = []
-    
-    for target, pred in zip(target_types, predicted_types):
-        y_true.append(target)
-        y_pred.append(pred)
     
     # Calculate exact match accuracy
     exact_matches = sum(1 for t, p in zip(target_types, predicted_types) if t == p)
@@ -102,15 +89,89 @@ def calculate_cell_type_metrics(predicted_types, target_types):
         'total_samples': len(target_types)
     }
 
+
+def gather_distributed_metrics(values_list, world_size, rank):
+    """Gather metrics from all DDP processes"""
+    if world_size <= 1:
+        return values_list
+    
+    # Convert to tensor
+    local_tensor = torch.tensor(values_list, dtype=torch.float32)
+    
+    # Gather tensor sizes first
+    local_size = torch.tensor([len(values_list)], dtype=torch.long)
+    all_sizes = [torch.zeros(1, dtype=torch.long) for _ in range(world_size)]
+    dist.all_gather(all_sizes, local_size)
+    
+    # Pad tensors to the same size
+    max_size = max(size.item() for size in all_sizes)
+    if len(values_list) < max_size:
+        # Pad with zeros (we'll filter these out later)
+        padding = torch.zeros(max_size - len(values_list), dtype=torch.float32)
+        local_tensor = torch.cat([local_tensor, padding])
+    
+    # Gather all tensors
+    gathered_tensors = [torch.zeros(max_size, dtype=torch.float32) for _ in range(world_size)]
+    dist.all_gather(gathered_tensors, local_tensor)
+    
+    # Flatten and remove padding
+    all_values = []
+    for i, tensor in enumerate(gathered_tensors):
+        actual_size = all_sizes[i].item()
+        all_values.extend(tensor[:actual_size].tolist())
+    
+    return all_values
+
+
+def gather_distributed_strings(strings_list, world_size, rank):
+    """Gather string lists from all DDP processes"""
+    if world_size <= 1:
+        return strings_list
+    
+    # Convert strings to indices using a local vocabulary
+    local_vocab = list(set(strings_list))
+    local_indices = [local_vocab.index(s) for s in strings_list]
+    
+    # Gather vocabularies from all processes
+    vocab_size = torch.tensor([len(local_vocab)], dtype=torch.long)
+    all_vocab_sizes = [torch.zeros(1, dtype=torch.long) for _ in range(world_size)]
+    dist.all_gather(all_vocab_sizes, vocab_size)
+    
+    max_vocab_size = max(size.item() for size in all_vocab_sizes)
+    
+    # Create a global vocabulary (this is approximate, but works for our use case)
+    # In practice, we'll need to handle this more carefully
+    all_strings = []
+    for strings in [strings_list]:  # Start with local strings
+        all_strings.extend(strings)
+    
+    # For simplicity, let's use a different approach
+    # Gather the actual data sizes first
+    local_size = torch.tensor([len(strings_list)], dtype=torch.long)
+    all_sizes = [torch.zeros(1, dtype=torch.long) for _ in range(world_size)]
+    dist.all_gather(all_sizes, local_size)
+    
+    # Since strings are complex to gather, we'll use object_list
+    gathered_strings = [None for _ in range(world_size)]
+    dist.all_gather_object(gathered_strings, strings_list)
+    
+    # Flatten
+    all_strings = []
+    for string_list in gathered_strings:
+        all_strings.extend(string_list)
+    
+    return all_strings
+
+
 def evaluate_cell2text_model(model: Cell2TextModel, 
                            val_loader: DataLoader, 
                            tokenizer: PreTrainedTokenizer, 
                            device: str,
-                           accelerator: Accelerator = None,  
                            print_examples: int = 10,
-                           save_results: str = None):
+                           save_results: str = None,
+                           use_ddp: bool = False):
     """
-    Enhanced evaluation function with text printing, cell type accuracy, and loss calculation
+    Enhanced evaluation function for DDP training
     
     Args:
         model: The Cell2TextModel to evaluate
@@ -119,21 +180,26 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         device: Device to run evaluation on
         print_examples: Number of example predictions to print (default: 10)
         save_results: Optional path to save detailed results as JSON
+        use_ddp: Whether we're using DDP (affects printing and gathering)
     """
     
-    
-    
-    if accelerator is not None:
-        device = accelerator.device
-        # Get the unwrapped model if it's wrapped by Accelerate
-        if hasattr(model, 'module'):
-            model = model.module
+    # Check if we're in a distributed setting
+    if use_ddp and dist.is_initialized():
+        world_size = dist.get_world_size()
+        rank = dist.get_rank()
+        is_main_process = rank == 0
     else:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+        world_size = 1
+        rank = 0
+        is_main_process = True
+    
+    # Get the underlying model (unwrap DDP if necessary)
+    if hasattr(model, 'module'):
+        model = model.module
+    
     model.eval()
     bleu_scores = []
-    val_losses = []  # Add loss tracking
+    val_losses = []
     smooth = SmoothingFunction().method4
     
     # For cell type evaluation
@@ -144,34 +210,26 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     # Store examples for printing/saving
     examples = []
     
-    val_progress_bar = tqdm(val_loader, desc="[Validation]")
+    # Create progress bar only on main process
+    if is_main_process:
+        val_progress_bar = tqdm(val_loader, desc="[Validation]")
+    else:
+        val_progress_bar = val_loader
     
     with torch.no_grad():
         for batch_idx, batch in enumerate(val_progress_bar):
-            if accelerator is None:
-                # Only move to device manually if not using Accelerate
-                expression_tokens = batch["expression_tokens"].to(device)
-                expression_token_lengths = batch["expression_token_lengths"].to(device)
-                text_input_ids = batch["input_ids"].to(device)
-                text_attention_mask = batch["attention_mask"].to(device)
-            else:
-                # Accelerate handles device placement
-                expression_tokens = batch["expression_tokens"]
-                expression_token_lengths = batch["expression_token_lengths"]
-                text_input_ids = batch["input_ids"]
-                text_attention_mask = batch["attention_mask"]
+            # Move batch to device
+            expression_tokens = batch["expression_tokens"].to(device)
+            expression_token_lengths = batch["expression_token_lengths"].to(device)
+            text_input_ids = batch["input_ids"].to(device)
+            text_attention_mask = batch["attention_mask"].to(device)
             
-            # Calculate loss if we have target descriptions for reconstruction
+            # Calculate loss if we have target descriptions
             val_loss = None
-           
             if "description_input_ids" in batch and batch["description_input_ids"] is not None:
-                # Create labels from description_input_ids for loss calculation
-                if accelerator is None:
-                    description_ids = batch["description_input_ids"].to(device)
-                else:
-                    description_ids = batch["description_input_ids"]
+                description_ids = batch["description_input_ids"].to(device)
                 
-                # Create combined input (prompt + description) and labels for loss calculation
+                # Create combined input and labels for loss calculation
                 combined_input_ids = torch.cat([text_input_ids, description_ids], dim=1)
                 combined_attention_mask = torch.cat([
                     text_attention_mask, 
@@ -195,7 +253,8 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                     val_loss = outputs.loss.item()
                     val_losses.append(val_loss)
                 except Exception as e:
-                    print(f"Warning: Could not calculate loss - {e}")
+                    if is_main_process:
+                        print(f"Warning: Could not calculate loss - {e}")
             
             # Generate descriptions
             generated = model.generate_cell_description(
@@ -218,10 +277,11 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                 target = ""
                 if "description_input_ids" in batch and batch["description_input_ids"] is not None:
                     target_ids = batch["description_input_ids"][j]
-                    target_ids = target_ids[target_ids != tokenizer.pad_token_id]  # Remove padding
+                    target_ids = target_ids[target_ids != tokenizer.pad_token_id]
                     target = tokenizer.decode(target_ids, skip_special_tokens=True)
                 else:
-                    print(f"Warning: No target text available for sample {j}")
+                    if is_main_process:
+                        print(f"Warning: No target text available for sample {j}")
                     continue
                 
                 # Calculate BLEU score
@@ -236,79 +296,45 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                 pred_cell_type = cell_extractor.extract_cell_type(decoded_pred)
                 target_cell_type = cell_extractor.extract_cell_type(target)
                 
-                # Normalize cell types for better matching
+                # Normalize cell types
                 pred_cell_type = cell_extractor.normalize_cell_type(pred_cell_type)
                 target_cell_type = cell_extractor.normalize_cell_type(target_cell_type)
                 
                 predicted_cell_types.append(pred_cell_type)
                 target_cell_types.append(target_cell_type)
                 
-                # Store example for printing/saving
-                example = {
-                    'batch_idx': batch_idx,
-                    'sample_idx': j,
-                    'generated': decoded_pred,
-                    'target': target,
-                    'bleu_score': bleu,
-                    'predicted_cell_type': pred_cell_type,
-                    'target_cell_type': target_cell_type,
-                    'cell_type_match': pred_cell_type == target_cell_type,
-                    'loss': val_loss
-                }
-                examples.append(example)
-            
+                # Store example (only on main process to avoid duplicates)
+                if is_main_process:
+                    example = {
+                        'batch_idx': batch_idx,
+                        'sample_idx': j,
+                        'generated': decoded_pred,
+                        'target': target,
+                        'bleu_score': bleu,
+                        'predicted_cell_type': pred_cell_type,
+                        'target_cell_type': target_cell_type,
+                        'cell_type_match': pred_cell_type == target_cell_type,
+                        'loss': val_loss
+                    }
+                    examples.append(example)
     
-    # Handle distributed evaluation - gather metrics from all processes
-    if accelerator is not None and accelerator.num_processes > 1:
-        # Convert lists to tensors for gathering
-        bleu_tensor = torch.tensor(bleu_scores, device=accelerator.device) if bleu_scores else torch.tensor([], device=accelerator.device)
-        val_losses_tensor = torch.tensor(val_losses, device=accelerator.device) if val_losses else torch.tensor([], device=accelerator.device)
+    # Gather metrics from all processes if using DDP
+    if use_ddp and world_size > 1:
+        # Gather BLEU scores
+        all_bleu_scores = gather_distributed_metrics(bleu_scores, world_size, rank)
         
-        # Gather BLEU scores from all processes
-        all_bleu_scores = accelerator.gather_for_metrics(bleu_tensor)
-        bleu_scores = all_bleu_scores.cpu().numpy().tolist() if len(all_bleu_scores) > 0 else []
-        
-        # Gather validation losses from all processes
-        if len(val_losses_tensor) > 0:
-            all_val_losses = accelerator.gather_for_metrics(val_losses_tensor)
-            val_losses = all_val_losses.cpu().numpy().tolist()
-        else:
-            val_losses = []
-        
-        
-        # Create padded tensors for cell type predictions (using a vocabulary mapping)
-        # First, create a vocabulary of all unique cell types across processes
-        all_cell_types = list(set(predicted_cell_types + target_cell_types))
-        
-        # Create mapping from cell type to index
-        cell_type_to_idx = {cell_type: idx for idx, cell_type in enumerate(all_cell_types)}
-        
-        # Convert predictions to indices
-        pred_indices = [cell_type_to_idx[ct] for ct in predicted_cell_types]
-        target_indices = [cell_type_to_idx[ct] for ct in target_cell_types]
-        
-        # Convert to tensors
-        pred_tensor = torch.tensor(pred_indices, device=accelerator.device) if pred_indices else torch.tensor([], device=accelerator.device, dtype=torch.long)
-        target_tensor = torch.tensor(target_indices, device=accelerator.device) if target_indices else torch.tensor([], device=accelerator.device, dtype=torch.long)
+        # Gather validation losses
+        all_val_losses = gather_distributed_metrics(val_losses, world_size, rank)
         
         # Gather cell type predictions
-        if len(pred_tensor) > 0:
-            all_pred_indices = accelerator.gather_for_metrics(pred_tensor)
-            all_target_indices = accelerator.gather_for_metrics(target_tensor)
-            
-            # Convert back to cell type strings
-            predicted_cell_types = [all_cell_types[idx] for idx in all_pred_indices.cpu().numpy()]
-            target_cell_types = [all_cell_types[idx] for idx in all_target_indices.cpu().numpy()]
-        else:
-            predicted_cell_types = []
-            target_cell_types = []
+        all_predicted_cell_types = gather_distributed_strings(predicted_cell_types, world_size, rank)
+        all_target_cell_types = gather_distributed_strings(target_cell_types, world_size, rank)
         
-        # We'll only use examples from the main process for printing to avoid confusion
-        if not accelerator.is_main_process:
-            examples = []
-    
-
-            
+        # Use gathered metrics
+        bleu_scores = all_bleu_scores
+        val_losses = all_val_losses
+        predicted_cell_types = all_predicted_cell_types
+        target_cell_types = all_target_cell_types
     
     # Calculate overall metrics
     avg_bleu = np.mean(bleu_scores) if bleu_scores else 0.0
@@ -317,10 +343,8 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     # Calculate cell type metrics
     cell_type_metrics = calculate_cell_type_metrics(predicted_cell_types, target_cell_types)
     
-    should_print = accelerator is None or accelerator.is_main_process
-
-    if should_print:
-        
+    # Print results only on main process
+    if is_main_process:
         # Print overall results
         print(f"\n{'='*60}")
         print(f"VALIDATION RESULTS")

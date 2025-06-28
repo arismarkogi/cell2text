@@ -407,7 +407,7 @@ class Cell2TextDDPTrainer:
             self.optimizer.zero_grad()
         
         self.global_step += 1
-        return loss.item() * self.args.gradient_accumulation_step
+        return loss.item() * self.args.gradient_accumulation_steps
     
 
     def validate(self):
@@ -415,19 +415,21 @@ class Cell2TextDDPTrainer:
         if self.val_loader is None:
             return None
         
+        # Check if we're using DDP
+        use_ddp = isinstance(self.model, DDP) or dist.is_initialized()
+        
         # Get the underlying model (unwrap DDP if necessary)
         model_for_eval = self.model.module if isinstance(self.model, DDP) else self.model
         
         results = evaluate_cell2text_model(
-            model=model_for_eval,  
+            model=model_for_eval,
             val_loader=self.val_loader,
             tokenizer=self.tokenizer,
             device=self.device,
-            accelerator=None,  # No accelerator for DDP
-            print_examples=10,
-            save_results=None
+            print_examples=5,  # Fewer examples during training validation
+            save_results=None,
+            use_ddp=use_ddp
         )
-        
         return results.get('validation_loss', None)
     
     def save_checkpoint(self, checkpoint_dir, additional_state=None):
@@ -464,19 +466,7 @@ class Cell2TextDDPTrainer:
         if self.world_size > 1:
             dist.destroy_process_group()
 
-    # Modify the progress bar creation to respect DDP
-    def create_progress_bar(description, total, is_main_process):
-        """Create progress bar only on main process"""
-        if is_main_process:
-            return tqdm(
-                desc=description, 
-                total=total,
-                position=0,
-                leave=True,
-                file=sys.stdout
-            )
-        else:
-            return None
+    
         
     def sanity_train(self):
         """Sanity training loop - overfit on small dataset with DeepSpeed"""
@@ -519,7 +509,7 @@ class Cell2TextDDPTrainer:
             epoch_loss = np.mean(epoch_losses)
             
             # Only update progress bar on rank 0
-            if not self.accelerator.is_main_process:
+            if not self.is_main_process:
                 progress_bar.update(1)
                 progress_bar.set_description(
                     f"🚀 DeepSpeed Sanity Training | 📊 Epoch: {epoch+1}/{self.args.epochs} | "
@@ -529,15 +519,15 @@ class Cell2TextDDPTrainer:
             epoch += 1
 
             if epoch_loss <= self.args.target_loss:
-                if not self.accelerator.is_main_process:
+                if not self.is_main_process:
                     print(f"\n🎉 Target loss {self.args.target_loss:.4f} reached at epoch {epoch}!")
                     print(f"Final epoch loss: {epoch_loss:.4f}")
                 break
-        
-        progress_bar.close()
+        if progress_bar is not None:
+            progress_bar.close()
         
         final_loss = epoch_loss
-        if not self.accelerator.is_main_process:
+        if not self.is_main_process:
             print(f"\nDeepSpeed sanity training completed!")
             print(f"Final loss: {final_loss:.4f}")
             print(f"Target reached: {'✓' if final_loss <= self.args.target_loss else '✗'}")
@@ -549,18 +539,11 @@ class Cell2TextDDPTrainer:
             
             checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
             
-            self.accelerator.save_model(self.model, checkpoint_dir)
+            self.save_checkpoint( checkpoint_dir)
 
-            checkpoint_state = {
-                'optimizer': self.optimizer.state_dict(),
-                'lr_scheduler': self.lr_scheduler.state_dict(),
-                'global_step': self.global_step,
-                'losses': self.losses
-            }
-            self.accelerator.save(checkpoint_state, os.path.join(checkpoint_dir, "training_state.pt"))
             
             # Save training info with experiment context (only on rank 0)
-            if not self.accelerator.is_main_process:
+            if not self.is_main_process:
                 info_path = os.path.join(checkpoint_dir, "training_info.json")
                 info_dict = {
                     "experiment_name": self.experiment_name,
@@ -616,7 +599,7 @@ class Cell2TextDDPTrainer:
         training_history = []
         
         total_steps = self.args.epochs * len(self.train_loader)
-        progress_bar = self.create_progress_bar("🚀 DDP Full Training", total_steps, self.is_main_process)
+        progress_bar = create_progress_bar("🚀 DDP Full Training", total_steps, self.is_main_process)
         
         best_val_loss = float('inf')
         best_val_bleu = 0.0
@@ -682,7 +665,7 @@ class Cell2TextDDPTrainer:
                     }
                     validation_history.append(validation_record)
                     
-                    if not self.accelerator.is_main_process:
+                    if not self.is_main_process:
                         print(f"\nValidation at step {self.global_step}:")
                         if val_loss is not None:
                             print(f"  Loss: {val_loss:.4f}")
@@ -721,19 +704,12 @@ class Cell2TextDDPTrainer:
                             
                             checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
                             
-                            self.accelerator.save_model(self.model, checkpoint_dir)
+                            self.save_checkpoint(checkpoint_dir)
 
-                            # For additional state:
-                            checkpoint_state = {
-                                'optimizer': self.optimizer.state_dict(),
-                                'lr_scheduler': self.lr_scheduler.state_dict(),
-                                'global_step': self.global_step,
-                                'losses': self.losses
-                            }
-                            self.accelerator.save(checkpoint_state, os.path.join(checkpoint_dir, "training_state.pt"))
+                            
                             
                             # On Rank 0, save supplementary files
-                            if not self.accelerator.is_main_process:
+                            if not self.is_main_process:
                                 # Save validation history
                                 validation_history_path = os.path.join(checkpoint_dir, "validation_history.json")
                                 with open(validation_history_path, 'w') as f:
@@ -747,7 +723,7 @@ class Cell2TextDDPTrainer:
                         steps_since_improvement += self.args.eval_steps
                         
                         if self.args.early_stopping > 0 and steps_since_improvement >= self.args.early_stopping:
-                            if not self.accelerator.is_main_process:
+                            if not self.is_main_process:
                                 print(f"\nEarly stopping triggered after {steps_since_improvement} steps without improvement")
                             progress_bar.close()
                             
@@ -761,10 +737,11 @@ class Cell2TextDDPTrainer:
                     dist.barrier()
             # End of epoch summary
             epoch_loss = np.mean(epoch_losses)
-            if not self.accelerator.is_main_process:
+            if not self.is_main_process:
                 print(f"\nEpoch {epoch+1} completed. Average loss: {epoch_loss:.4f}")
         
-        progress_bar.close()
+        if progress_bar is not None:
+            progress_bar.close()
         
         # Final evaluation before closing
         final_val_results = None
@@ -796,7 +773,7 @@ class Cell2TextDDPTrainer:
             }
             validation_history.append(final_validation_record)
             
-            if not self.accelerator.is_main_process:
+            if not self.is_main_process:
                 print(f"\nFinal Validation Results:")
                 if final_val_loss is not None:
                     print(f"  Loss: {final_val_loss:.4f}")
@@ -820,21 +797,14 @@ class Cell2TextDDPTrainer:
                 
                 checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
                 
-                self.accelerator.save_model(self.model, checkpoint_dir)
+                self.save_checkpoint( checkpoint_dir)
 
-                # For additional state:
-                checkpoint_state = {
-                    'optimizer': self.optimizer.state_dict(),
-                    'lr_scheduler': self.lr_scheduler.state_dict(),
-                    'global_step': self.global_step,
-                    'losses': self.losses
-                }
-                self.accelerator.save(checkpoint_state, os.path.join(checkpoint_dir, "training_state.pt"))
+               
                 
-                if not self.accelerator.is_main_process:
+                if not self.is_main_process:
                     print(f"New best model saved after final evaluation to: {checkpoint_dir}")
             elif not final_improved:
-                if not self.accelerator.is_main_process:
+                if not self.is_main_process:
                     print("Final model did not outperform the best model. No new best model saved.")
         else:
             print("No validation loader available, skipping final evaluation.")
@@ -846,7 +816,7 @@ class Cell2TextDDPTrainer:
         
     def _save_training_history(self, training_history, validation_history):
         """Save training and validation history to files with enhanced metrics tracking"""
-        if not self.accelerator.is_main_process:
+        if not self.is_main_process:
             # Enhanced training history with loss progression
             enhanced_training_history = {
                 'training_steps': training_history,
@@ -982,75 +952,73 @@ class Cell2TextDDPTrainer:
         
     def run_evaluation(self):
         """Run evaluation"""
-        if not self.accelerator.is_main_process:
+        # Check if we're the main process (for DDP)
+        is_main_process = not dist.is_initialized() or dist.get_rank() == 0
+        
+        if is_main_process:
             print("\n" + "="*60)
             print("RUNNING EVALUATION")
             print("="*60)
         
         if self.val_loader is None:
-            print("No validation dataset available for evaluation.")
+            if is_main_process:
+                print("No validation dataset available for evaluation.")
             return {}
         
-        results_filename = f"{self.args.mode}_evaluation_results.json"
+        # Check if we're using DDP
+        use_ddp = isinstance(self.model, DDP) or dist.is_initialized()
         
-        if self.experiment_name:
-            results_filename = f"{self.experiment_name}_{results_filename}"
+        # Get the underlying model (unwrap DDP if necessary)
+        if hasattr(self.model, 'module'):
+            model_for_eval = self.model.module
+        else:
+            model_for_eval = self.model
         
+        # Prepare results filename (only on main process)
+        results_filename = None
+        if is_main_process and self.args.save_results:
+            results_filename = f"{self.args.mode}_evaluation_results.json"
+            if hasattr(self, 'experiment_name') and self.experiment_name:
+                results_filename = f"{self.experiment_name}_{results_filename}"
+            results_filename = os.path.join(self.args.output_dir, results_filename)
+        
+        # Run evaluation
         results = evaluate_cell2text_model(
-            model=self.model_engine.module,
+            model=model_for_eval,
             val_loader=self.val_loader,
             tokenizer=self.tokenizer,
-            device=self.model_engine.device,
-            print_examples=self.args.num_samples if self.args.mode == "sanity" and (not self.accelerator.is_main_process) else 8,
-            save_results=os.path.join(self.args.output_dir, results_filename) if self.args.save_results else None
+            device=self.device,
+            print_examples=self.args.num_samples if (
+                self.args.mode == "sanity" and is_main_process
+            ) else 8,
+            save_results=results_filename,
+            use_ddp=use_ddp
         )
         
-        print("\n" + "="*60)
-        print(f"DEEPSPEED {self.args.mode.upper()} TRAINING SUMMARY")
-        print("="*60)
-        print(f"Final training loss: {self.losses[-1] if self.losses else 'N/A':.4f}")
-        if self.args.mode == "sanity":
-            print(f"Target loss: {self.args.target_loss:.4f}")
-            print(f"Target reached: {'✓' if self.losses and self.losses[-1] <= self.args.target_loss else '✗'}")
-        print(f"BLEU score: {results.get('bleu', 0):.4f}")
-        print(f"Cell type accuracy: {results.get('cell_type_accuracy', 0):.4f}")
-        print(f"Cell type F1: {results.get('cell_type_f1', 0):.4f}")
+        # Print summary only on main process
+        if is_main_process:
+            print("\n" + "="*60)
+            print(f"DDP {self.args.mode.upper()} TRAINING SUMMARY")
+            print("="*60)
+            
+            if hasattr(self, 'losses') and self.losses:
+                print(f"Final training loss: {self.losses[-1]:.4f}")
+            else:
+                print("Final training loss: N/A")
+                
+            if self.args.mode == "sanity":
+                if hasattr(self.args, 'target_loss'):
+                    print(f"Target loss: {self.args.target_loss:.4f}")
+                    if hasattr(self, 'losses') and self.losses:
+                        target_reached = self.losses[-1] <= self.args.target_loss
+                        print(f"Target reached: {'✓' if target_reached else '✗'}")
+                    
+            print(f"BLEU score: {results.get('bleu', 0):.4f}")
+            print(f"Cell type accuracy: {results.get('cell_type_accuracy', 0):.4f}")
+            print(f"Cell type F1: {results.get('cell_type_f1', 0):.4f}")
         
         return results
-        
-    
-    def run_ddp(rank, world_size, args):
-        """Run training with DDP on specific rank"""
-        trainer = Cell2TextDDPTrainer(args, rank, world_size)
-        
-        try:
-            trainer.load_tokenizer()
-            trainer.setup_datasets()
-            trainer.initialize_model()
-            trainer.freeze_model_components()
-            trainer.apply_lora_to_model()
-            if trainer.is_main_process:
-                trainer.print_model_parameters()
-            
-            trainer.setup_model_and_optimizer()
-            
-            if args.mode == "sanity":
-                target_reached = trainer.sanity_train()
-            else:
-                trainer.full_train()
-                target_reached = True
-                
-            # Evaluate (only on main process)
-            if trainer.is_main_process:
-                results = trainer.run_evaluation()
-            else:
-                results = {}
-                
-            return target_reached, results
-            
-        finally:
-            trainer.cleanup_distributed()
-    
+
     def _convert_json_compat(self, obj):
         if isinstance(obj, dict):
             return {k: self._convert_json_compat(v) for k, v in obj.items()}
@@ -1064,6 +1032,53 @@ class Cell2TextDDPTrainer:
             return bool(obj)
         else:
             return obj
+    
+# Modify the progress bar creation to respect DDP
+def create_progress_bar(description, total, is_main_process):
+    """Create progress bar only on main process"""
+    if is_main_process:
+        return tqdm(
+            desc=description, 
+            total=total,
+            position=0,
+            leave=True,
+            file=sys.stdout
+        )
+    else:
+        return None
+def run_ddp(rank, world_size, args):
+    """Run training with DDP on specific rank"""
+    trainer = Cell2TextDDPTrainer(args, rank, world_size)
+        
+    try:
+        trainer.load_tokenizer()
+        trainer.setup_datasets()
+        trainer.initialize_model()
+        trainer.freeze_model_components()
+        trainer.apply_lora_to_model()
+        if trainer.is_main_process:
+            trainer.print_model_parameters()
+            
+        trainer.setup_model_and_optimizer()
+            
+        if args.mode == "sanity":
+            target_reached = trainer.sanity_train()
+        else:
+            trainer.full_train()
+            target_reached = True
+                
+        # Evaluate (only on main process)
+        if trainer.is_main_process:
+                results = trainer.run_evaluation()
+        else:
+            results = {}
+                
+        return target_reached, results
+            
+    finally:
+        trainer.cleanup_distributed()
+    
+
 
 
 
@@ -1246,15 +1261,15 @@ def main():
     
     if world_size > 1:
         # Multi-GPU training with DDP
-        mp.spawn(trainer.run_ddp, args=(world_size, args), nprocs=world_size, join=True)
+        mp.spawn(run_ddp, args=(world_size, args), nprocs=world_size, join=True)
     else:
         # Single GPU/CPU training
-        target_reached, results = trainer.run_ddp(0, 1, args)
+        target_reached, results = run_ddp(0, 1, args)
     
     
     
     # Final summary (only on rank 0)
-    if not trainer.accelerator.is_main_process:
+    if not trainer.is_main_process:
         print("\n" + "="*60)
         print(f"FINAL DEEPSPEED {args.mode.upper()} TRAINING RESULTS")
         print("="*60)

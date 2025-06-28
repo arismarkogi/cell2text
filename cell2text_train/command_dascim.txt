@@ -1,4 +1,4 @@
-/home/arism/cell2text/cell2text_train/train_deepspeed.py \
+/home/arism/cell2text/cell2text_train/train_ddp.py \
     --token_dictionary_path /home/arism/cell2text/Geneformer/geneformer/token_dictionary_gc104M.pkl \
     --train_data_path /home/arism/datasets/train \
     --val_data_path /home/arism/datasets/validation \
