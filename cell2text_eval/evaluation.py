@@ -91,18 +91,15 @@ def calculate_cell_type_metrics(predicted_types, target_types):
 
 
 def gather_distributed_metrics(values_list, world_size, rank):
-    """Gather metrics from all DDP processes"""
-    if world_size <= 1:
-        return values_list
-    
-    # Convert to tensor
-    local_tensor = torch.tensor(values_list, dtype=torch.float32)
-    
-    # Gather tensor sizes first
-    local_size = torch.tensor([len(values_list)], dtype=torch.long)
-    all_sizes = [torch.zeros(1, dtype=torch.long) for _ in range(world_size)]
+    device = torch.device(f"cuda:{rank}")          # or use your model.device
+    local_size = torch.tensor([len(values_list)],
+                              dtype=torch.long,
+                              device=device)
+
+    all_sizes = [torch.zeros(1, dtype=torch.long, device=device)
+                 for _ in range(world_size)]
+
     dist.all_gather(all_sizes, local_size)
-    
     # Pad tensors to the same size
     max_size = max(size.item() for size in all_sizes)
     if len(values_list) < max_size:
