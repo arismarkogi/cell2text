@@ -91,73 +91,35 @@ def calculate_cell_type_metrics(predicted_types, target_types):
 
 
 def gather_distributed_metrics(values_list, world_size, rank):
-    device = torch.device(f"cuda:{rank}")          # or use your model.device
-    local_size = torch.tensor([len(values_list)],
-                              dtype=torch.long,
-                              device=device)
+    """
+    Gather a per‑rank list of scalars (floats/ints) from all DDP processes
+    and return a single flattened Python list.
 
-    all_sizes = [torch.zeros(1, dtype=torch.long, device=device)
-                 for _ in range(world_size)]
+    Works for any backend (`nccl`, `gloo`, `mpi`) and any device, because
+    `all_gather_object` communicates via host memory.
+    """
+    if world_size <= 1:                      # single‑process fallback
+        return values_list
 
-    dist.all_gather(all_sizes, local_size)
-    # Pad tensors to the same size
-    max_size = max(size.item() for size in all_sizes)
-    if len(values_list) < max_size:
-        # Pad with zeros (we'll filter these out later)
-        padding = torch.zeros(max_size - len(values_list), dtype=torch.float32)
-        local_tensor = torch.cat([local_tensor, padding])
-    
-    # Gather all tensors
-    gathered_tensors = [torch.zeros(max_size, dtype=torch.float32) for _ in range(world_size)]
-    dist.all_gather(gathered_tensors, local_tensor)
-    
-    # Flatten and remove padding
-    all_values = []
-    for i, tensor in enumerate(gathered_tensors):
-        actual_size = all_sizes[i].item()
-        all_values.extend(tensor[:actual_size].tolist())
-    
-    return all_values
+    gathered = [None] * world_size          # one slot per rank
+    dist.all_gather_object(gathered, values_list)
+
+    # `gathered` is now  List[List[scalar]]
+    return [v for sub in gathered for v in sub]
 
 
 def gather_distributed_strings(strings_list, world_size, rank):
-    """Gather string lists from all DDP processes"""
-    if world_size <= 1:
+    if world_size == 1:
         return strings_list
-    
-    # Convert strings to indices using a local vocabulary
-    local_vocab = list(set(strings_list))
-    local_indices = [local_vocab.index(s) for s in strings_list]
-    
-    # Gather vocabularies from all processes
-    vocab_size = torch.tensor([len(local_vocab)], dtype=torch.long)
-    all_vocab_sizes = [torch.zeros(1, dtype=torch.long) for _ in range(world_size)]
-    dist.all_gather(all_vocab_sizes, vocab_size)
-    
-    max_vocab_size = max(size.item() for size in all_vocab_sizes)
-    
-    # Create a global vocabulary (this is approximate, but works for our use case)
-    # In practice, we'll need to handle this more carefully
-    all_strings = []
-    for strings in [strings_list]:  # Start with local strings
-        all_strings.extend(strings)
-    
-    # For simplicity, let's use a different approach
-    # Gather the actual data sizes first
-    local_size = torch.tensor([len(strings_list)], dtype=torch.long)
-    all_sizes = [torch.zeros(1, dtype=torch.long) for _ in range(world_size)]
-    dist.all_gather(all_sizes, local_size)
-    
-    # Since strings are complex to gather, we'll use object_list
-    gathered_strings = [None for _ in range(world_size)]
-    dist.all_gather_object(gathered_strings, strings_list)
-    
-    # Flatten
-    all_strings = []
-    for string_list in gathered_strings:
-        all_strings.extend(string_list)
-    
-    return all_strings
+
+    # supply each rank with **some** list, even empty
+    strings_list = strings_list or []
+
+    gathered = [None] * world_size
+    dist.all_gather_object(gathered, strings_list)   # every rank participates
+
+    # flatten
+    return [s for sub in gathered for s in sub]
 
 
 def evaluate_cell2text_model(model: Cell2TextModel, 
