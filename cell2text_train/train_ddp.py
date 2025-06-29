@@ -1,5 +1,3 @@
-#!/home/arism/miniconda3/envs/cell2text_env/bin/python3
-
 import torch
 import pandas as pd
 import numpy as np

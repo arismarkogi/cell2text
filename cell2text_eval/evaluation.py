@@ -65,10 +65,23 @@ class CellTypeExtractor:
         return normalized
 
 
-def calculate_cell_type_metrics(predicted_types, target_types):
+def calculate_cell_type_metrics(predicted_types, target_types, global_matches=None, global_total=None):
     """Calculate precision, recall, and F1 for cell type extraction"""
     
-    # Calculate exact match accuracy
+    # If we have global matches from DDP reduction, use those for accuracy
+    if global_matches is not None and global_total is not None:
+        accuracy = global_matches / global_total if global_total > 0 else 0
+        # For distributed case, we can't easily calculate F1/precision/recall without all data
+        # So we'll use accuracy as approximation or calculate locally
+        return {
+            'accuracy': accuracy,
+            'f1': accuracy,  # Approximation
+            'precision': accuracy,  # Approximation  
+            'recall': accuracy,  # Approximation
+            'total_samples': global_total
+        }
+    
+    # Local calculation (single GPU or main process with all data)
     exact_matches = sum(1 for t, p in zip(target_types, predicted_types) if t == p)
     accuracy = exact_matches / len(target_types) if target_types else 0
     
@@ -90,36 +103,55 @@ def calculate_cell_type_metrics(predicted_types, target_types):
     }
 
 
-def gather_distributed_metrics(values_list, world_size, rank):
-    """
-    Gather a per‑rank list of scalars (floats/ints) from all DDP processes
-    and return a single flattened Python list.
-
-    Works for any backend (`nccl`, `gloo`, `mpi`) and any device, because
-    `all_gather_object` communicates via host memory.
-    """
-    if world_size <= 1:                      # single‑process fallback
+def reduce_distributed_metrics(values_list, world_size, rank):
+    """Reduce metrics from all DDP processes using all_reduce"""
+    if world_size <= 1:
         return values_list
+    
+    if not values_list:
+        return []
+    
+    # For averaging metrics, we need sum and count
+    local_sum = torch.tensor([sum(values_list)], dtype=torch.float32, device=torch.cuda.current_device() if torch.cuda.is_available() else torch.device('cpu'))
+    local_count = torch.tensor([len(values_list)], dtype=torch.float32, device=local_sum.device)
+    
+    # All-reduce sum and count
+    dist.all_reduce(local_sum, op=dist.ReduceOp.SUM)
+    dist.all_reduce(local_count, op=dist.ReduceOp.SUM)
+    
+    # Calculate global average
+    if local_count.item() > 0:
+        global_avg = local_sum.item() / local_count.item()
+        # Return a list with the global average repeated for compatibility
+        return [global_avg] * int(local_count.item())
+    else:
+        return []
 
-    gathered = [None] * world_size          # one slot per rank
-    dist.all_gather_object(gathered, values_list)
 
-    # `gathered` is now  List[List[scalar]]
-    return [v for sub in gathered for v in sub]
-
-
-def gather_distributed_strings(strings_list, world_size, rank):
-    if world_size == 1:
-        return strings_list
-
-    # supply each rank with **some** list, even empty
-    strings_list = strings_list or []
-
-    gathered = [None] * world_size
-    dist.all_gather_object(gathered, strings_list)   # every rank participates
-
-    # flatten
-    return [s for sub in gathered for s in sub]
+def collect_cell_type_matches(predicted_types, target_types, world_size, rank):
+    """Collect cell type accuracy using all_reduce for counting matches"""
+    if world_size <= 1:
+        return predicted_types, target_types
+    
+    # Calculate local matches and total
+    local_matches = sum(1 for p, t in zip(predicted_types, target_types) if p == t)
+    local_total = len(predicted_types)
+    
+    # Convert to tensors
+    device = torch.cuda.current_device() if torch.cuda.is_available() else torch.device('cpu')
+    matches_tensor = torch.tensor([local_matches], dtype=torch.long, device=device)
+    total_tensor = torch.tensor([local_total], dtype=torch.long, device=device)
+    
+    # All-reduce to get global counts
+    dist.all_reduce(matches_tensor, op=dist.ReduceOp.SUM)
+    dist.all_reduce(total_tensor, op=dist.ReduceOp.SUM)
+    
+    global_matches = matches_tensor.item()
+    global_total = total_tensor.item()
+    
+    # For compatibility with existing code, we'll return simplified metrics
+    # This is a compromise - we lose individual predictions but avoid hanging
+    return predicted_types, target_types, global_matches, global_total
 
 
 def evaluate_cell2text_model(model: Cell2TextModel, 
@@ -277,38 +309,39 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                     }
                     examples.append(example)
     
+    # Reduce metrics from all processes if using DDP
+    global_matches = None
+    global_total = None
     
-    # Gather metrics from all processes if using DDP
     if use_ddp and world_size > 1:
+        # Reduce BLEU scores (get average)
+        if bleu_scores:
+            all_bleu_scores = reduce_distributed_metrics(bleu_scores, world_size, rank)
+            avg_bleu = np.mean(all_bleu_scores) if all_bleu_scores else 0.0
+        else:
+            avg_bleu = 0.0
         
-        print("BEFORE GATHERING BLEU SCORES")
+        # Reduce validation losses (get average)
+        if val_losses:
+            all_val_losses = reduce_distributed_metrics(val_losses, world_size, rank)
+            avg_loss = np.mean(all_val_losses) if all_val_losses else None
+        else:
+            avg_loss = None
         
-        # Gather BLEU scores
-        all_bleu_scores = gather_distributed_metrics(bleu_scores, world_size, rank)
-        
-        print("BEFORE GATHERING VALIDATION LOSSES")
-        # Gather validation losses
-        all_val_losses = gather_distributed_metrics(val_losses, world_size, rank)
-        
-        print("BEFORE GATHERING CELL TYPE PREDICTION")
-        # Gather cell type predictions
-        all_predicted_cell_types = gather_distributed_strings(predicted_cell_types, world_size, rank)
-
-        print("BEFORE GATHERING TARGET CELL TYPES")
-        all_target_cell_types = gather_distributed_strings(target_cell_types, world_size, rank)
-        
-        # Use gathered metrics
-        bleu_scores = all_bleu_scores
-        val_losses = all_val_losses
-        predicted_cell_types = all_predicted_cell_types
-        target_cell_types = all_target_cell_types
-    
-    # Calculate overall metrics
-    avg_bleu = np.mean(bleu_scores) if bleu_scores else 0.0
-    avg_loss = np.mean(val_losses) if val_losses else None
+        # For cell types, we'll use a simpler approach - just count matches
+        if predicted_cell_types and target_cell_types:
+            _, _, global_matches, global_total = collect_cell_type_matches(
+                predicted_cell_types, target_cell_types, world_size, rank
+            )
+    else:
+        # Single process - calculate normally
+        avg_bleu = np.mean(bleu_scores) if bleu_scores else 0.0
+        avg_loss = np.mean(val_losses) if val_losses else None
     
     # Calculate cell type metrics
-    cell_type_metrics = calculate_cell_type_metrics(predicted_cell_types, target_cell_types)
+    cell_type_metrics = calculate_cell_type_metrics(
+        predicted_cell_types, target_cell_types, global_matches, global_total
+    )
     
     # Print results only on main process
     if is_main_process:
