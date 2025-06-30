@@ -174,6 +174,14 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         use_ddp: Whether we're using DDP (affects printing and gathering)
     """
     
+
+    if use_ddp and dist.is_initialized():
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+        print(f"[Rank {rank}] Starting evaluation with world_size={world_size}")
+    else:
+        print("Starting evaluation without DDP")
+
     # Check if we're in a distributed setting
     if use_ddp and dist.is_initialized():
         world_size = dist.get_world_size()
@@ -201,7 +209,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     # Store examples for printing/saving
     examples = []
     
-    # Create progress bar only on main process
+    # Create progress bar only on main 
     if is_main_process:
         val_progress_bar = tqdm(val_loader, desc="[Validation]")
     else:
@@ -312,8 +320,11 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     # Reduce metrics from all processes if using DDP
     global_matches = None
     global_total = None
+
+    print(f"[Rank {rank if use_ddp else 0}] Finished forward passes, starting metric reduction")
     
     if use_ddp and world_size > 1:
+        print(f"[Rank {rank}] About to reduce BLEU scores: {len(bleu_scores)} scores")
         # Reduce BLEU scores (get average)
         if bleu_scores:
             all_bleu_scores = reduce_distributed_metrics(bleu_scores, world_size, rank)
