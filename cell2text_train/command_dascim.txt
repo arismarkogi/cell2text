@@ -14,5 +14,5 @@ python3 /home/arism/cell2text/cell2text_train/train_ddp.py \
     --mode full \
     --num_beams 1 \
     --experiment_name full_mlp_95000_samples_1epoch_topk256_batchsizeperdevie4_gradacc8_mlphiddensize2048 \
-    --eval_steps 30 \
+    --eval_steps 5 \
     --zero_stage 1

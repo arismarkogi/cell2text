@@ -636,8 +636,12 @@ class Cell2TextDDPTrainer:
                         f"Step: {step+1}/{len(self.train_loader)} | Loss: {loss:.4f}"
                     )
                 
-                # Validation (only on main process to avoid coordination issues)
-                if self.global_step % self.args.eval_steps == 0 and self.val_loader is not None and self.is_main_process:
+                # Validation 
+                if self.global_step % self.args.eval_steps == 0 and self.val_loader is not None:
+                    print(f"[Rank {self.rank}] Waiting for all ranks to reach the steps ...")
+                    dist.barrier()
+                    print(f"[Rank {self.rank}] All ranks reached ")
+
                     self.model.eval()
                     val_results = self.validate()
                     # Extract validation metrics
@@ -1066,10 +1070,7 @@ def run_ddp(rank, world_size, args):
             target_reached = True
                 
         # Evaluate (only on main process)
-        if trainer.is_main_process:
-                results = trainer.run_evaluation()
-        else:
-            results = {}
+        results = trainer.run_evaluation()
                 
         return target_reached, results
             

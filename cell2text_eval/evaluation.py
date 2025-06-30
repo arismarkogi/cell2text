@@ -321,7 +321,13 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     global_matches = None
     global_total = None
 
+    if use_ddp and dist.is_initialized():
+        print(f"[Rank {rank}] Waiting for all ranks to finish forward passes...")
+        dist.barrier()
+        print(f"[Rank {rank}] All ranks finished, proceeding with metric reduction")
+
     print(f"[Rank {rank if use_ddp else 0}] Finished forward passes, starting metric reduction")
+
     
     if use_ddp and world_size > 1:
         print(f"[Rank {rank}] About to reduce BLEU scores: {len(bleu_scores)} scores")
