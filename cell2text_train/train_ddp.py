@@ -712,7 +712,7 @@ class Cell2TextDDPTrainer:
         
         # Final evaluation before closing
         final_val_results = None
-        if self.val_loader is not None and self.is_main_process:
+        if self.val_loader is not None:
             self.model.eval()
             final_val_results = self.validate()
             
@@ -757,7 +757,7 @@ class Cell2TextDDPTrainer:
                 best_val_bleu = final_val_bleu
                 final_improved = True
                 
-            if final_improved and self.args.save_model:
+            if final_improved and self.args.save_model and self.is_main_process:
                 checkpoint_name = "best_model"
                 if self.experiment_name:
                     checkpoint_name = f"{self.experiment_name}_best_model"
