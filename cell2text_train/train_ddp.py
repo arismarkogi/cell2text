@@ -878,9 +878,11 @@ def run_ddp(rank, world_size, args):
         
         
         print(f"I am proces with rank {rank}")
-        dist.barrier()                       # sync after printing
-        results = trainer.validate()
-        dist.barrier()    
+        # dist.barrier()                       # sync after printing
+        # results = trainer.validate()
+        # dist.barrier() 
+
+        results = []   
         return target_reached, results
             
     finally:
