@@ -29,7 +29,7 @@ from peft import (
     PeftModel,
 )
 
-from .util import create_argument_parser, create_progress_bar, compute_enhanced_training_summary, convert_json_compat, SanityDataset, save_training_history
+from util import create_argument_parser, create_progress_bar, compute_enhanced_training_summary, convert_json_compat, SanityDataset, save_training_history
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -695,7 +695,7 @@ class Cell2TextDDPTrainer:
                             progress_bar.close()
                             
                             # Save final training and validation history
-                            save_training_history(training_history, validation_history)
+                            save_training_history(self, training_history, validation_history)
                             return
                     
                     self.model.train()  # Switch back to training mode
@@ -778,7 +778,7 @@ class Cell2TextDDPTrainer:
         
         if self.is_main_process:
             # Save complete training and validation history
-            save_training_history(training_history, validation_history)
+            save_training_history(self, training_history, validation_history)
         
         
         

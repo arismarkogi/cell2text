@@ -8,8 +8,12 @@ from torch.utils.data import DataLoader
 from transformers import PreTrainedTokenizer
 from collections import Counter
 import json
-from celltype_extractor import calculate_cell_type_metrics, CellTypeExtractor
+from .celltype_extractor import calculate_cell_type_metrics, CellTypeExtractor
 
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from cell2text_model.model import Cell2TextModel
 
 
 

@@ -2,12 +2,13 @@ import argparse
 from  tqdm import tqdm
 import sys
 import numpy as np
-from cell2text_dataset.dataset import Cell2TextDataset
 import json
 import random
 import os
 from torch.utils.data import Dataset
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from cell2text_dataset.dataset import Cell2TextDataset
 
 
 def create_progress_bar(description, total, is_main_process):
