@@ -486,7 +486,7 @@ class Cell2TextDDPTrainer:
             epoch_loss = np.mean(epoch_losses)
             
             # Only update progress bar on rank 0
-            if not self.is_main_process:
+            if  self.is_main_process:
                 progress_bar.update(1)
                 progress_bar.set_description(
                     f"🚀 DeepSpeed Sanity Training | 📊 Epoch: {epoch+1}/{self.args.epochs} | "
@@ -496,7 +496,7 @@ class Cell2TextDDPTrainer:
             epoch += 1
 
             if epoch_loss <= self.args.target_loss:
-                if not self.is_main_process:
+                if  self.is_main_process:
                     print(f"\n🎉 Target loss {self.args.target_loss:.4f} reached at epoch {epoch}!")
                     print(f"Final epoch loss: {epoch_loss:.4f}")
                 break
@@ -504,7 +504,7 @@ class Cell2TextDDPTrainer:
             progress_bar.close()
         
         final_loss = epoch_loss
-        if not self.is_main_process:
+        if  self.is_main_process:
             print(f"\nDeepSpeed sanity training completed!")
             print(f"Final loss: {final_loss:.4f}")
             print(f"Target reached: {'✓' if final_loss <= self.args.target_loss else '✗'}")
@@ -520,7 +520,7 @@ class Cell2TextDDPTrainer:
 
             
             # Save training info with experiment context (only on rank 0)
-            if not self.is_main_process:
+            if  self.is_main_process:
                 info_path = os.path.join(checkpoint_dir, "training_info.json")
                 info_dict = {
                     "experiment_name": self.experiment_name,
@@ -632,7 +632,7 @@ class Cell2TextDDPTrainer:
                     }
                     validation_history.append(validation_record)
                     
-                    if not self.is_main_process:
+                    if  self.is_main_process:
                         print(f"\nValidation at step {self.global_step}:")
                         if val_loss is not None:
                             print(f"  Loss: {val_loss:.4f}")
@@ -690,7 +690,7 @@ class Cell2TextDDPTrainer:
                         steps_since_improvement += self.args.eval_steps
                         
                         if self.args.early_stopping > 0 and steps_since_improvement >= self.args.early_stopping:
-                            if not self.is_main_process:
+                            if  self.is_main_process:
                                 print(f"\nEarly stopping triggered after {steps_since_improvement} steps without improvement")
                             progress_bar.close()
                             
@@ -704,7 +704,7 @@ class Cell2TextDDPTrainer:
                     dist.barrier()
             # End of epoch summary
             epoch_loss = np.mean(epoch_losses)
-            if not self.is_main_process:
+            if  self.is_main_process:
                 print(f"\nEpoch {epoch+1} completed. Average loss: {epoch_loss:.4f}")
         
         if progress_bar is not None:
@@ -740,7 +740,7 @@ class Cell2TextDDPTrainer:
             }
             validation_history.append(final_validation_record)
             
-            if not self.is_main_process:
+            if  self.is_main_process:
                 print(f"\nFinal Validation Results:")
                 if final_val_loss is not None:
                     print(f"  Loss: {final_val_loss:.4f}")
@@ -768,10 +768,10 @@ class Cell2TextDDPTrainer:
 
                
                 
-                if not self.is_main_process:
+                if  self.is_main_process:
                     print(f"New best model saved after final evaluation to: {checkpoint_dir}")
             elif not final_improved:
-                if not self.is_main_process:
+                if  self.is_main_process:
                     print("Final model did not outperform the best model. No new best model saved.")
         else:
             print("No validation loader available, skipping final evaluation.")
