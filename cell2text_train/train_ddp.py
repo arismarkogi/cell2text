@@ -711,7 +711,7 @@ class Cell2TextDDPTrainer:
                             
                             
                             # On Rank 0, save supplementary files
-                            if not self.is_main_process:
+                            if self.is_main_process:
                                 # Save validation history
                                 validation_history_path = os.path.join(checkpoint_dir, "validation_history.json")
                                 with open(validation_history_path, 'w') as f:
@@ -984,6 +984,8 @@ class Cell2TextDDPTrainer:
                 results_filename = f"{self.experiment_name}_{results_filename}"
             results_filename = os.path.join(self.args.output_dir, results_filename)
         
+
+        print(f"Before evaluate_cell2text_model, rank {self.rank}")
         # Run evaluation
         results = evaluate_cell2text_model(
             model=model_for_eval,
@@ -1068,8 +1070,10 @@ def run_ddp(rank, world_size, args):
         else:
             trainer.full_train()
             target_reached = True
-                
-        # Evaluate (only on main process)
+        
+        
+        print(f"I am proces with rank {rank}")
+        dist.barrier()                       # sync after printing
         results = trainer.run_evaluation()
                 
         return target_reached, results
