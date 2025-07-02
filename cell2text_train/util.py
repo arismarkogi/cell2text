@@ -272,7 +272,7 @@ class SanityDataset(Dataset):
 
 def save_training_history(model, training_history, validation_history):
         """Save training and validation history to files with enhanced metrics tracking"""
-        if not model.is_main_process:
+        if  model.is_main_process:
             # Enhanced training history with loss progression
             enhanced_training_history = {
                 'training_steps': training_history,
