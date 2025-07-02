@@ -8,3 +8,12 @@ Training only with torch distributed
 Models liek cell2sentence, Instructcell find their limitations, take their checkpoints
 PIpeline to get the h5ad downstream datasets to work for my models
 Gene-Gene interaction networks, to fuse the representation learning
+Novel Cell type classification task, probably find a way to give marker genes somehow in the input (at the prompt????)
+
+
+
+https://www.reddit.com/r/bioinformatics/comments/1k3cmpd/what_do_you_think_about_foundation_models_and/
+Second, all cell type annotation tools struggle beyond basic use cases. I'm in immunology, and there're very subtle differences between the fine cell subtypes. 
+Like, I don't need a tool which tells me I have CD4 and CD8 cells: it's super trivial. 
+But if you look at scRNA-seq papers, there're dozens of clusters that are named after a single marker. 
+And then maybe one or two of these are changed in some condition. How is foundational model going to help you with that? 

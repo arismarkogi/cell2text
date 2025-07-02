@@ -777,83 +777,12 @@ class Cell2TextDDPTrainer:
             print("No validation loader available, skipping final evaluation.")
         
         if self.is_main_process:
+            "NOW I AM SAVING TRAINING HISTORY"
             # Save complete training and validation history
             save_training_history(self, training_history, validation_history)
         
         
         
-    # def run_evaluation(self):
-    #     """Run evaluation"""
-    #     # Check if we're the main process (for DDP)
-    #     is_main_process = not dist.is_initialized() or dist.get_rank() == 0
-        
-    #     if is_main_process:
-    #         print("\n" + "="*60)
-    #         print("RUNNING EVALUATION")
-    #         print("="*60)
-        
-    #     if self.val_loader is None:
-    #         if is_main_process:
-    #             print("No validation dataset available for evaluation.")
-    #         return {}
-        
-    #     # Check if we're using DDP
-    #     use_ddp = isinstance(self.model, DDP) or dist.is_initialized()
-        
-    #     # Get the underlying model (unwrap DDP if necessary)
-    #     if hasattr(self.model, 'module'):
-    #         model_for_eval = self.model.module
-    #     else:
-    #         model_for_eval = self.model
-        
-    #     # Prepare results filename (only on main process)
-    #     results_filename = None
-    #     if is_main_process and self.args.save_results:
-    #         results_filename = f"{self.args.mode}_evaluation_results.json"
-    #         if hasattr(self, 'experiment_name') and self.experiment_name:
-    #             results_filename = f"{self.experiment_name}_{results_filename}"
-    #         results_filename = os.path.join(self.args.output_dir, results_filename)
-        
-
-    #     print(f"Before evaluate_cell2text_model, rank {self.rank}")
-    #     # Run evaluation
-    #     results = evaluate_cell2text_model(
-    #         model=model_for_eval,
-    #         val_loader=self.val_loader,
-    #         tokenizer=self.tokenizer,
-    #         device=self.device,
-    #         print_examples=self.args.num_samples if (
-    #             self.args.mode == "sanity" and is_main_process
-    #         ) else 8,
-    #         save_results=results_filename,
-    #         use_ddp=use_ddp
-    #     )
-    #     dist.barrier()
-    #     print(f"After evaluate_cell2text_model, rank {self.rank}")
-        
-    #     # Print summary only on main process
-    #     if is_main_process:
-    #         print("\n" + "="*60)
-    #         print(f"DDP {self.args.mode.upper()} TRAINING SUMMARY")
-    #         print("="*60)
-            
-    #         if hasattr(self, 'losses') and self.losses:
-    #             print(f"Final training loss: {self.losses[-1]:.4f}")
-    #         else:
-    #             print("Final training loss: N/A")
-                
-    #         if self.args.mode == "sanity":
-    #             if hasattr(self.args, 'target_loss'):
-    #                 print(f"Target loss: {self.args.target_loss:.4f}")
-    #                 if hasattr(self, 'losses') and self.losses:
-    #                     target_reached = self.losses[-1] <= self.args.target_loss
-    #                     print(f"Target reached: {'✓' if target_reached else '✗'}")
-                    
-    #         print(f"BLEU score: {results.get('bleu', 0):.4f}")
-    #         print(f"Cell type accuracy: {results.get('cell_type_accuracy', 0):.4f}")
-    #         print(f"Cell type F1: {results.get('cell_type_f1', 0):.4f}")
-        
-    #     return results    
     
 def run_ddp(rank, world_size, args):
     """Run training with DDP on specific rank"""
