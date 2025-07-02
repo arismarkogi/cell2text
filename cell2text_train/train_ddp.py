@@ -777,7 +777,8 @@ class Cell2TextDDPTrainer:
             print("No validation loader available, skipping final evaluation.")
         
         if self.is_main_process:
-            "NOW I AM SAVING TRAINING HISTORY"
+            print("**"*80)
+            print("NOW I AM SAVING TRAINING HISTORY")
             # Save complete training and validation history
             save_training_history(self, training_history, validation_history)
         
