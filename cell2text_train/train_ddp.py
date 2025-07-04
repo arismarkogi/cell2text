@@ -139,7 +139,7 @@ class Cell2TextDDPTrainer:
                 shuffle=False,
                 sampler=val_sampler,
                 num_workers=0,
-                collate_fn=full_train_dataset.collate_fn(mode="inference")
+                collate_fn=full_train_dataset.collate_fn(mode="train")
             )
             
             if self.is_main_process:
@@ -182,7 +182,7 @@ class Cell2TextDDPTrainer:
                     shuffle=False,
                     sampler=val_sampler,
                     num_workers=0,
-                    collate_fn=val_dataset.collate_fn(mode="inference")
+                    collate_fn=val_dataset.collate_fn(mode="train")
                 )
                 
                 if self.is_main_process:
@@ -349,65 +349,44 @@ class Cell2TextDDPTrainer:
         
         
     def train_step(self, batch):
-        """Perform a single training step with DDP"""
-        
         # Move batch to device
         batch = {k: v.to(self.device) if torch.is_tensor(v) else v for k, v in batch.items()}
-        
-        # Determine if this is the last step in accumulation
-        is_accumulation_step = (self.global_step + 1) % self.args.gradient_accumulation_steps != 0
-        
-        # For DDP, we need to handle gradient synchronization
-        # Only sync gradients on the last accumulation step
-        if self.world_size > 1 and is_accumulation_step:
-            # Disable gradient synchronization for accumulation steps
+
+        # Are we at the last accumulation step?
+        is_last_step = (self.global_step + 1) % self.args.gradient_accumulation_steps == 0
+
+        # Forward + backward
+        loss = self.model(
+            expression_tokens=batch["expression_tokens"],
+            expression_token_lengths=batch["expression_token_lengths"],
+            input_ids=batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            labels=batch["labels"],
+            return_dict=True
+        ).loss
+
+        loss = loss / self.args.gradient_accumulation_steps  # scale loss
+
+        if self.world_size > 1 and not is_last_step:
             with self.model.no_sync():
-                # Forward pass
-                outputs = self.model(
-                    expression_tokens=batch["expression_tokens"],
-                    expression_token_lengths=batch["expression_token_lengths"],
-                    input_ids=batch["input_ids"],
-                    attention_mask=batch["attention_mask"],
-                    labels=batch["labels"],
-                    return_dict=True
-                )
-                
-                # Scale loss by accumulation steps
-                loss = outputs.loss / self.args.gradient_accumulation_steps
-                
-                # Backward pass without gradient sync
                 loss.backward()
         else:
-            # Forward pass (last step in accumulation or single GPU)
-            outputs = self.model(
-                expression_tokens=batch["expression_tokens"],
-                expression_token_lengths=batch["expression_token_lengths"],
-                input_ids=batch["input_ids"],
-                attention_mask=batch["attention_mask"],
-                labels=batch["labels"],
-                return_dict=True
-            )
-            
-            # Scale loss by accumulation steps
-            loss = outputs.loss / self.args.gradient_accumulation_steps
-            
-            # Backward pass (will sync gradients for DDP)
             loss.backward()
-            
-            # Gradient clipping
-            if self.args.max_grad_norm > 0:
-                if self.world_size > 1:
-                    torch.nn.utils.clip_grad_norm_(self.model.module.parameters(), self.args.max_grad_norm)
-                else:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.max_grad_norm)
-            
-            # Optimizer step
+
+        # Optimizer step on last accumulation step
+        if is_last_step:
+            if self.args.max_grad_norm:
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters() if self.world_size == 1 else self.model.module.parameters(),
+                    self.args.max_grad_norm
+                )
             self.optimizer.step()
             self.lr_scheduler.step()
-            self.optimizer.zero_grad()
-        
+            self.optimizer.zero_grad(set_to_none=True)
+
         self.global_step += 1
         return loss.item() * self.args.gradient_accumulation_steps
+
     
 
     def validate(self):
