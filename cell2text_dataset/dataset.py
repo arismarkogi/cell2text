@@ -16,7 +16,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 class Cell2TextDataset(Dataset):
     def __init__(self, data_path, tokenizer, geneformer_tokenizer=None, 
                  system_message="You are a scientific assistant specialized in analyzing single-cell gene expression data. Given the gene expression profile, describe the cell type and its characteristics clearly and concisely in professional language.",
-                 placeholder_token='<|reserved_special_token_1|>', top_k=None, projector=None, num_latents=None):
+                 placeholder_token='<|reserved_special_token_1|>', top_k=None, projector="mlp", num_latents=None):
         """
         Dataset for cell expression data
         Args:
