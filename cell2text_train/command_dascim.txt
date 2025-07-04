@@ -11,8 +11,8 @@ python3 /home/arism/cell2text/cell2text_train/train_ddp.py \
     --decoder_hidden_size 3072 \
     --projector mlp \
     --mlp_hidden_size 2048 \
-    --mode sanity \
+    --mode full \
     --num_beams 1 \
-    --experiment_name sanity \
-    --eval_steps 2000 \
+    --experiment_name full \
+    --eval_steps 10 \
     --zero_stage 1

@@ -29,15 +29,34 @@ from peft import (
     PeftModel,
 )
 
-from util import create_argument_parser, create_progress_bar, compute_enhanced_training_summary, convert_json_compat, SanityDataset, save_training_history
+from util import create_argument_parser, create_progress_bar, compute_enhanced_training_summary, convert_json_compat, SanityDataset
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from cell2text_model.model import Cell2TextModel
 from cell2text_model.configuration import Cell2TextConfig
 from cell2text_dataset.dataset import Cell2TextDataset
-from cell2text_eval.evaluation import evaluate_cell2text_model
 
+
+def save_simple_training_history(trainer, training_history, validation_history):
+    """Simple training history saving function"""
+    if not trainer.is_main_process:
+        return
+    
+    # Save training history
+    training_history_path = os.path.join(trainer.args.output_dir, "training_history.json")
+    with open(training_history_path, 'w') as f:
+        json.dump(convert_json_compat(training_history), f, indent=2)
+    
+    # Save validation history if available
+    if validation_history:
+        validation_history_path = os.path.join(trainer.args.output_dir, "validation_history.json")
+        with open(validation_history_path, 'w') as f:
+            json.dump(convert_json_compat(validation_history), f, indent=2)
+    
+    print(f"Training history saved to: {training_history_path}")
+    if validation_history:
+        print(f"Validation history saved to: {validation_history_path}")
 
 
 class Cell2TextDDPTrainer:
@@ -387,29 +406,43 @@ class Cell2TextDDPTrainer:
         self.global_step += 1
         return loss.item() * self.args.gradient_accumulation_steps
 
-    
-
     def validate(self):
-        """Run validation using the full evaluation function"""
+        """Simplified validation - just compute loss"""
         if self.val_loader is None:
             return None
         
-        # Check if we're using DDP
-        use_ddp = isinstance(self.model, DDP) or dist.is_initialized()
+        self.model.eval()
+        total_loss = 0.0
+        num_batches = 0
         
-        # Get the underlying model (unwrap DDP if necessary)
-        model_for_eval = self.model.module if isinstance(self.model, DDP) else self.model
+        with torch.no_grad():
+            for batch in self.val_loader:
+                # Move batch to device
+                batch = {k: v.to(self.device) if torch.is_tensor(v) else v for k, v in batch.items()}
+                
+                # Forward pass
+                loss = self.model(
+                    expression_tokens=batch["expression_tokens"],
+                    expression_token_lengths=batch["expression_token_lengths"],
+                    input_ids=batch["input_ids"],
+                    attention_mask=batch["attention_mask"],
+                    labels=batch["labels"],
+                    return_dict=True
+                ).loss
+                
+                total_loss += loss.item()
+                num_batches += 1
         
-        results = evaluate_cell2text_model(
-            model=model_for_eval,
-            val_loader=self.val_loader,
-            tokenizer=self.tokenizer,
-            device=self.device,
-            print_examples=5,  # Fewer examples during training validation
-            save_results=None,
-            use_ddp=use_ddp
-        )
-        return results.get('validation_loss', None)
+        # Average loss across batches
+        avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+        
+        # Average across all processes if using DDP
+        if self.world_size > 1:
+            avg_loss_tensor = torch.tensor(avg_loss, device=self.device)
+            dist.all_reduce(avg_loss_tensor, op=dist.ReduceOp.SUM)
+            avg_loss = avg_loss_tensor.item() / self.world_size
+        
+        return avg_loss
     
     def save_checkpoint(self, checkpoint_dir, additional_state=None):
         """Save model checkpoint (only on main process)"""
@@ -445,12 +478,10 @@ class Cell2TextDDPTrainer:
         if self.world_size > 1:
             dist.destroy_process_group()
 
-    
-        
     def sanity_train(self):
-        """Sanity training loop - overfit on small dataset with DeepSpeed"""
+        """Sanity training loop - overfit on small dataset"""
         print("="*60)
-        print("STARTING DEEPSPEED SANITY CHECK TRAINING")
+        print("STARTING DDP SANITY CHECK TRAINING")
         print("="*60)
         print(f"Target loss: {self.args.target_loss}")
         print(f"Epochs: {self.args.epochs}")
@@ -463,14 +494,14 @@ class Cell2TextDDPTrainer:
         # Training loop - overfit until target loss
         self.model.train()
         
-        print("\nStarting overfitting training with DeepSpeed...")
+        print("\nStarting overfitting training...")
         progress_bar = tqdm(
-            desc="🚀 DeepSpeed Sanity Training", 
+            desc="🚀 Sanity Training", 
             total=self.args.epochs, 
             position=0,
             leave=True,
             file=sys.stdout,
-            disable=not (torch.distributed.get_rank() == 0 if torch.distributed.is_initialized() else True)
+            disable=not self.is_main_process
         )
         
         epoch_loss = 0.0
@@ -487,27 +518,28 @@ class Cell2TextDDPTrainer:
             # After completing one epoch
             epoch_loss = np.mean(epoch_losses)
             
-            # Only update progress bar on rank 0
-            if  self.is_main_process:
+            # Only update progress bar on main process
+            if self.is_main_process:
                 progress_bar.update(1)
                 progress_bar.set_description(
-                    f"🚀 DeepSpeed Sanity Training | 📊 Epoch: {epoch+1}/{self.args.epochs} | "
-                    f"📉 Loss: {epoch_loss:.4f} | 🎯 Target: {self.args.target_loss:.4f}"
+                    f"🚀 Sanity Training | Epoch: {epoch+1}/{self.args.epochs} | "
+                    f"Loss: {epoch_loss:.4f} | Target: {self.args.target_loss:.4f}"
                 )
 
             epoch += 1
 
             if epoch_loss <= self.args.target_loss:
-                if  self.is_main_process:
+                if self.is_main_process:
                     print(f"\n🎉 Target loss {self.args.target_loss:.4f} reached at epoch {epoch}!")
                     print(f"Final epoch loss: {epoch_loss:.4f}")
                 break
+                
         if progress_bar is not None:
             progress_bar.close()
         
         final_loss = epoch_loss
-        if  self.is_main_process:
-            print(f"\nDeepSpeed sanity training completed!")
+        if self.is_main_process:
+            print(f"\nSanity training completed!")
             print(f"Final loss: {final_loss:.4f}")
             print(f"Target reached: {'✓' if final_loss <= self.args.target_loss else '✗'}")
         
@@ -517,12 +549,10 @@ class Cell2TextDDPTrainer:
                 checkpoint_name = f"{self.experiment_name}_overfitted_sanity_model"
             
             checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
+            self.save_checkpoint(checkpoint_dir)
             
-            self.save_checkpoint( checkpoint_dir)
-
-            
-            # Save training info with experiment context (only on rank 0)
-            if  self.is_main_process:
+            # Save training info (only on main process)
+            if self.is_main_process:
                 info_path = os.path.join(checkpoint_dir, "training_info.json")
                 info_dict = {
                     "experiment_name": self.experiment_name,
@@ -567,9 +597,6 @@ class Cell2TextDDPTrainer:
         progress_bar = create_progress_bar("🚀 DDP Full Training", total_steps, self.is_main_process)
         
         best_val_loss = float('inf')
-        best_val_bleu = 0.0
-        best_val_cell_type_acc = 0.0
-        best_val_cell_type_f1 = 0.0
         steps_since_improvement = 0
         
         for epoch in range(self.args.epochs):
@@ -605,19 +632,11 @@ class Cell2TextDDPTrainer:
                 
                 # Validation 
                 if self.global_step % self.args.eval_steps == 0 and self.val_loader is not None:
-                    print(f"[Rank {self.rank}] Waiting for all ranks to reach the steps ...")
-                    dist.barrier()
-                    print(f"[Rank {self.rank}] All ranks reached ")
+                    if self.world_size > 1:
+                        dist.barrier()
 
                     self.model.eval()
-                    val_results = self.validate()
-                    # Extract validation metrics
-                    val_loss = val_results if isinstance(val_results, float) else val_results.get('validation_loss', None)
-                    val_bleu = val_results.get('bleu', 0.0) if isinstance(val_results, dict) else 0.0
-                    val_cell_type_acc = val_results.get('cell_type_accuracy', 0.0) if isinstance(val_results, dict) else 0.0
-                    val_cell_type_f1 = val_results.get('cell_type_f1', 0.0) if isinstance(val_results, dict) else 0.0
-                    val_cell_type_precision = val_results.get('cell_type_precision', 0.0) if isinstance(val_results, dict) else 0.0
-                    val_cell_type_recall = val_results.get('cell_type_recall', 0.0) if isinstance(val_results, dict) else 0.0
+                    val_loss = self.validate()
                     
                     # Store validation results
                     validation_record = {
@@ -625,45 +644,19 @@ class Cell2TextDDPTrainer:
                         'step': step + 1,
                         'global_step': self.global_step,
                         'validation_loss': val_loss,
-                        'bleu_score': val_bleu,
-                        'cell_type_accuracy': val_cell_type_acc,
-                        'cell_type_f1': val_cell_type_f1,
-                        'cell_type_precision': val_cell_type_precision,
-                        'cell_type_recall': val_cell_type_recall,
                         'training_loss': np.mean(self.losses[-self.args.eval_steps:]) if len(self.losses) >= self.args.eval_steps else np.mean(self.losses)
                     }
                     validation_history.append(validation_record)
                     
-                    if  self.is_main_process:
+                    if self.is_main_process:
                         print(f"\nValidation at step {self.global_step}:")
-                        if val_loss is not None:
-                            print(f"  Loss: {val_loss:.4f}")
-                        print(f"  BLEU: {val_bleu:.4f}")
-                        print(f"  Cell Type Acc: {val_cell_type_acc:.4f}")
-                        print(f"  Cell Type F1: {val_cell_type_f1:.4f}")
+                        print(f"  Validation Loss: {val_loss:.4f}")
                     
                     # Early stopping and best model tracking
-                    improved = False
-                    
-                    # Use validation loss as primary metric if available, otherwise use BLEU
-                    if val_loss is not None and val_loss < best_val_loss:
-                        best_val_loss = val_loss
-                        improved = True
-                    elif val_loss is None and val_bleu > best_val_bleu:
-                        best_val_bleu = val_bleu
-                        improved = True
-                    
-                    # Also track best scores for other metrics
-                    if val_bleu > best_val_bleu:
-                        best_val_bleu = val_bleu
-                    if val_cell_type_acc > best_val_cell_type_acc:
-                        best_val_cell_type_acc = val_cell_type_acc
-                    if val_cell_type_f1 > best_val_cell_type_f1:
-                        best_val_cell_type_f1 = val_cell_type_f1
-                    
-
+                    improved = val_loss < best_val_loss
                     
                     if improved:
+                        best_val_loss = val_loss
                         steps_since_improvement = 0
                         
                         if self.args.save_model:
@@ -672,59 +665,40 @@ class Cell2TextDDPTrainer:
                                 checkpoint_name = f"{self.experiment_name}_best_model"
                             
                             checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
-                            
                             self.save_checkpoint(checkpoint_dir)
-
                             
-                            
-                            # On Rank 0, save supplementary files
                             if self.is_main_process:
-                                # Save validation history
-                                validation_history_path = os.path.join(checkpoint_dir, "validation_history.json")
-                                with open(validation_history_path, 'w') as f:
-                                    json.dump(convert_json_compat(validation_history), f, indent=2)
-                                
                                 print(f"Best model checkpoint saved to: {checkpoint_dir}")
-                                print(f"Validation history saved to: {validation_history_path}")
-
-
                     else:
                         steps_since_improvement += self.args.eval_steps
                         
                         if self.args.early_stopping > 0 and steps_since_improvement >= self.args.early_stopping:
-                            if  self.is_main_process:
+                            if self.is_main_process:
                                 print(f"\nEarly stopping triggered after {steps_since_improvement} steps without improvement")
-                            progress_bar.close()
+                            if progress_bar:
+                                progress_bar.close()
                             
                             # Save final training and validation history
-                            save_training_history(self, training_history, validation_history)
+                            save_simple_training_history(self, training_history, validation_history)
                             return
                     
                     self.model.train()  # Switch back to training mode
                 
                 if self.world_size > 1:
                     dist.barrier()
+                    
             # End of epoch summary
             epoch_loss = np.mean(epoch_losses)
-            if  self.is_main_process:
+            if self.is_main_process:
                 print(f"\nEpoch {epoch+1} completed. Average loss: {epoch_loss:.4f}")
         
         if progress_bar is not None:
             progress_bar.close()
         
-        # Final evaluation before closing
-        final_val_results = None
+        # Final evaluation
         if self.val_loader is not None:
             self.model.eval()
-            final_val_results = self.validate()
-            
-            # Extract final validation metrics
-            final_val_loss = final_val_results if isinstance(final_val_results, float) else final_val_results.get('validation_loss', None)
-            final_val_bleu = final_val_results.get('bleu', 0.0) if isinstance(final_val_results, dict) else 0.0
-            final_val_cell_type_acc = final_val_results.get('cell_type_accuracy', 0.0) if isinstance(final_val_results, dict) else 0.0
-            final_val_cell_type_f1 = final_val_results.get('cell_type_f1', 0.0) if isinstance(final_val_results, dict) else 0.0
-            final_val_cell_type_precision = final_val_results.get('cell_type_precision', 0.0) if isinstance(final_val_results, dict) else 0.0
-            final_val_cell_type_recall = final_val_results.get('cell_type_recall', 0.0) if isinstance(final_val_results, dict) else 0.0
+            final_val_loss = self.validate()
             
             # Add final validation to history
             final_validation_record = {
@@ -732,61 +706,31 @@ class Cell2TextDDPTrainer:
                 'step': 'final',
                 'global_step': self.global_step,
                 'validation_loss': final_val_loss,
-                'bleu_score': final_val_bleu,
-                'cell_type_accuracy': final_val_cell_type_acc,
-                'cell_type_f1': final_val_cell_type_f1,
-                'cell_type_precision': final_val_cell_type_precision,
-                'cell_type_recall': final_val_cell_type_recall,
                 'training_loss': np.mean(self.losses[-100:]) if len(self.losses) >= 100 else np.mean(self.losses),
                 'is_final': True
             }
             validation_history.append(final_validation_record)
             
-            if  self.is_main_process:
-                print(f"\nFinal Validation Results:")
-                if final_val_loss is not None:
-                    print(f"  Loss: {final_val_loss:.4f}")
-                print(f"  BLEU: {final_val_bleu:.4f}")
-                print(f"  Cell Type Acc: {final_val_cell_type_acc:.4f}")
-                print(f"  Cell Type F1: {final_val_cell_type_f1:.4f}")
+            if self.is_main_process:
+                print(f"\nFinal Validation Loss: {final_val_loss:.4f}")
 
-            # Check if final model is better than the best saved model
-            final_improved = False
-            if final_val_loss is not None and final_val_loss < best_val_loss:
-                best_val_loss = final_val_loss
-                final_improved = True
-            elif final_val_loss is None and final_val_bleu > best_val_bleu:
-                best_val_bleu = final_val_bleu
-                final_improved = True
-                
-            if final_improved and self.args.save_model and self.is_main_process:
+            # Check if final model is better than best saved model
+            if final_val_loss < best_val_loss and self.args.save_model:
                 checkpoint_name = "best_model"
                 if self.experiment_name:
                     checkpoint_name = f"{self.experiment_name}_best_model"
                 
                 checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
+                self.save_checkpoint(checkpoint_dir)
                 
-                self.save_checkpoint( checkpoint_dir)
-
-               
-                
-                if  self.is_main_process:
+                if self.is_main_process:
                     print(f"New best model saved after final evaluation to: {checkpoint_dir}")
-            elif not final_improved:
-                if  self.is_main_process:
-                    print("Final model did not outperform the best model. No new best model saved.")
-        else:
-            print("No validation loader available, skipping final evaluation.")
         
+        # Save training history
         if self.is_main_process:
-            print("**"*80)
-            print("NOW I AM SAVING TRAINING HISTORY")
-            # Save complete training and validation history
-            save_training_history(self, training_history, validation_history)
+            save_simple_training_history(self, training_history, validation_history)
         
         
-        
-    
 def run_ddp(rank, world_size, args):
     """Run training with DDP on specific rank"""
     trainer = Cell2TextDDPTrainer(args, rank, world_size)
