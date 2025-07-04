@@ -354,23 +354,46 @@ class Cell2TextDDPTrainer:
         # Move batch to device
         batch = {k: v.to(self.device) if torch.is_tensor(v) else v for k, v in batch.items()}
         
-        # Forward pass
-        outputs = self.model(
-            expression_tokens=batch["expression_tokens"],
-            expression_token_lengths=batch["expression_token_lengths"],
-            input_ids=batch["input_ids"],
-            attention_mask=batch["attention_mask"],
-            labels=batch["labels"],
-            return_dict=True
-        )
+        # Determine if this is the last step in accumulation
+        is_accumulation_step = (self.global_step + 1) % self.args.gradient_accumulation_steps != 0
         
-        loss = outputs.loss / self.args.gradient_accumulation_steps
-        
-        # Backward pass
-        loss.backward()
-        
-        # Gradient accumulation step
-        if (self.global_step + 1) % self.args.gradient_accumulation_steps == 0:
+        # For DDP, we need to handle gradient synchronization
+        # Only sync gradients on the last accumulation step
+        if self.world_size > 1 and is_accumulation_step:
+            # Disable gradient synchronization for accumulation steps
+            with self.model.no_sync():
+                # Forward pass
+                outputs = self.model(
+                    expression_tokens=batch["expression_tokens"],
+                    expression_token_lengths=batch["expression_token_lengths"],
+                    input_ids=batch["input_ids"],
+                    attention_mask=batch["attention_mask"],
+                    labels=batch["labels"],
+                    return_dict=True
+                )
+                
+                # Scale loss by accumulation steps
+                loss = outputs.loss / self.args.gradient_accumulation_steps
+                
+                # Backward pass without gradient sync
+                loss.backward()
+        else:
+            # Forward pass (last step in accumulation or single GPU)
+            outputs = self.model(
+                expression_tokens=batch["expression_tokens"],
+                expression_token_lengths=batch["expression_token_lengths"],
+                input_ids=batch["input_ids"],
+                attention_mask=batch["attention_mask"],
+                labels=batch["labels"],
+                return_dict=True
+            )
+            
+            # Scale loss by accumulation steps
+            loss = outputs.loss / self.args.gradient_accumulation_steps
+            
+            # Backward pass (will sync gradients for DDP)
+            loss.backward()
+            
             # Gradient clipping
             if self.args.max_grad_norm > 0:
                 if self.world_size > 1:

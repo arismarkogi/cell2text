@@ -9,4 +9,6 @@ python3 /home/arism/cell2text/cell2text_train/sanity_check.py \
   --num_samples 8   \
   --batch_size 4   \
   --decoder_lr 1e-4  \
-  --projector_lr 1e-4 
+  --projector_lr 1e-4 \
+  --decoder_hidden_size 3072 \
+  --encoder_hidden_size 1152
