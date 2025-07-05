@@ -42,7 +42,6 @@ def load_config_from_args(args):
     config.projector = args.projector
     
     # Geneformer settings
-    config.emb_mode = args.emb_mode
     config.max_ncells = args.max_ncells
     config.emb_layer = args.emb_layer
     config.emb_label = args.emb_label
