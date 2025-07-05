@@ -167,10 +167,9 @@ class GeneformerModel(
         # Initialize the BERT model if it doesn't exist
         if self.geneformer_model is None:
 
+            # Load default config (used when no pre-trained model config is provided)
             default_config = {
-                "architectures": [
-                    "BertForMaskedLM"
-                ],
+                "architectures": ["BertForMaskedLM"],
                 "attention_probs_dropout_prob": 0.02,
                 "hidden_act": "relu",
                 "hidden_dropout_prob": 0.02,
@@ -191,10 +190,11 @@ class GeneformerModel(
                 "vocab_size": 20275
             }
 
-            bert_config = BertConfig(default_config)
+            # Initialize config and model
+            bert_config = BertConfig(**default_config)
             bert_config.output_hidden_states = True
             self.geneformer_model = BertForMaskedLM(bert_config)
-        
+            
         # Extract only the geneformer-related keys from the state dict
         geneformer_state_dict = {}
         prefix = "cell_encoder.geneformer_model."
