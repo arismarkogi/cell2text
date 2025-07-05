@@ -118,7 +118,7 @@ def run_evaluation(rank, world_size, args):
         batch_size=args.batch_size,
         sampler=test_sampler,
         collate_fn=collate_fn,
-        num_workers=4
+        num_workers=0
     )
     
     if rank == 0:
