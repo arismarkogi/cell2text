@@ -119,6 +119,9 @@ class GeneformerModel(
     def from_pretrained(
           cls, pretrained_model_name_or_path: str, *args, **kwargs
     ) -> PreTrainedModel:
+
+
+
         
         
         if "config" in kwargs:
@@ -159,10 +162,36 @@ class GeneformerModel(
         """
         Load geneformer model from a state dict (for loading from complete checkpoints)
         """
+
+        
         # Initialize the BERT model if it doesn't exist
         if self.geneformer_model is None:
-            from transformers import BertConfig
-            bert_config = BertConfig()
+
+            default_config = {
+                "architectures": [
+                    "BertForMaskedLM"
+                ],
+                "attention_probs_dropout_prob": 0.02,
+                "hidden_act": "relu",
+                "hidden_dropout_prob": 0.02,
+                "hidden_size": 512,
+                "initializer_range": 0.02,
+                "intermediate_size": 1024,
+                "layer_norm_eps": 1e-12,
+                "max_position_embeddings": 4096,
+                "model_type": "bert",
+                "num_attention_heads": 8,
+                "num_hidden_layers": 12,
+                "pad_token_id": 0,
+                "position_embedding_type": "absolute",
+                "torch_dtype": "float32",
+                "transformers_version": "4.37.1",
+                "type_vocab_size": 2,
+                "use_cache": True,
+                "vocab_size": 20275
+            }
+
+            bert_config = BertConfig(default_config)
             bert_config.output_hidden_states = True
             self.geneformer_model = BertForMaskedLM(bert_config)
         
