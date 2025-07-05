@@ -187,8 +187,6 @@ def main():
                         help="Type of projector to use")
     
     # Geneformer arguments
-    parser.add_argument("--emb_mode", type=str, default="cell",
-                        help="Geneformer embedding mode")
     parser.add_argument("--max_ncells", type=int, default=1000,
                         help="Maximum number of cells")
     parser.add_argument("--emb_layer", type=int, default=-1,

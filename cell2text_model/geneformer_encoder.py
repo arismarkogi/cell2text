@@ -120,10 +120,6 @@ class GeneformerModel(
           cls, pretrained_model_name_or_path: str, *args, **kwargs
     ) -> PreTrainedModel:
 
-
-
-        
-        
         if "config" in kwargs:
             config = kwargs.pop("config")
             if isinstance(config, dict):
@@ -139,8 +135,6 @@ class GeneformerModel(
             )
 
         model = cls(config, *args, **kwargs)
-
-
 
 
         bert_config = BertConfig.from_pretrained(pretrained_model_name_or_path)
