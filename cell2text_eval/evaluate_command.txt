@@ -1,7 +1,7 @@
 python3 /home/arism/cell2text/cell2text_eval/run_evaluation.py \
     --checkpoint_path /home/arism/deepspeed_training/full_1epoch_batchsize4_gradacc8_mlp_hiddensize2048_topk256/full_1epoch_batchsize4_gradacc8_mlp_hiddensize2048_topk256_best_model/pytorch_model.bin \
     --test_data_path /home/arism/datasets/test \
-    --tokenizer_path meta-llama/Llama-2-7b-chat-hf \
+    --tokenizer_path 'meta-llama/Llama-3.2-3B-Instruct'  \
     --batch_size 4 \
     --top_k 256 \
     --projector mlp \
