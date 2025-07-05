@@ -103,7 +103,7 @@ class GeneformerModel(
         embs = get_embs(
             model=self.geneformer_model,
             filtered_input_data=filtered_input_data,
-            emb_mode=self.config.emb_mode,
+            emb_mode="gene",
             layer_to_quant=layer_to_quant,
             pad_token_id=PAD_TOKEN_ID,
             forward_batch_size=self.config.forward_batch_size,
