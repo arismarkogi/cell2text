@@ -8,6 +8,29 @@ from transformers import PretrainedConfig, PreTrainedModel, GenerationMixin
 from transformers.generation.utils import GenerateOutput
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers import Cache
+import os 
+
+def resolve_device() -> torch.device:
+    """
+    Decide which torch.device to use, with minimal fuss.
+
+    Order of preference
+    -------------------
+    1. GPU whose index equals LOCAL_RANK (DDP case)
+    2. First visible GPU ('cuda:0') if any
+    3. CPU
+    """
+    if torch.cuda.is_available():
+        # --- Distributed run: honour per‑process local rank ---------------
+        local_rank = int(os.getenv("LOCAL_RANK", os.getenv("RANK", 0)))
+        if local_rank < torch.cuda.device_count():
+            return torch.device(f"cuda:{local_rank}")
+
+        # --- Non‑DDP or out‑of‑range rank: fall back to first GPU ---------
+        return torch.device("cuda:0")
+
+    # --- No CUDA ----------------------------------------------------------
+    return torch.device("cpu")
 
 
 class Cell2TextLlamaConfig(PretrainedConfig):
@@ -144,7 +167,7 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         
 
-        device = self.device 
+        device =  resolve_device()
 
         if input_ids is not None:
             input_ids = input_ids.to(device)
