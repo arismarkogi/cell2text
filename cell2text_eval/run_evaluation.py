@@ -9,9 +9,9 @@ import sys
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from cell2text_dataset import Cell2TextDataset
+from cell2text_dataset.dataset import Cell2TextDataset
 from cell2text_model.model import Cell2TextModel
-from evaluation import evaluate_cell2text_model
+from cell2text_eval.evaluation import evaluate_cell2text_model
 
 def load_config_from_args(args):
     """Create config from command line arguments"""
