@@ -73,7 +73,17 @@ class GeneformerModel(
         self.token_gene_dict = {v: k for k, v in self.gene_token_dict.items()}
         
 
+        # Don't initialize geneformer_model in __init__ - let it be None
+        # It will be properly initialized either via from_pretrained() or load_state_dict()
         self.geneformer_model = None
+
+    def _ensure_model_loaded(self):
+        """Initialize a dummy model if none exists - for loading from state_dict"""
+        if self.geneformer_model is None:
+            from transformers import BertConfig
+            bert_config = BertConfig()
+            bert_config.output_hidden_states = True
+            self.geneformer_model = BertForMaskedLM(bert_config)
 
     def forward(
         self,
@@ -86,6 +96,10 @@ class GeneformerModel(
             Boolean masked positions. Indicates which patches are masked (1) and which aren't (0).
         """
         
+        # Ensure model is loaded - this handles both cases:
+        # 1. Loading from complete checkpoint (creates dummy model if needed)
+        # 2. Loading from pretrained (model already exists)
+        self._ensure_model_loaded()
 
         layer_to_quant = pu.quant_layers(self.geneformer_model) + self.config.emb_layer
         
@@ -149,5 +163,3 @@ class GeneformerModel(
 
 
         return model
-    
-    
