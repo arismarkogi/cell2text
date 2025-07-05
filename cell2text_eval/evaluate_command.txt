@@ -1,4 +1,4 @@
-python evaluate_cell2text.py \
+python3 /home/arism/cell2text/cell2text_eval/run_evaluation.py \
     --checkpoint_path /home/arism/deepspeed_training/full_1epoch_batchsize4_gradacc8_mlp_hiddensize2048_topk256/full_1epoch_batchsize4_gradacc8_mlp_hiddensize2048_topk256_best_model/pytorch_model.bin \
     --test_data_path /home/arism/datasets/test \
     --tokenizer_path meta-llama/Llama-2-7b-chat-hf \
@@ -7,4 +7,3 @@ python evaluate_cell2text.py \
     --projector mlp \
     --print_examples 30 \
     --save_results ./results/test_evaluation.json \
-    --device cuda

@@ -5,8 +5,10 @@ from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 from transformers import PretrainedConfig
 import json
+import sys
 
-# Import your custom modules
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from cell2text_dataset import Cell2TextDataset
 from cell2text_model.model import Cell2TextModel
 from evaluation import evaluate_cell2text_model
@@ -172,7 +174,6 @@ def main():
     test_dataset = Cell2TextDataset(
         data_path=args.test_data_path,
         tokenizer=tokenizer,
-        geneformer_tokenizer=None,  # Will be handled by the model
         system_message=args.system_message,
         placeholder_token=args.placeholder_token,
         top_k=args.top_k,
