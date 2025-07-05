@@ -63,18 +63,18 @@ def main():
     parser.add_argument("--test_data_path", type=str, required=True,
                         help="Path to test dataset")
     parser.add_argument("--tokenizer_path", type=str, required=True,
-                        help="Path to tokenizer (e.g., meta-llama/Llama-2-7b-chat-hf)")
+                        help="Path to tokenizer ")
     
     # Model architecture arguments
-    parser.add_argument("--cell_encoder_hidden_size", type=int, default=256,
+    parser.add_argument("--cell_encoder_hidden_size", type=int, default=1152,
                         help="Hidden size of cell encoder")
-    parser.add_argument("--decoder_hidden_size", type=int, default=4096,
+    parser.add_argument("--decoder_hidden_size", type=int, default=3072,
                         help="Hidden size of decoder")
     parser.add_argument("--mlp_hidden_size", type=int, default=2048,
                         help="Hidden size of MLP projector")
-    parser.add_argument("--mlp_dropout", type=float, default=0.1,
+    parser.add_argument("--mlp_dropout", type=float, default=0,
                         help="Dropout rate for MLP projector")
-    parser.add_argument("--top_k", type=int, default=512,
+    parser.add_argument("--top_k", type=int, default=256,
                         help="Top k gene expression tokens to use")
     parser.add_argument("--projector", type=str, default="mlp", choices=["mlp", "perceiver"],
                         help="Type of projector to use")

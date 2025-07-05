@@ -1,5 +1,5 @@
 python3 /home/arism/cell2text/cell2text_eval/run_evaluation.py \
-    --checkpoint_path /home/arism/deepspeed_training/full_1epoch_batchsize4_gradacc8_mlp_hiddensize2048_topk256/full_1epoch_batchsize4_gradacc8_mlp_hiddensize2048_topk256_best_model/pytorch_model.bin \
+    --checkpoint_path /home/arism/deepspeed_training/full_1epoch_batchsize4_gradacc8_mlp_hiddensize2048_topk256/full_1epoch_batchsize4_gradacc8_mlp_hiddensize2048_topk256_best_model \
     --test_data_path /home/arism/datasets/test \
     --token_dictionary_path /home/arism/cell2text/Geneformer/geneformer/token_dictionary_gc104M.pkl \
     --tokenizer_path 'meta-llama/Llama-3.2-3B-Instruct'  \
