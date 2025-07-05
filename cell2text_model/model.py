@@ -83,116 +83,61 @@ class Cell2TextModel(PreTrainedModel):
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path: str, config=None, **kwargs):
         """
-        Load the complete model from pretrained weights.
-        Handles both individual component loading and full model safetensors.
+        Simplified loading for complete model checkpoints stored as .bin files.
         """
+        # Load config
         if config is None:
-            # Try to load config from the pretrained path
             config_path = os.path.join(pretrained_model_name_or_path, "config.json")
             if os.path.exists(config_path):
                 config = PretrainedConfig.from_json_file(config_path)
             else:
-                raise ValueError("No config provided and no config.json found in pretrained path")
+                raise ValueError("No config provided and no config.json found")
         
-        # Initialize model with config
+        # Initialize model
         model = cls(config)
         
-        # Load weights
-        model.load_pretrained_weights(pretrained_model_name_or_path, **kwargs)
+        # Load checkpoint - simplified to handle .bin files with complete model
+        checkpoint_path = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin")
+        if os.path.exists(checkpoint_path):
+            print(f"Loading complete model from: {checkpoint_path}")
+            checkpoint = torch.load(checkpoint_path, map_location="cpu")
+            
+            # Handle both direct state_dict and nested checkpoint formats
+            if "model_state_dict" in checkpoint:
+                state_dict = checkpoint["model_state_dict"]
+            elif "state_dict" in checkpoint:
+                state_dict = checkpoint["state_dict"]
+            else:
+                state_dict = checkpoint
+            
+            # Load the state dict
+            missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+            
+            if missing_keys:
+                print(f"Warning: Missing keys in checkpoint: {missing_keys}")
+            if unexpected_keys:
+                print(f"Warning: Unexpected keys in checkpoint: {unexpected_keys}")
+                
+            print("Model loaded successfully!")
+        else:
+            raise FileNotFoundError(f"No pytorch_model.bin found at {checkpoint_path}")
         
         return model
     
-    def load_pretrained_weights(self, pretrained_model_name_or_path: str, **kwargs):
+    def save_pretrained(self, save_directory: str, **kwargs):
         """
-        Load pretrained weights for all components.
-        Supports both individual component loading and full model safetensors.
+        Save the complete model as a single .bin file.
         """
-        # Check if we have a full model safetensors file
-        full_model_path = os.path.join(pretrained_model_name_or_path, "model.safetensors")
-        pytorch_model_path = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin")
+        os.makedirs(save_directory, exist_ok=True)
         
-        if os.path.exists(full_model_path):
-            # Load from safetensors
-            print(f"Loading full model from safetensors: {full_model_path}")
-            self._load_from_safetensors(full_model_path)
-        elif os.path.exists(pytorch_model_path):
-            # Load from pytorch bin
-            print(f"Loading full model from pytorch: {pytorch_model_path}")
-            self._load_from_pytorch(pytorch_model_path)
-        else:
-            # Load individual components
-            print("Loading individual components...")
-            self._load_individual_components(pretrained_model_name_or_path, **kwargs)
-    
-    def _load_from_safetensors(self, safetensors_path: str):
-        """Load weights from a safetensors file."""
-        state_dict = load_file(safetensors_path)
-        self._load_state_dict_with_prefix_handling(state_dict)
-    
-    def _load_from_pytorch(self, pytorch_path: str):
-        """Load weights from a pytorch .bin file."""
-        state_dict = torch.load(pytorch_path, map_location="cpu")
-        self._load_state_dict_with_prefix_handling(state_dict)
-    
-    
-    def _load_state_dict_with_prefix_handling(self, state_dict: Dict[str, torch.Tensor]):
-        """
-        Load state dict with proper prefix handling for different components.
-        """
-        # Separate state dict by component
-        cell_encoder_state = {}
-        decoder_state = {}
-        projector_state = {}
+        # Save config
+        self.config.save_pretrained(save_directory)
         
-        for key, value in state_dict.items():
-            if key.startswith("cell_encoder."):
-                new_key = key.replace("cell_encoder.", "")
-                cell_encoder_state[new_key] = value
-            elif key.startswith("decoder."):
-                new_key = key.replace("decoder.", "")
-                decoder_state[new_key] = value
-            elif key.startswith("cell_to_embedding."):
-                new_key = key.replace("cell_to_embedding.", "")
-                projector_state[new_key] = value
+        # Save complete model state dict
+        model_path = os.path.join(save_directory, "pytorch_model.bin")
+        torch.save(self.state_dict(), model_path)
         
-        # Load into components
-        if cell_encoder_state:
-            print(f"Loading {len(cell_encoder_state)} cell encoder parameters")
-            self.cell_encoder.load_state_dict(cell_encoder_state, strict=False)
-        
-        if decoder_state:
-            print(f"Loading {len(decoder_state)} decoder parameters")
-            self.decoder.load_state_dict(decoder_state, strict=False)
-        
-        if projector_state:
-            print(f"Loading {len(projector_state)} projector parameters")
-            self.cell_to_embedding.load_state_dict(projector_state, strict=False)
-    
-    def _load_individual_components(self, base_path: str, **kwargs):
-        """
-        Load individual components from separate directories/files.
-        """
-        # Load cell encoder
-        geneformer_path = getattr(self.config, 'geneformer_path', None)
-        if geneformer_path:
-            print(f"Loading Geneformer from: {geneformer_path}")
-            # Load cell encoder
-            self.cell_encoder = GeneformerModel.from_pretrained(
-                pretrained_model_name_or_path=self.config.geneformer_path, 
-                config=self.geneformer_config
-            )
-        
-        # Load decoder
-        decoder_path = getattr(self.config, 'decoder_model_name_or_path', None)
-        if decoder_path:
-            print(f"Loading LLaMA decoder from: {decoder_path}")
-            self.decoder = Cell2TextLlamaModel.from_pretrained(
-                pretrained_model_name_or_path=self.config.decoder_model_name_or_path,
-                config=self.cell2text_llama_config
-            )
-        
-        # Projector weights will be randomly initialized unless loaded from full model
-        print("Projector weights randomly initialized (unless loaded from full model)")
+        print(f"Model saved to {save_directory}")
     
 
     def process_encoder_outputs(self, cell_embeddings):
