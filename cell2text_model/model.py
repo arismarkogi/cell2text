@@ -112,6 +112,16 @@ class Cell2TextModel(PreTrainedModel):
             
             # Load the Geneformer model first using the custom method
             model.cell_encoder.load_from_state_dict(state_dict, strict=False)
+
+
+            # Load the Geneformer model first using the custom method
+            model.cell_encoder.load_from_state_dict(state_dict, strict=False)
+
+            # Load the LLaMA decoder using the custom method
+            model.decoder.load_from_state_dict(state_dict, strict=False)
+
+            # Load the rest of the model
+            missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
             
             # Load the rest of the model
             missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
