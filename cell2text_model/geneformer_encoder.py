@@ -77,14 +77,6 @@ class GeneformerModel(
         # It will be properly initialized either via from_pretrained() or load_state_dict()
         self.geneformer_model = None
 
-    def _ensure_model_loaded(self):
-        """Initialize a dummy model if none exists - for loading from state_dict"""
-        if self.geneformer_model is None:
-            from transformers import BertConfig
-            bert_config = BertConfig()
-            bert_config.output_hidden_states = True
-            self.geneformer_model = BertForMaskedLM(bert_config)
-
     def forward(
         self,
         expression_tokens: torch.Tensor,
@@ -96,10 +88,9 @@ class GeneformerModel(
             Boolean masked positions. Indicates which patches are masked (1) and which aren't (0).
         """
         
-        # Ensure model is loaded - this handles both cases:
-        # 1. Loading from complete checkpoint (creates dummy model if needed)
-        # 2. Loading from pretrained (model already exists)
-        self._ensure_model_loaded()
+        # Check if geneformer_model is loaded
+        if self.geneformer_model is None:
+            raise RuntimeError("Model not loaded. Please use GeneformerModel.from_pretrained() or load_from_state_dict() to load the model.")
 
         layer_to_quant = pu.quant_layers(self.geneformer_model) + self.config.emb_layer
         
@@ -163,3 +154,39 @@ class GeneformerModel(
 
 
         return model
+    
+    def load_from_state_dict(self, state_dict, strict=True):
+        """
+        Load geneformer model from a state dict (for loading from complete checkpoints)
+        """
+        # Initialize the BERT model if it doesn't exist
+        if self.geneformer_model is None:
+            from transformers import BertConfig
+            bert_config = BertConfig()
+            bert_config.output_hidden_states = True
+            self.geneformer_model = BertForMaskedLM(bert_config)
+        
+        # Extract only the geneformer-related keys from the state dict
+        geneformer_state_dict = {}
+        prefix = "cell_encoder.geneformer_model."
+        
+        for key, value in state_dict.items():
+            if key.startswith(prefix):
+                # Remove the prefix to get the actual model key
+                model_key = key[len(prefix):]
+                geneformer_state_dict[model_key] = value
+        
+        if geneformer_state_dict:
+            # Load the state dict into the geneformer model
+            missing_keys, unexpected_keys = self.geneformer_model.load_state_dict(
+                geneformer_state_dict, strict=strict
+            )
+            
+            if missing_keys:
+                print(f"Missing keys in geneformer model: {missing_keys}")
+            if unexpected_keys:
+                print(f"Unexpected keys in geneformer model: {unexpected_keys}")
+                
+            print("Geneformer model loaded from state dict successfully!")
+        else:
+            print("Warning: No geneformer weights found in state dict")
