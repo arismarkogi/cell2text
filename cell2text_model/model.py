@@ -96,7 +96,7 @@ class Cell2TextModel(PreTrainedModel):
         # Initialize model
         model = cls(config)
         
-        # Load checkpoint - simplified to handle .bin files with complete model
+        # Load checkpoint 
         checkpoint_path = os.path.join(pretrained_model_name_or_path, "pytorch_model.bin")
         if os.path.exists(checkpoint_path):
             print(f"Loading complete model from: {checkpoint_path}")

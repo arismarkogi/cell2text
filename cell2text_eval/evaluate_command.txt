@@ -8,3 +8,4 @@ python3 /home/arism/cell2text/cell2text_eval/run_evaluation.py \
     --projector mlp \
     --print_examples 30 \
     --save_results ./results/test_evaluation.json \
+    --mlp_dropout 0.1

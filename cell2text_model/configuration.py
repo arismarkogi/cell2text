@@ -23,7 +23,7 @@ class Cell2TextConfig(PretrainedConfig):
         # When useing the "mlp"
         mlp_hidden_size=2048, # projection layer hidden_dim
         mlp_dropout=0.05,
-        top_k=512, # hyperparameter for the top_k selection of genes (tokens)
+        top_k=256, # hyperparameter for the top_k selection of genes (tokens)
 
         # When using the "perceiver"
         num_latents = 128,
@@ -39,7 +39,7 @@ class Cell2TextConfig(PretrainedConfig):
 
         
         # Paths and files
-        token_dictionary_path="/home/arismarkog/Desktop/cell2text/Geneformer/geneformer/token_dictionary_gc95M.pkl",
+        token_dictionary_path="/home/arismarkog/Desktop/cell2text/Geneformer/geneformer/token_dictionary_gc104M.pkl",
         geneformer_path="/home/arismarkog/Desktop/cell2text/Geneformer",
         
         # Generation parameters - Fixed parameter names to match Cell2TextLlamaConfig
@@ -52,8 +52,8 @@ class Cell2TextConfig(PretrainedConfig):
         
         # Model configurations
         llama_config=None, # Configuration for Llama model
-        decoder_model_name_or_path="meta-llama/Llama-3.2-1B-Instruct", # Default model path
-        decoder_hidden_size=2048, # Default for meta-llama/Llama-3.2-1B-Instruct
+        decoder_model_name_or_path="meta-llama/Llama-3.2-3B-Instruct", # Default model path
+        decoder_hidden_size=3072, # Default for meta-llama/Llama-3.2-3B-Instruct
         **kwargs
     ):
         super().__init__(**kwargs)
