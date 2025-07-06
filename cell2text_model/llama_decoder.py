@@ -103,9 +103,9 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
             # First, initialize the base model to avoid NoneType errors
             torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
             
-            # Extract llama-related keys first
+            # Extract llama-related keys first - FIX THE PREFIX HERE
             llama_state_dict = {}
-            prefix = "decoder.base_model.model.llama.model"
+            prefix = "decoder.base_model.model.llama.model"  # Changed from "decoder.base_model.model.llama.model"
             
             for key, value in state_dict.items():
                 if key.startswith(prefix):
@@ -137,20 +137,6 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
             self.tokenizer = AutoTokenizer.from_pretrained(default_llama_path)
             print("Model loaded successfully!")
 
-    def _load_standard_model(self, model_path, llama_state_dict):
-        """Load standard LLaMA model"""
-        self.llama = LlamaForCausalLM.from_pretrained(
-            model_path,
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-        )
-        
-        # Load weights
-        missing_keys, unexpected_keys = self.llama.load_state_dict(llama_state_dict, strict=False)
-        if missing_keys:
-            print(f"Missing keys: {len(missing_keys)} keys")
-        if unexpected_keys:
-            print(f"Unexpected keys: {len(unexpected_keys)} keys")
-
     def _load_peft_model(self, model_path, llama_state_dict):
         """Load PEFT/LoRA model by inspecting the state dict structure"""
         try:
@@ -169,16 +155,8 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
             self.llama = get_peft_model(base_model, lora_config)
             
             # Transform state dict keys to match expected format
-            # The state dict has keys like: base_model.model.model.embed_tokens.weight
-            # But PEFT expects keys like: base_model.model.embed_tokens.weight
-            transformed_state_dict = {}
-            for key, value in llama_state_dict.items():
-                if key.startswith('base_model.model.model.'):
-                    # Remove the extra "model." in the path
-                    new_key = key.replace('base_model.model.model.', 'base_model.model.')
-                    transformed_state_dict[new_key] = value
-                else:
-                    transformed_state_dict[key] = value
+            # NO TRANSFORMATION NEEDED since we already extracted the right keys
+            transformed_state_dict = llama_state_dict
             
             # Load weights
             missing_keys, unexpected_keys = self.llama.load_state_dict(transformed_state_dict, strict=False)
@@ -197,111 +175,8 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
             print("Falling back to standard loading...")
             self._load_standard_model(model_path, llama_state_dict)
 
-    def _detect_lora_config(self, state_dict):
-        """Automatically detect LoRA configuration from state dict"""
-        from peft import LoraConfig
         
-        # Find LoRA modules and extract config
-        lora_keys = [k for k in state_dict.keys() if 'lora_A' in k or 'lora_B' in k]
         
-        if not lora_keys:
-            # Default config if no LoRA keys found
-            return LoraConfig(
-                r=16,
-                lora_alpha=32,
-                target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
-                lora_dropout=0.1,
-                bias="none",
-                task_type="CAUSAL_LM",
-            )
-        
-        # Extract target modules
-        target_modules = set()
-        r_value = None
-        
-        for key in lora_keys:
-            # Extract module name from complex paths like:
-            # base_model.model.model.layers.0.self_attn.q_proj.lora_A.default.weight
-            # or base_model.model.model.layers.0.mlp.gate_proj.lora_A.default.weight
-            parts = key.split('.')
-            for i, part in enumerate(parts):
-                if 'lora_A' in part or 'lora_B' in part:
-                    if i > 0:
-                        target_modules.add(parts[i-1])
-                    break
-            
-            # Extract rank from lora_A weight shape
-            if 'lora_A' in key and r_value is None:
-                tensor = state_dict[key]
-                if tensor.dim() == 2:
-                    r_value = tensor.shape[0]
-        
-        target_modules = list(target_modules) if target_modules else ["q_proj", "v_proj"]
-        r_value = r_value if r_value else 16
-        
-        print(f"Auto-detected LoRA config: r={r_value}, target_modules={target_modules}")
-        
-        return LoraConfig(
-            r=r_value,
-            lora_alpha=r_value * 2,  # Common convention
-            target_modules=target_modules,
-            lora_dropout=0.1,
-            bias="none",
-            task_type="CAUSAL_LM",
-        )
-    
-    def _load_peft_model_direct(self, model_path, llama_state_dict):
-        """Alternative method to load PEFT model with direct state dict manipulation"""
-        try:
-            from peft import PeftModel, LoraConfig, get_peft_model
-            
-            # Load base model first
-            base_model = LlamaForCausalLM.from_pretrained(
-                model_path,
-                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-            )
-            
-            # Auto-detect LoRA configuration
-            lora_config = self._detect_lora_config(llama_state_dict)
-            
-            # Create PEFT model
-            self.llama = get_peft_model(base_model, lora_config)
-            
-            # Get the expected state dict structure from the created model
-            expected_keys = set(self.llama.state_dict().keys())
-            
-            # Create a mapping from loaded keys to expected keys
-            key_mapping = {}
-            for loaded_key in llama_state_dict.keys():
-                # Try different transformations to match expected keys
-                candidates = [
-                    loaded_key,
-                    loaded_key.replace('base_model.model.model.', 'base_model.model.'),
-                    loaded_key.replace('base_model.model.', ''),
-                    loaded_key.replace('model.', ''),
-                ]
-                
-                for candidate in candidates:
-                    if candidate in expected_keys:
-                        key_mapping[loaded_key] = candidate
-                        break
-            
-            # Apply the mapping and load
-            mapped_state_dict = {}
-            for loaded_key, value in llama_state_dict.items():
-                if loaded_key in key_mapping:
-                    mapped_state_dict[key_mapping[loaded_key]] = value
-                else:
-                    print(f"Warning: Could not map key {loaded_key}")
-            
-            # Load the mapped state dict
-            missing_keys, unexpected_keys = self.llama.load_state_dict(mapped_state_dict, strict=False)
-            print(f"Direct PEFT loading - Missing keys: {len(missing_keys)}, Unexpected keys: {len(unexpected_keys)}")
-            
-        except Exception as e:
-            print(f"Direct PEFT loading failed: {e}")
-            print("Falling back to standard loading...")
-            self._load_standard_model(model_path, llama_state_dict)
     
     def prepare_decoder_inputs(
         self,
