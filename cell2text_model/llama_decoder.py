@@ -98,7 +98,10 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
         # Initialize the LLaMA model if it doesn't exist
         if self.llama is None:
             # Replace with your actual model path
-            default_llama_path = "meta-llama/Llama-2-7b-hf"
+            default_llama_path = "meta-llama/Llama-3.2-3B-isntruct"
+            
+            # First, initialize the base model to avoid NoneType errors
+            torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
             
             # Extract llama-related keys first
             llama_state_dict = {}
@@ -110,7 +113,13 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
                     llama_state_dict[model_key] = value
             
             if not llama_state_dict:
-                print("Warning: No llama weights found in state dict")
+                print("Warning: No llama weights found in state dict, initializing with default weights")
+                # Initialize with default weights if no state dict found
+                self.llama = LlamaForCausalLM.from_pretrained(
+                    default_llama_path,
+                    torch_dtype=torch_dtype,
+                )
+                self.tokenizer = AutoTokenizer.from_pretrained(default_llama_path)
                 return
             
             # Inspect the state dict structure to determine model type
