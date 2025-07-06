@@ -105,7 +105,7 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
             
             # Extract llama-related keys first
             llama_state_dict = {}
-            prefix = "decoder.llama.base_model.model"
+            prefix = "decoder.llama."
             
             for key, value in state_dict.items():
                 if key.startswith(prefix):
@@ -168,12 +168,26 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
             # Create PEFT model
             self.llama = get_peft_model(base_model, lora_config)
             
+            # Transform state dict keys to match expected format
+            # The state dict has keys like: base_model.model.model.embed_tokens.weight
+            # But PEFT expects keys like: base_model.model.embed_tokens.weight
+            transformed_state_dict = {}
+            for key, value in llama_state_dict.items():
+                if key.startswith('base_model.model.model.'):
+                    # Remove the extra "model." in the path
+                    new_key = key.replace('base_model.model.model.', 'base_model.model.')
+                    transformed_state_dict[new_key] = value
+                else:
+                    transformed_state_dict[key] = value
+            
             # Load weights
-            missing_keys, unexpected_keys = self.llama.load_state_dict(llama_state_dict, strict=False)
-            if missing_keys:
-                print(f"Missing keys: {len(missing_keys)} keys")
-            if unexpected_keys:
-                print(f"Unexpected keys: {len(unexpected_keys)} keys")
+            missing_keys, unexpected_keys = self.llama.load_state_dict(transformed_state_dict, strict=False)
+            print(f"Loaded PEFT model - Missing keys: {len(missing_keys)}, Unexpected keys: {len(unexpected_keys)}")
+            
+            # If there are still many missing/unexpected keys, try direct loading
+            if len(missing_keys) > 50 or len(unexpected_keys) > 50:
+                print("Many missing/unexpected keys detected, attempting direct state dict mapping...")
+                self._load_peft_model_direct(model_path, llama_state_dict)
                 
         except ImportError:
             print("PEFT not installed. Installing: pip install peft")
@@ -206,7 +220,9 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
         r_value = None
         
         for key in lora_keys:
-            # Extract module name (e.g., "q_proj" from "base_model.model.layers.0.self_attn.q_proj.lora_A.weight")
+            # Extract module name from complex paths like:
+            # base_model.model.model.layers.0.self_attn.q_proj.lora_A.default.weight
+            # or base_model.model.model.layers.0.mlp.gate_proj.lora_A.default.weight
             parts = key.split('.')
             for i, part in enumerate(parts):
                 if 'lora_A' in part or 'lora_B' in part:
@@ -233,6 +249,59 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
             bias="none",
             task_type="CAUSAL_LM",
         )
+    
+    def _load_peft_model_direct(self, model_path, llama_state_dict):
+        """Alternative method to load PEFT model with direct state dict manipulation"""
+        try:
+            from peft import PeftModel, LoraConfig, get_peft_model
+            
+            # Load base model first
+            base_model = LlamaForCausalLM.from_pretrained(
+                model_path,
+                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            )
+            
+            # Auto-detect LoRA configuration
+            lora_config = self._detect_lora_config(llama_state_dict)
+            
+            # Create PEFT model
+            self.llama = get_peft_model(base_model, lora_config)
+            
+            # Get the expected state dict structure from the created model
+            expected_keys = set(self.llama.state_dict().keys())
+            
+            # Create a mapping from loaded keys to expected keys
+            key_mapping = {}
+            for loaded_key in llama_state_dict.keys():
+                # Try different transformations to match expected keys
+                candidates = [
+                    loaded_key,
+                    loaded_key.replace('base_model.model.model.', 'base_model.model.'),
+                    loaded_key.replace('base_model.model.', ''),
+                    loaded_key.replace('model.', ''),
+                ]
+                
+                for candidate in candidates:
+                    if candidate in expected_keys:
+                        key_mapping[loaded_key] = candidate
+                        break
+            
+            # Apply the mapping and load
+            mapped_state_dict = {}
+            for loaded_key, value in llama_state_dict.items():
+                if loaded_key in key_mapping:
+                    mapped_state_dict[key_mapping[loaded_key]] = value
+                else:
+                    print(f"Warning: Could not map key {loaded_key}")
+            
+            # Load the mapped state dict
+            missing_keys, unexpected_keys = self.llama.load_state_dict(mapped_state_dict, strict=False)
+            print(f"Direct PEFT loading - Missing keys: {len(missing_keys)}, Unexpected keys: {len(unexpected_keys)}")
+            
+        except Exception as e:
+            print(f"Direct PEFT loading failed: {e}")
+            print("Falling back to standard loading...")
+            self._load_standard_model(model_path, llama_state_dict)
     
     def prepare_decoder_inputs(
         self,
