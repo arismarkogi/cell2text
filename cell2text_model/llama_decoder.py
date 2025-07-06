@@ -98,7 +98,7 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
         # Initialize the LLaMA model if it doesn't exist
         if self.llama is None:
             # Replace with your actual model path
-            default_llama_path = "meta-llama/Llama-3.2-3B-isntruct"
+            default_llama_path = "meta-llama/Llama-3.2-3B-Instruct"
             
             # First, initialize the base model to avoid NoneType errors
             torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
