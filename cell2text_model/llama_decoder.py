@@ -136,6 +136,20 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
             # Load tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(default_llama_path)
             print("Model loaded successfully!")
+    
+    def _load_standard_model(self, model_path, llama_state_dict):
+        """Load standard LLaMA model"""
+        self.llama = LlamaForCausalLM.from_pretrained(
+            model_path,
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+        )
+        
+        # Load weights
+        missing_keys, unexpected_keys = self.llama.load_state_dict(llama_state_dict, strict=False)
+        if missing_keys:
+            print(f"Missing keys: {len(missing_keys)} keys")
+        if unexpected_keys:
+            print(f"Unexpected keys: {len(unexpected_keys)} keys")
 
     def _load_peft_model(self, model_path, llama_state_dict):
         """Load PEFT/LoRA model by inspecting the state dict structure"""
@@ -175,7 +189,58 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
             print("Falling back to standard loading...")
             self._load_standard_model(model_path, llama_state_dict)
 
-        
+    def _detect_lora_config(self, state_dict):
+            """Automatically detect LoRA configuration from state dict"""
+            from peft import LoraConfig
+            
+            # Find LoRA modules and extract config
+            lora_keys = [k for k in state_dict.keys() if 'lora_A' in k or 'lora_B' in k]
+            
+            if not lora_keys:
+                # Default config if no LoRA keys found
+                return LoraConfig(
+                    r=16,
+                    lora_alpha=32,
+                    target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
+                    lora_dropout=0.1,
+                    bias="none",
+                    task_type="CAUSAL_LM",
+                )
+            
+            # Extract target modules
+            target_modules = set()
+            r_value = None
+            
+            for key in lora_keys:
+                # Extract module name from complex paths like:
+                # base_model.model.model.layers.0.self_attn.q_proj.lora_A.default.weight
+                # or base_model.model.model.layers.0.mlp.gate_proj.lora_A.default.weight
+                parts = key.split('.')
+                for i, part in enumerate(parts):
+                    if 'lora_A' in part or 'lora_B' in part:
+                        if i > 0:
+                            target_modules.add(parts[i-1])
+                        break
+                
+                # Extract rank from lora_A weight shape
+                if 'lora_A' in key and r_value is None:
+                    tensor = state_dict[key]
+                    if tensor.dim() == 2:
+                        r_value = tensor.shape[0]
+            
+            target_modules = list(target_modules) if target_modules else ["q_proj", "v_proj"]
+            r_value = r_value if r_value else 16
+            
+            print(f"Auto-detected LoRA config: r={r_value}, target_modules={target_modules}")
+            
+            return LoraConfig(
+                r=r_value,
+                lora_alpha=r_value * 2,  # Common convention
+                target_modules=target_modules,
+                lora_dropout=0.1,
+                bias="none",
+                task_type="CAUSAL_LM",
+            )
         
     
     def prepare_decoder_inputs(
