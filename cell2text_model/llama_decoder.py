@@ -105,7 +105,7 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
             
             # Extract llama-related keys first
             llama_state_dict = {}
-            prefix = "decoder."
+            prefix = "decoder.llama.base_model.model"
             
             for key, value in state_dict.items():
                 if key.startswith(prefix):
