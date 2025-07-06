@@ -39,7 +39,7 @@ class PerceiverIO(nn.Module):
         output_dim: int,
         num_latents: int = 128,
         num_cross_attn_layers: int = 1,  
-        num_self_attn_layers: int = 6,   
+        num_self_attn_layers: int = 4,   
         num_heads: int = 8,
         ff_mult: int = 2,
         dropout: float = 0.1,
