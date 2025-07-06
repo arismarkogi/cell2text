@@ -105,7 +105,7 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
             
             # Extract llama-related keys first
             llama_state_dict = {}
-            prefix = "decoder.llama."
+            prefix = "llama."
             
             for key, value in state_dict.items():
                 if key.startswith(prefix):
@@ -233,6 +233,7 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
             bias="none",
             task_type="CAUSAL_LM",
         )
+    
     def prepare_decoder_inputs(
         self,
         input_ids: torch.LongTensor,         # Tokenized text prompt (batch_size, seq_len)
@@ -243,14 +244,24 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
         batch_size, seq_len = input_ids.size()
         _, cell_seq_len_dim, _ = cell_embeddings.size() # Note: Renamed cell_seq_len to avoid conflict if it's a class member
 
+        # Get the target device from the model
+        target_device = next(self.llama.parameters()).device
+        
+        # Ensure all tensors are on the same device
+        input_ids = input_ids.to(target_device)
+        cell_embeddings = cell_embeddings.to(target_device)
+        
         # Default attention masks if not provided (all ones, meaning attend to all tokens)
         if attention_mask is None:
-            attention_mask = torch.ones((batch_size, seq_len), dtype=torch.long, device=input_ids.device)
-        if cell_attention_mask is None:
+            attention_mask = torch.ones((batch_size, seq_len), dtype=torch.long, device=target_device)
+        else:
+            attention_mask = attention_mask.to(target_device)
             
-            cell_attention_mask = torch.ones((batch_size, cell_seq_len_dim), dtype=torch.long, device=cell_embeddings.device)
+        if cell_attention_mask is None:
+            cell_attention_mask = torch.ones((batch_size, cell_seq_len_dim), dtype=torch.long, device=target_device)
+        else:
+            cell_attention_mask = cell_attention_mask.to(target_device)
 
-        
         # 1. Get text embeddings from the language model's embedding layer
         # input_ids are token indices. This converts them to dense vectors.
         # Shape: (batch_size, seq_len, hidden_dim)
@@ -260,7 +271,6 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
         # placeholder_mask = input_ids == self.config.placeholder_id # (batch_size, seq_len)
         # cell_mask = cell_attention_mask.bool() # (batch_size, cell_seq_len_dim)
         # inputs_embeds[placeholder_mask] = cell_embeddings[cell_mask]
-
 
         # Iterate over each sample in the batch for robust replacement
         for i in range(batch_size):
@@ -291,7 +301,8 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
             # `num_placeholders_sample` active cell embeddings are the ones to use.
             # This aligns with using `top_k` (or min(len, top_k)) genes.
             embeddings_to_insert = active_cell_embeddings_for_sample[:num_placeholders_sample]
-            embeddings_to_insert = embeddings_to_insert.to(dtype=inputs_embeds.dtype)
+            # Ensure embeddings are on the same device and have the correct dtype
+            embeddings_to_insert = embeddings_to_insert.to(device=target_device, dtype=inputs_embeds.dtype)
 
             # Perform the replacement for the current sample
             inputs_embeds[i, placeholder_indices_in_sample] = embeddings_to_insert
@@ -308,17 +319,18 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
         **kwargs  # All other LlamaForCausalLM arguments
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         
+        # Get the target device from the model
+        target_device = next(self.llama.parameters()).device
 
-        device =  resolve_device()
-
+        # Move all tensors to the target device
         if input_ids is not None:
-            input_ids = input_ids.to(device)
+            input_ids = input_ids.to(target_device)
         if attention_mask is not None:
-            attention_mask = attention_mask.to(device)
+            attention_mask = attention_mask.to(target_device)
         if cell_embeddings is not None:
-            cell_embeddings = cell_embeddings.to(device)
+            cell_embeddings = cell_embeddings.to(target_device)
         if cell_attention_mask is not None:
-            cell_attention_mask = cell_attention_mask.to(device)
+            cell_attention_mask = cell_attention_mask.to(target_device)
 
         if cell_embeddings is None:
             # Standard LLaMA forward without cell embeddings
@@ -334,10 +346,8 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
                 (batch_size, 1), 
                 self.tokenizer.bos_token_id, 
                 dtype=torch.long, 
-                device=cell_embeddings.device
+                device=target_device
             )
-
-    
 
         # Prepare inputs with placeholder replacement
         inputs_embeds, attention_mask = self.prepare_decoder_inputs(
@@ -350,10 +360,8 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
         if return_decoder_inputs:
             return inputs_embeds, attention_mask
         
-
-        # Remove inputs_embeds from kwargs to avoid duplicate argument error, i dont know what's happemning
+        # Remove inputs_embeds from kwargs to avoid duplicate argument error
         kwargs.pop('inputs_embeds', None)
-
 
         # Forward through LLaMA with prepared embeddings
         return self.llama(
@@ -443,13 +451,16 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
             **generate_kwargs: Additional generation parameters
         """
         batch_size = cell_embeddings.shape[0]
-        cell_embeddings = cell_embeddings.to(device)
+        
+        # Get the actual device from the model instead of using the passed device parameter
+        target_device = next(self.llama.parameters()).device
+        cell_embeddings = cell_embeddings.to(target_device)
         
         if inputs is not None:
             # Use provided tokenized prompt
-            inputs = inputs.to(device)
+            inputs = inputs.to(target_device)
             if attention_mask is not None:
-                attention_mask = attention_mask.to(device)
+                attention_mask = attention_mask.to(target_device)
             else:
                 # Create attention mask if not provided
                 attention_mask = torch.ones_like(inputs)
@@ -464,7 +475,7 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
                 (batch_size, 1), 
                 self.tokenizer.bos_token_id, 
                 dtype=torch.long, 
-                device=device
+                device=target_device
             )
             attention_mask = torch.ones_like(inputs)
 
@@ -496,4 +507,3 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
                 decoded = [text.replace(token, "") for text in decoded]
 
         return decoded[0] if batch_size == 1 else decoded
-
