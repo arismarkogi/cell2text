@@ -144,8 +144,6 @@ def create_argument_parser():
     # Perceiver-specific parameters
     parser.add_argument("--num_latents", type=int, default=64,
                         help="Number of latent vectors for Perceiver")
-    parser.add_argument("--perceiver_depth", type=int, default=6,
-                        help="Number of layers in Perceiver")
     parser.add_argument("--num_heads", type=int, default=8,
                         help="Number of attention heads in Perceiver")
     parser.add_argument("--ff_mult", type=float, default=4,

@@ -232,7 +232,6 @@ class Cell2TextDDPTrainer:
             config.top_k = self.args.top_k
         elif self.args.projector == "perceiver":
             config.num_latents = self.args.num_latents
-            config.perceiver_depth = self.args.perceiver_depth
             config.num_heads = self.args.num_heads
             config.ff_mult = self.args.ff_mult
             config.perceiver_dropout = self.args.perceiver_dropout

@@ -27,7 +27,7 @@ class Cell2TextConfig(PretrainedConfig):
 
         # When using the "perceiver"
         num_latents = 128,
-        preceiver_depth=4,
+        perceiver_depth=4,
         num_heads=8,
         ff_mult=2,
         perceiver_dropout=0.1,
@@ -76,7 +76,6 @@ class Cell2TextConfig(PretrainedConfig):
 
 
         self.num_latents = num_latents
-        self.preceiver_depth = preceiver_depth
         self.num_heads = num_heads
         self.use_position_encoding=use_position_encoding
         self.perceiver_cross_attn_layers = perceiver_cross_attn_layers
