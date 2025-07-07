@@ -10,7 +10,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from cell2text_model.model import Cell2TextModel
 from .geneformer_encoder import GeneformerModel, GeneformerConfig
 from cell2text_model.llama_decoder import Cell2TextLlamaModel, Cell2TextLlamaConfig
-from cell2text_model.projectors import MLPProjectionLayer, PerceiverIO
+from cell2text_model.projectors import MLPProjectionLayer
 
 
 def load_model(args: Dict[str, Any]) -> PeftModel:
@@ -136,13 +136,13 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
         
         # Define target modules for LoRA (LLaMA decoder components)
         target_modules = [
-            "decoder.model.layers.*.self_attn.q_proj",
-            "decoder.model.layers.*.self_attn.k_proj", 
-            "decoder.model.layers.*.self_attn.v_proj",
-            "decoder.model.layers.*.self_attn.o_proj",
-            "decoder.model.layers.*.mlp.gate_proj",
-            "decoder.model.layers.*.mlp.up_proj",
-            "decoder.model.layers.*.mlp.down_proj"
+            "base_model.model.decoder.llama.model.layers.*.self_attn.q_proj",
+            "base_model.model.decoder.llama.model.layers.*.self_attn.k_proj", 
+            "base_model.model.decoder.llama.model.layers.*.self_attn.v_proj",
+            "base_model.model.decoder.llama.model.layers.*.self_attn.o_proj",
+            "base_model.model.decoder.llama.model.layers.*.mlp.gate_proj",
+            "base_model.model.decoder.llama.model.layers.*.mlp.up_proj",
+            "base_model.model.decoder.llama.model.layers.*.mlp.down_proj"
         ]
         
         # Define modules to save (projector/adapter parameters)
