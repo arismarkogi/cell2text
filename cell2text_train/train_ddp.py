@@ -280,6 +280,8 @@ class Cell2TextDDPTrainer:
         
         # Apply LoRA to decoder
         self.model.decoder = get_peft_model(self.model.decoder, decoder_lora_config)
+        
+        # Add peft_config to the main model for easier access during saving
         self.model.peft_config = self.model.decoder.peft_config
         self.model.is_peft_model = True
         
@@ -287,7 +289,7 @@ class Cell2TextDDPTrainer:
         trainable_decoder_params = sum(p.numel() for p in self.model.decoder.parameters() if p.requires_grad)
         total_decoder_params = sum(p.numel() for p in self.model.decoder.parameters())
         print(f"Decoder LoRA applied. Trainable parameters: {trainable_decoder_params:,} / {total_decoder_params:,} ({100 * trainable_decoder_params / total_decoder_params:.2f}%)")
-        
+
     def print_model_parameters(self):
         """Print detailed information about model parameters"""
         trainable_params, all_params = self.get_trainable_parameters()
@@ -462,19 +464,53 @@ class Cell2TextDDPTrainer:
         else:
             model = self.model
         
-        if hasattr(model, 'peft_config') and model.peft_config:
+        # Check if we have a PEFT model (either on main model or decoder)
+        has_peft = (hasattr(model, 'peft_config') and model.peft_config) or \
+                (hasattr(model, 'decoder') and hasattr(model.decoder, 'peft_config') and model.decoder.peft_config)
+        
+        if has_peft:
             # This is a PEFT model
+            print(f"Detected PEFT model. Saving adapters and full model...")
+            
+            # Get the PEFT model (decoder in this case)
+            peft_model = model.decoder if hasattr(model.decoder, 'peft_config') else model
             
             # 1. Save PEFT adapter
             adapter_dir = os.path.join(checkpoint_dir, "adapter")
             print(f"Saving PEFT adapter to {adapter_dir}")
-            model.save_pretrained(adapter_dir)
+            
+            # Only save the PEFT adapter, not the full model
+            try:
+                peft_model.save_pretrained(adapter_dir)
+            except RuntimeError as e:
+                if "share memory" in str(e):
+                    print("Warning: Shared tensors detected. Saving with clone=True to avoid memory sharing issues.")
+                    # Save adapter weights manually to avoid shared tensor issues
+                    os.makedirs(adapter_dir, exist_ok=True)
+                    
+                    # Get only the LoRA adapter weights
+                    adapter_state_dict = {}
+                    for name, param in peft_model.named_parameters():
+                        if 'lora_' in name:
+                            adapter_state_dict[name] = param.data.clone()
+                    
+                    # Save the adapter weights
+                    adapter_weights_path = os.path.join(adapter_dir, "adapter_model.bin")
+                    torch.save(adapter_state_dict, adapter_weights_path)
+                    
+                    # Save the adapter config
+                    adapter_config = peft_model.peft_config[list(peft_model.peft_config.keys())[0]]
+                    adapter_config.save_pretrained(adapter_dir)
+                    
+                    print(f"LoRA adapter manually saved to {adapter_dir}")
+                else:
+                    raise e
             
             # 2. Save LoRA config for easy reconstruction
             lora_config_path = os.path.join(checkpoint_dir, "lora_config.json")
             with open(lora_config_path, 'w') as f:
                 # Get the first (and typically only) PEFT config
-                peft_config = model.peft_config[list(model.peft_config.keys())[0]]
+                peft_config = peft_model.peft_config[list(peft_model.peft_config.keys())[0]]
                 
                 # Convert LoRA config to dict for JSON serialization
                 config_dict = {
@@ -487,17 +523,41 @@ class Cell2TextDDPTrainer:
                     'bias': str(peft_config.bias),
                     'modules_to_save': peft_config.modules_to_save,
                     'init_lora_weights': peft_config.init_lora_weights,
+                    'applies_to': 'decoder'  # Add this to indicate which component has LoRA
                 }
                 json.dump(config_dict, f, indent=2)
             print(f"LoRA config saved to: {lora_config_path}")
             
-            # 3. Save full merged model state dict (for direct loading/inference)
-            print(f"Saving full merged model state dict to {checkpoint_dir}")
-            full_state_dict = model.state_dict()
+            # 3. Save full model state dict (main model with merged LoRA weights)
+            print(f"Saving full model state dict to {checkpoint_dir}")
+            # Create a copy of the model state dict with merged LoRA weights
+            full_state_dict = {}
+            
+            # Get non-decoder parameters
+            for name, param in model.named_parameters():
+                if not name.startswith('decoder.'):
+                    full_state_dict[name] = param.data.clone()
+            
+            # Get merged decoder parameters
+            merged_decoder_state = peft_model.state_dict()
+            for name, param in merged_decoder_state.items():
+                full_state_dict[f'decoder.{name}'] = param.data.clone()
+            
             torch.save(full_state_dict, os.path.join(checkpoint_dir, "pytorch_model.bin"))
             
             # 4. Save base model only (without LoRA weights)
-            base_model_state = model.get_base_model().state_dict()
+            base_model_state = {}
+            
+            # Get non-decoder parameters
+            for name, param in model.named_parameters():
+                if not name.startswith('decoder.'):
+                    base_model_state[name] = param.data.clone()
+            
+            # Get base decoder parameters (without LoRA)
+            base_decoder_state = peft_model.get_base_model().state_dict()
+            for name, param in base_decoder_state.items():
+                base_model_state[f'decoder.{name}'] = param.data.clone()
+            
             torch.save(base_model_state, os.path.join(checkpoint_dir, "base_model.bin"))
             
         else:
@@ -511,7 +571,9 @@ class Cell2TextDDPTrainer:
             'optimizer': self.optimizer.state_dict(),
             'lr_scheduler': self.lr_scheduler.state_dict(),
             'global_step': self.global_step,
-            'losses': self.losses
+            'losses': self.losses,
+            'has_peft': has_peft,
+            'peft_component': 'decoder' if has_peft else None
         }
         if additional_state:
             checkpoint_state.update(additional_state)
@@ -519,6 +581,11 @@ class Cell2TextDDPTrainer:
         torch.save(checkpoint_state, os.path.join(checkpoint_dir, "training_state.pt"))
         
         print(f"Checkpoint saved to {checkpoint_dir}")
+        if has_peft:
+            print(f"  - PEFT adapter saved to: {adapter_dir}")
+            print(f"  - LoRA config saved to: {lora_config_path}")
+            print(f"  - Full merged model: pytorch_model.bin")
+            print(f"  - Base model (no LoRA): base_model.bin")
 
 
     def save_checkpoint(self, checkpoint_dir, additional_state=None):
