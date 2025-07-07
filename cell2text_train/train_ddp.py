@@ -519,13 +519,13 @@ class Cell2TextDDPTrainer:
                     'r': peft_config.r,
                     'lora_alpha': peft_config.lora_alpha,
                     'lora_dropout': peft_config.lora_dropout,
-                    'target_modules': peft_config.target_modules,
+                    'target_modules': list(peft_config.target_modules) if isinstance(peft_config.target_modules, set) else peft_config.target_modules,
                     'bias': str(peft_config.bias),
-                    'modules_to_save': peft_config.modules_to_save,
+                    'modules_to_save': list(peft_config.modules_to_save) if isinstance(peft_config.modules_to_save, set) else peft_config.modules_to_save,
                     'init_lora_weights': peft_config.init_lora_weights,
                     'applies_to': 'decoder'  # Add this to indicate which component has LoRA
                 }
-                json.dump(convert_json_compat(config_dict), f, indent=2)
+                json.dump(config_dict, f, indent=2)
             print(f"LoRA config saved to: {lora_config_path}")
             
             # 3. Save full model state dict (main model with merged LoRA weights)
