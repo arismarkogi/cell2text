@@ -525,7 +525,7 @@ class Cell2TextDDPTrainer:
                     'init_lora_weights': peft_config.init_lora_weights,
                     'applies_to': 'decoder'  # Add this to indicate which component has LoRA
                 }
-                json.dump(config_dict, f, indent=2)
+                json.dump(convert_json_compat(config_dict), f, indent=2)
             print(f"LoRA config saved to: {lora_config_path}")
             
             # 3. Save full model state dict (main model with merged LoRA weights)
