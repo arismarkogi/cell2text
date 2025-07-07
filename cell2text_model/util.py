@@ -135,14 +135,15 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
         print("Initializing LoRA adapter")
         
         # Define target modules for LoRA (LLaMA decoder components)
+        # Use simple patterns that PEFT can understand
         target_modules = [
-            "base_model.model.decoder.llama.model.layers.*.self_attn.q_proj",
-            "base_model.model.decoder.llama.model.layers.*.self_attn.k_proj", 
-            "base_model.model.decoder.llama.model.layers.*.self_attn.v_proj",
-            "base_model.model.decoder.llama.model.layers.*.self_attn.o_proj",
-            "base_model.model.decoder.llama.model.layers.*.mlp.gate_proj",
-            "base_model.model.decoder.llama.model.layers.*.mlp.up_proj",
-            "base_model.model.decoder.llama.model.layers.*.mlp.down_proj"
+            "q_proj",
+            "k_proj", 
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj"
         ]
         
         # Define modules to save (projector/adapter parameters)
@@ -174,6 +175,25 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
     
     model.print_trainable_parameters()
     return model
+
+
+def get_target_modules_from_model(model):
+    """
+    Helper function to dynamically find the correct target modules
+    by inspecting the model structure.
+    """
+    target_modules = []
+    
+    # Walk through the model to find attention and MLP layers
+    for name, module in model.named_modules():
+        if any(target in name for target in ["q_proj", "k_proj", "v_proj", "o_proj", 
+                                           "gate_proj", "up_proj", "down_proj"]):
+            # Extract the relative module name
+            parts = name.split('.')
+            if len(parts) >= 2:
+                target_modules.append('.'.join(parts[-2:]))  # Get last two parts
+    
+    return list(set(target_modules))  # Remove duplicates
 
 
 def get_mlp_modules_to_save(args: Dict[str, Any]) -> list:
@@ -254,5 +274,3 @@ def create_cell2text_config(args: Dict[str, Any]) -> PretrainedConfig:
     config.top_p = args.get("top_p", 1.0)
     
     return config
-
-
