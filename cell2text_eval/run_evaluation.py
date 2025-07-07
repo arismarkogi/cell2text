@@ -228,7 +228,7 @@ def main():
     parser.add_argument("--summary_stat", type=str, default=None,
                         help="Summary statistic")
     parser.add_argument("--token_dictionary_path", type=str, 
-                        default="/home/arismarkog/Desktop/cell2text/Geneformer/geneformer/token_dictionary_gc104M.pkl",
+                        default="/home/arism/cell2text/Geneformer/geneformer/token_dictionary_gc104M.pkl",
                         help="Path to token dictionary")
     
     # Generation arguments

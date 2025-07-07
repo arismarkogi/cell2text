@@ -49,7 +49,7 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
         forward_batch_size=args.get("forward_batch_size", 100),
         summary_stat=args.get("summary_stat", None),
         token_dictionary_path=args.get("token_dictionary_path", 
-            "/home/arismarkog/Desktop/cell2text/Geneformer/geneformer/token_dictionary_gc95M.pkl")
+            "/home/arism/cell2text/Geneformer/geneformer/token_dictionary_gc104M.pkl")
     )
     
     geneformer_encoder = GeneformerModel.from_pretrained(
@@ -243,7 +243,7 @@ def create_cell2text_config(args: Dict[str, Any]) -> PretrainedConfig:
     config.forward_batch_size = args.get("forward_batch_size", 100)
     config.summary_stat = args.get("summary_stat", None)
     config.token_dictionary_path = args.get("token_dictionary_path",
-        "/home/arismarkog/Desktop/cell2text/Geneformer/geneformer/token_dictionary_gc95M.pkl")
+        "/home/arism/cell2text/Geneformer/geneformer/token_dictionary_gc104M.pkl")
     
     # LLaMA decoder configuration
     config.max_length = args.get("max_length", 100)
