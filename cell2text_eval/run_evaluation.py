@@ -16,6 +16,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from cell2text_dataset.dataset import Cell2TextDataset
 from cell2text_model.model import Cell2TextModel
+from cell2text_model.util import load_model
 from cell2text_eval.evaluation import evaluate_cell2text_model
 
 def setup_ddp(rank, world_size):
@@ -29,45 +30,61 @@ def cleanup_ddp():
     """Cleanup DDP"""
     dist.destroy_process_group()
 
-def load_config_from_args(args):
-    """Create config from command line arguments"""
-    config = PretrainedConfig()
+def create_model_args(args):
+    """Create model arguments dictionary from command line arguments"""
+    model_args = {
+        # Required paths
+        "geneformer_path": args.geneformer_path,
+        "llama_path": args.llama_path,
+        
+        # Model loading paths
+        "load_model_checkpoint_path": args.checkpoint_path,
+        "load_adapter_checkpoint_dir": args.adapter_checkpoint_dir,
+        
+        # Model architecture
+        "projector": args.projector,
+        "cell_encoder_hidden_size": args.cell_encoder_hidden_size,
+        "decoder_hidden_size": args.decoder_hidden_size,
+        "mlp_hidden_size": args.mlp_hidden_size,
+        "mlp_dropout": args.mlp_dropout,
+        "top_k": args.top_k,
+        
+        # Geneformer settings
+        "emb_mode": args.emb_mode,
+        "max_ncells": args.max_ncells,
+        "emb_layer": args.emb_layer,
+        "emb_label": args.emb_label,
+        "nproc": args.nproc,
+        "forward_batch_size": args.forward_batch_size,
+        "summary_stat": args.summary_stat,
+        "token_dictionary_path": args.token_dictionary_path,
+        
+        # Generation settings
+        "max_length": args.max_length,
+        "num_beams": args.num_beams,
+        "early_stopping": args.early_stopping,
+        "no_repeat_ngram_size": args.no_repeat_ngram_size,
+        "temperature": args.temperature,
+        "top_p": args.top_p,
+        
+        # Training settings
+        "torch_dtype": getattr(torch, args.torch_dtype),
+        "lora_rank": args.lora_rank,
+        "fix_modality_adapter": args.fix_modality_adapter,
+    }
     
-    # Model architecture settings
-    config.cell_encoder_hidden_size = args.cell_encoder_hidden_size
-    config.decoder_hidden_size = args.decoder_hidden_size
-    config.mlp_hidden_size = args.mlp_hidden_size
-    config.mlp_dropout = args.mlp_dropout
-    config.top_k = args.top_k
-    config.projector = args.projector
-    
-    # Geneformer settings
-    config.max_ncells = args.max_ncells
-    config.emb_layer = args.emb_layer
-    config.emb_label = args.emb_label
-    config.nproc = args.nproc
-    config.forward_batch_size = args.forward_batch_size
-    config.summary_stat = args.summary_stat
-    config.token_dictionary_path = args.token_dictionary_path
-    
-    # Generation settings
-    config.max_length = args.max_length
-    config.num_beams = args.num_beams
-    config.early_stopping = args.early_stopping
-    config.no_repeat_ngram_size = args.no_repeat_ngram_size
-    config.temperature = args.temperature
-    config.top_p = args.top_p
-    
-    # Perceiver settings (if using perceiver projector)
+    # Add Perceiver-specific settings if using perceiver projector
     if args.projector == "perceiver":
-        config.num_latents = args.num_latents
-        config.perceiver_cross_attn_layers = args.perceiver_cross_attn_layers
-        config.perceiver_num_heads = args.perceiver_num_heads
-        config.ff_mult = args.ff_mult
-        config.perceiver_dropout = args.perceiver_dropout
-        config.use_position_encoding = args.use_position_encoding
+        model_args.update({
+            "num_latents": args.num_latents,
+            "perceiver_cross_attn_layers": args.perceiver_cross_attn_layers,
+            "perceiver_num_heads": args.perceiver_num_heads,
+            "ff_mult": args.ff_mult,
+            "perceiver_dropout": args.perceiver_dropout,
+            "use_position_encoding": args.use_position_encoding,
+        })
     
-    return config
+    return model_args
 
 def run_evaluation(rank, world_size, args):
     """Run evaluation on one GPU"""
@@ -82,13 +99,16 @@ def run_evaluation(rank, world_size, args):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
-    # Create config
-    config = load_config_from_args(args)
+    # Create model arguments
+    model_args = create_model_args(args)
     
-    # Load model
+    # Load model using the proper load_model function
     if rank == 0:
         print(f"Loading model from: {args.checkpoint_path}")
-    model = Cell2TextModel.from_pretrained(args.checkpoint_path, config=config)
+        if args.adapter_checkpoint_dir:
+            print(f"Loading LoRA adapter from: {args.adapter_checkpoint_dir}")
+    
+    model = load_model(model_args)
     model.to(rank)
     
     # Wrap model with DDP
@@ -165,11 +185,19 @@ def main():
     
     # Required arguments
     parser.add_argument("--checkpoint_path", type=str, required=True,
-                        help="Path to pretrained model checkpoint directory")
+                        help="Path to pretrained model checkpoint")
     parser.add_argument("--test_data_path", type=str, required=True,
                         help="Path to test dataset")
     parser.add_argument("--tokenizer_path", type=str, required=True,
-                        help="Path to tokenizer ")
+                        help="Path to tokenizer")
+    parser.add_argument("--geneformer_path", type=str, required=True,
+                        help="Path to pretrained Geneformer model")
+    parser.add_argument("--llama_path", type=str, required=True,
+                        help="Path to pretrained LLaMA model")
+    
+    # Optional model loading arguments
+    parser.add_argument("--adapter_checkpoint_dir", type=str, default=None,
+                        help="Path to LoRA adapter checkpoint directory")
     
     # Model architecture arguments
     parser.add_argument("--cell_encoder_hidden_size", type=int, default=1152,
@@ -186,6 +214,8 @@ def main():
                         help="Type of projector to use")
     
     # Geneformer arguments
+    parser.add_argument("--emb_mode", type=str, default="gene",
+                        help="Geneformer embedding mode")
     parser.add_argument("--max_ncells", type=int, default=1000,
                         help="Maximum number of cells")
     parser.add_argument("--emb_layer", type=int, default=-1,
@@ -215,6 +245,14 @@ def main():
                         help="Generation temperature")
     parser.add_argument("--top_p", type=float, default=1.0,
                         help="Top p for nucleus sampling")
+    
+    # Training/Model arguments
+    parser.add_argument("--torch_dtype", type=str, default="float16",
+                        help="Torch data type (float16, float32, bfloat16)")
+    parser.add_argument("--lora_rank", type=int, default=16,
+                        help="LoRA rank")
+    parser.add_argument("--fix_modality_adapter", type=bool, default=False,
+                        help="Whether to freeze the projector/adapter")
     
     # Perceiver arguments (only used if projector == "perceiver")
     parser.add_argument("--num_latents", type=int, default=128,

@@ -1,11 +1,7 @@
 python3 /home/arism/cell2text/cell2text_eval/run_evaluation.py \
-    --checkpoint_path /home/arism/deepspeed_training/full_1epoch_batchsize4_gradacc8_mlp_hiddensize2048_topk256/full_1epoch_batchsize4_gradacc8_mlp_hiddensize2048_topk256_best_model \
+    --checkpoint_path /home/arism//deepspeed_training/full_1epoch_batchsize4_gradacc8_perceiver_numlatents_ffmult1.5_numheads2_selfattn4/full_1epoch_batchsize4_gradacc8_perceiver_numlatents_ffmult1.5_numheads2_selfattn4_best_model \
     --test_data_path /home/arism/datasets/test \
-    --token_dictionary_path /home/arism/cell2text/Geneformer/geneformer/token_dictionary_gc104M.pkl \
-    --tokenizer_path 'meta-llama/Llama-3.2-3B-Instruct'  \
-    --batch_size 4 \
-    --top_k 256 \
-    --projector mlp \
-    --print_examples 30 \
-    --save_results ./results/test_evaluation.json \
-    --mlp_dropout 0.1
+    --tokenizer_path meta-llama/Llama-3.2-3B-Instruct \
+    --geneformer_path /home/arism/cell2text/Geneformer \
+    --llama_path  meta-llama/Llama-3.2-3B-Instruct \
+    --adapter_checkpoint_dir /home/arism//deepspeed_training/full_1epoch_batchsize4_gradacc8_perceiver_numlatents_ffmult1.5_numheads2_selfattn4/full_1epoch_batchsize4_gradacc8_perceiver_numlatents_ffmult1.5_numheads2_selfattn4_best_model/adapter
