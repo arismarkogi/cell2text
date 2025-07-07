@@ -29,6 +29,7 @@ from peft import (
     PeftModel,
 )
 
+
 from util import create_argument_parser, create_progress_bar, compute_enhanced_training_summary, convert_json_compat, SanityDataset
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -443,21 +444,65 @@ class Cell2TextDDPTrainer:
         
         return avg_loss
     
-    def save_checkpoint(self, checkpoint_dir, additional_state=None):
-        """Save model checkpoint (only on main process)"""
+
+    def save_checkpoint_separate_adapters(self, checkpoint_dir, additional_state=None):
+        """
+        Save both full model and adapter separately for maximum flexibility
+        """
         if not self.is_main_process:
             return
-            
+        
         os.makedirs(checkpoint_dir, exist_ok=True)
         
-        # Get the underlying model state dict
+        # Get the underlying model (unwrap DDP if needed)
         if isinstance(self.model, DDP):
-            model_state_dict = self.model.module.state_dict()
+            model = self.model.module
         else:
-            model_state_dict = self.model.state_dict()
+            model = self.model
         
-        # Save model
-        torch.save(model_state_dict, os.path.join(checkpoint_dir, "pytorch_model.bin"))
+        if hasattr(model, 'peft_config') and model.peft_config:
+            # This is a PEFT model
+            
+            # 1. Save PEFT adapter
+            adapter_dir = os.path.join(checkpoint_dir, "adapter")
+            print(f"Saving PEFT adapter to {adapter_dir}")
+            model.save_pretrained(adapter_dir)
+            
+            # 2. Save LoRA config for easy reconstruction
+            lora_config_path = os.path.join(checkpoint_dir, "lora_config.json")
+            with open(lora_config_path, 'w') as f:
+                # Get the first (and typically only) PEFT config
+                peft_config = model.peft_config[list(model.peft_config.keys())[0]]
+                
+                # Convert LoRA config to dict for JSON serialization
+                config_dict = {
+                    'peft_type': str(peft_config.peft_type),
+                    'task_type': str(peft_config.task_type),
+                    'r': peft_config.r,
+                    'lora_alpha': peft_config.lora_alpha,
+                    'lora_dropout': peft_config.lora_dropout,
+                    'target_modules': peft_config.target_modules,
+                    'bias': str(peft_config.bias),
+                    'modules_to_save': peft_config.modules_to_save,
+                    'init_lora_weights': peft_config.init_lora_weights,
+                }
+                json.dump(config_dict, f, indent=2)
+            print(f"LoRA config saved to: {lora_config_path}")
+            
+            # 3. Save full merged model state dict (for direct loading/inference)
+            print(f"Saving full merged model state dict to {checkpoint_dir}")
+            full_state_dict = model.state_dict()
+            torch.save(full_state_dict, os.path.join(checkpoint_dir, "pytorch_model.bin"))
+            
+            # 4. Save base model only (without LoRA weights)
+            base_model_state = model.get_base_model().state_dict()
+            torch.save(base_model_state, os.path.join(checkpoint_dir, "base_model.bin"))
+            
+        else:
+            # Regular model saving (no PEFT)
+            print(f"Saving regular model state dict to {checkpoint_dir}")
+            model_state_dict = model.state_dict()
+            torch.save(model_state_dict, os.path.join(checkpoint_dir, "pytorch_model.bin"))
         
         # Save training state
         checkpoint_state = {
@@ -466,11 +511,27 @@ class Cell2TextDDPTrainer:
             'global_step': self.global_step,
             'losses': self.losses
         }
-        
         if additional_state:
             checkpoint_state.update(additional_state)
-            
+        
         torch.save(checkpoint_state, os.path.join(checkpoint_dir, "training_state.pt"))
+        
+        print(f"Checkpoint saved to {checkpoint_dir}")
+
+
+    def save_checkpoint(self, checkpoint_dir, additional_state=None):
+        """
+        Backward compatibility - redirect to the new saving method
+        """
+        return self.save_checkpoint_separate_adapters(checkpoint_dir, additional_state)
+
+    # For compatibility with your existing load_model function
+    def load_checkpoint_training_state(checkpoint_dir):
+        """Load training state from checkpoint"""
+        training_state_path = os.path.join(checkpoint_dir, "training_state.pt")
+        if os.path.exists(training_state_path):
+            return torch.load(training_state_path, map_location="cpu")
+        return None
 
     def cleanup_distributed(self):
         """Cleanup distributed training"""
@@ -548,7 +609,7 @@ class Cell2TextDDPTrainer:
                 checkpoint_name = f"{self.experiment_name}_overfitted_sanity_model"
             
             checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
-            self.save_checkpoint(checkpoint_dir)
+            self.save_checkpoint_separate_adapters(checkpoint_dir)
             
             # Save training info (only on main process)
             if self.is_main_process:
@@ -664,7 +725,7 @@ class Cell2TextDDPTrainer:
                                 checkpoint_name = f"{self.experiment_name}_best_model"
                             
                             checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
-                            self.save_checkpoint(checkpoint_dir)
+                            self.save_checkpoint_separate_adapters(checkpoint_dir)
                             
                             if self.is_main_process:
                                 print(f"Best model checkpoint saved to: {checkpoint_dir}")

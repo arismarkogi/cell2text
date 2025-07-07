@@ -152,63 +152,63 @@ class GeneformerModel(
 
         return model
     
-    def load_from_state_dict(self, state_dict, strict=True):
-        """
-        Load geneformer model from a state dict (for loading from complete checkpoints)
-        """
+    # def load_from_state_dict(self, state_dict, strict=True):
+    #     """
+    #     Load geneformer model from a state dict (for loading from complete checkpoints)
+    #     """
 
         
-        # Initialize the BERT model if it doesn't exist
-        if self.geneformer_model is None:
+    #     # Initialize the BERT model if it doesn't exist
+    #     if self.geneformer_model is None:
 
-            # Load default config (used when no pre-trained model config is provided)
-            default_config = {
-               "attention_probs_dropout_prob": 0.1,
-                "hidden_act": "relu",
-                "hidden_dropout_prob": 0.1,
-                "hidden_size": 1152,
-                "initializer_range": 0.02,
-                "intermediate_size": 4608,
-                "layer_norm_eps": 1e-12,
-                "max_position_embeddings": 4096,
-                "model_type": "bert",
-                "num_attention_heads": 18,
-                "num_hidden_layers": 18,
-                "pad_token_id": 0,
-                "position_embedding_type": "absolute",
-                "torch_dtype": "float32",
-                "transformers_version": "4.44.2",
-                "type_vocab_size": 2,
-                "use_cache": True,
-                "vocab_size": 20275
-            }
+    #         # Load default config (used when no pre-trained model config is provided)
+    #         default_config = {
+    #            "attention_probs_dropout_prob": 0.1,
+    #             "hidden_act": "relu",
+    #             "hidden_dropout_prob": 0.1,
+    #             "hidden_size": 1152,
+    #             "initializer_range": 0.02,
+    #             "intermediate_size": 4608,
+    #             "layer_norm_eps": 1e-12,
+    #             "max_position_embeddings": 4096,
+    #             "model_type": "bert",
+    #             "num_attention_heads": 18,
+    #             "num_hidden_layers": 18,
+    #             "pad_token_id": 0,
+    #             "position_embedding_type": "absolute",
+    #             "torch_dtype": "float32",
+    #             "transformers_version": "4.44.2",
+    #             "type_vocab_size": 2,
+    #             "use_cache": True,
+    #             "vocab_size": 20275
+    #         }
 
-            # Initialize config and model
-            bert_config = BertConfig(**default_config)
-            bert_config.output_hidden_states = True
-            self.geneformer_model = BertForMaskedLM(bert_config)
+    #         # Initialize config and model
+    #         bert_config = BertConfig(**default_config)
+    #         bert_config.output_hidden_states = True
+    #         self.geneformer_model = BertForMaskedLM(bert_config)
 
-        # Extract only the geneformer-related keys from the state dict
-        geneformer_state_dict = {}
-        prefix = "cell_encoder.geneformer_model."
+    #     # Extract only the geneformer-related keys from the state dict
+    #     geneformer_state_dict = {}
+    #     prefix = "cell_encoder.geneformer_model."
         
-        for key, value in state_dict.items():
-            if key.startswith(prefix):
-                # Remove the prefix to get the actual model key
-                model_key = key[len(prefix):]
-                geneformer_state_dict[model_key] = value
+    #     for key, value in state_dict.items():
+    #         if key.startswith(prefix):
+    #             # Remove the prefix to get the actual model key
+    #             model_key = key[len(prefix):]
+    #             geneformer_state_dict[model_key] = value
         
-        if geneformer_state_dict:
-            # Load the state dict into the geneformer model
-            missing_keys, unexpected_keys = self.geneformer_model.load_state_dict(
-                geneformer_state_dict, strict=strict
-            )
+    #     if geneformer_state_dict:
+    #         # Load the state dict into the geneformer model
+    #         missing_keys, unexpected_keys = self.geneformer_model.load_state_dict(
+    #             geneformer_state_dict, strict=strict
+    #         )
             
-            if missing_keys:
-                print(f"Missing keys in geneformer model: {missing_keys}")
-            if unexpected_keys:
-                print(f"Unexpected keys in geneformer model: {unexpected_keys}")
+    #         if missing_keys:
+    #             print(f"Missing keys in geneformer model: {missing_keys}")
+    #         if unexpected_keys:
+    #             print(f"Unexpected keys in geneformer model: {unexpected_keys}")
                 
-            print("Geneformer model loaded from state dict successfully!")
-        else:
-            print("Warning: No geneformer weights found in state dict")
+    #         print("Geneformer model loaded from state dict successfully!")
+    #     else:
+    #         print("Warning: No geneformer weights found in state dict")

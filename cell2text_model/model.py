@@ -20,7 +20,7 @@ class Cell2TextModel(PreTrainedModel):
         
 
         self.geneformer_config = GeneformerConfig(
-            emb_mode=config.emb_mode if hasattr(config, "emb_mode") else "cell",
+            emb_mode=config.emb_mode if hasattr(config, "emb_mode") else "gene",
             max_ncells=config.max_ncells if hasattr(config, "max_ncells") else 1000,
             emb_layer=config.emb_layer if hasattr(config, "emb_layer") else -1,
             emb_label=config.emb_label if hasattr(config, "emb_label") else None,
