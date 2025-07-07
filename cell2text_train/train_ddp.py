@@ -280,6 +280,8 @@ class Cell2TextDDPTrainer:
         
         # Apply LoRA to decoder
         self.model.decoder = get_peft_model(self.model.decoder, decoder_lora_config)
+        self.model.peft_config = self.model.decoder.peft_config
+        self.model.is_peft_model = True
         
         # Print trainable parameters for decoder
         trainable_decoder_params = sum(p.numel() for p in self.model.decoder.parameters() if p.requires_grad)
