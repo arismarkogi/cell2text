@@ -55,7 +55,6 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
     geneformer_encoder = GeneformerModel.from_pretrained(
         args["geneformer_path"],
         config=geneformer_config,
-        device_map="cpu"
     )
     
     # Load LLaMA decoder
@@ -71,7 +70,6 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
     llama_decoder = Cell2TextLlamaModel.from_pretrained(
         args["llama_path"],
         config=llama_config,
-        device_map="cpu"
     )
     
     # Create projector/adapter
