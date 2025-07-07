@@ -3,12 +3,14 @@ from peft import PeftModel, LoraConfig, get_peft_model
 from typing import Dict, Any
 from transformers import PretrainedConfig
 import os
+import sys
 
 # Import your model classes
-from cell2text_model import Cell2TextModel
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from cell2text_model.model import Cell2TextModel
 from .geneformer_encoder import GeneformerModel, GeneformerConfig
-from .llama_decoder import Cell2TextLlamaModel, Cell2TextLlamaConfig
-from .projectors import MLPProjectionLayer, PerceiverIO
+from cell2text_model.llama_decoder import Cell2TextLlamaModel, Cell2TextLlamaConfig
+from cell2text_model.projectors import MLPProjectionLayer, PerceiverIO
 
 
 def load_model(args: Dict[str, Any]) -> PeftModel:
