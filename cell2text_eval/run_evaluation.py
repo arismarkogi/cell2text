@@ -68,7 +68,6 @@ def create_model_args(args):
         "top_p": args.top_p,
         
         # Training settings
-        "torch_dtype": getattr(torch, args.torch_dtype),
         "lora_rank": args.lora_rank,
         "fix_modality_adapter": args.fix_modality_adapter,
     }
@@ -247,8 +246,6 @@ def main():
                         help="Top p for nucleus sampling")
     
     # Training/Model arguments
-    parser.add_argument("--torch_dtype", type=str, default="float16",
-                        help="Torch data type (float16, float32, bfloat16)")
     parser.add_argument("--lora_rank", type=int, default=16,
                         help="LoRA rank")
     parser.add_argument("--fix_modality_adapter", type=bool, default=False,

@@ -23,7 +23,6 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
         args: Dictionary containing model configuration with keys:
             - geneformer_path: Path to pretrained Geneformer model
             - llama_path: Path to pretrained LLaMA model
-            - torch_dtype: Data type for model weights
             - projector: Type of projector ("mlp" or "perceiver")
             - cell_encoder_hidden_size: Hidden size of cell encoder
             - decoder_hidden_size: Hidden size of decoder
@@ -56,7 +55,6 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
     geneformer_encoder = GeneformerModel.from_pretrained(
         args["geneformer_path"],
         config=geneformer_config,
-        torch_dtype=args["torch_dtype"],
         device_map="cpu"
     )
     
@@ -73,7 +71,6 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
     llama_decoder = Cell2TextLlamaModel.from_pretrained(
         args["llama_path"],
         config=llama_config,
-        torch_dtype=args["torch_dtype"],
         device_map="cpu"
     )
     
@@ -99,9 +96,7 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
         )
     else:
         raise ValueError(f"Unknown projector type: {args['projector']}")
-    
-    adapter.to(args["torch_dtype"])
-    
+        
     # Create the full Cell2Text model
     model = Cell2TextModel(config)
     model.cell_encoder = geneformer_encoder
