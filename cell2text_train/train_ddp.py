@@ -449,143 +449,108 @@ class Cell2TextDDPTrainer:
         return avg_loss
     
 
-    def save_checkpoint_separate_adapters(self, checkpoint_dir, additional_state=None):
+    def save_checkpoint_separate_adapters(
+        self,
+        checkpoint_dir: str,
+        additional_state: dict | None = None,
+        save_full: bool = False,          # set True only if you *really* want the old behaviour
+    ):
         """
-        Save both full model and adapter separately for maximum flexibility
+        Save a minimal checkpoint:
+        • LoRA / projector adapter (PEFT format)
+        • Slim model state‑dict (trainable params only)
+        • Training state (optimizer, scheduler, global_step …)
+        • LoRA config JSON
         """
         if not self.is_main_process:
             return
-        
+
         os.makedirs(checkpoint_dir, exist_ok=True)
-        
-        # Get the underlying model (unwrap DDP if needed)
-        if isinstance(self.model, DDP):
-            model = self.model.module
+
+        # Unwrap DDP if needed
+        model = self.model.module if isinstance(self.model, DDP) else self.model
+
+        # -------- 1. Detect PEFT ------------------------------------------------
+        has_peft = (
+            hasattr(model, "peft_config") and model.peft_config
+        ) or (
+            hasattr(model, "decoder")
+            and hasattr(model.decoder, "peft_config")
+            and model.decoder.peft_config
+        )
+
+        if not has_peft:
+            # Plain model => only save trainable params (usually projector) + state
+            slim_sd = {
+                n: p.detach().clone()
+                for n, p in model.named_parameters()
+                if p.requires_grad
+            }
+            torch.save(slim_sd, os.path.join(checkpoint_dir, "pytorch_model.bin"))
+            print(f"[checkpoint] saved slim state‑dict with {len(slim_sd)} tensors")
+
         else:
-            model = self.model
-        
-        # Check if we have a PEFT model (either on main model or decoder)
-        has_peft = (hasattr(model, 'peft_config') and model.peft_config) or \
-                (hasattr(model, 'decoder') and hasattr(model.decoder, 'peft_config') and model.decoder.peft_config)
-        
-        if has_peft:
-            # This is a PEFT model
-            print(f"Detected PEFT model. Saving adapters and full model...")
-            
-            # Get the PEFT model (decoder in this case)
-            peft_model = model.decoder if hasattr(model.decoder, 'peft_config') else model
-            
-            # 1. Save PEFT adapter
+            # ---------------- 2. Save adapter -----------------------------------
+            print("[checkpoint] PEFT model detected – saving LoRA adapter only")
+            peft_model = model.decoder if hasattr(model.decoder, "peft_config") else model
+
             adapter_dir = os.path.join(checkpoint_dir, "adapter")
-            print(f"Saving PEFT adapter to {adapter_dir}")
-            
-            # Only save the PEFT adapter, not the full model
-            try:
-                peft_model.save_pretrained(adapter_dir)
-            except RuntimeError as e:
-                if "share memory" in str(e):
-                    print("Warning: Shared tensors detected. Saving with clone=True to avoid memory sharing issues.")
-                    # Save adapter weights manually to avoid shared tensor issues
-                    os.makedirs(adapter_dir, exist_ok=True)
-                    
-                    # Get only the LoRA adapter weights
-                    adapter_state_dict = {}
-                    for name, param in peft_model.named_parameters():
-                        if 'lora_' in name:
-                            adapter_state_dict[name] = param.data.clone()
-                    
-                    # Save the adapter weights
-                    adapter_weights_path = os.path.join(adapter_dir, "adapter_model.bin")
-                    torch.save(adapter_state_dict, adapter_weights_path)
-                    
-                    # Save the adapter config
-                    adapter_config = peft_model.peft_config[list(peft_model.peft_config.keys())[0]]
-                    adapter_config.save_pretrained(adapter_dir)
-                    
-                    print(f"LoRA adapter manually saved to {adapter_dir}")
-                else:
-                    raise e
-            
-            # 2. Save LoRA config for easy reconstruction
-            lora_config_path = os.path.join(checkpoint_dir, "lora_config.json")
-            with open(lora_config_path, 'w') as f:
-                # Get the first (and typically only) PEFT config
-                peft_config = peft_model.peft_config[list(peft_model.peft_config.keys())[0]]
-                
-                # Convert LoRA config to dict for JSON serialization
-                config_dict = {
-                    'peft_type': str(peft_config.peft_type),
-                    'task_type': str(peft_config.task_type),
-                    'r': peft_config.r,
-                    'lora_alpha': peft_config.lora_alpha,
-                    'lora_dropout': peft_config.lora_dropout,
-                    'target_modules': list(peft_config.target_modules) if isinstance(peft_config.target_modules, set) else peft_config.target_modules,
-                    'bias': str(peft_config.bias),
-                    'modules_to_save': list(peft_config.modules_to_save) if isinstance(peft_config.modules_to_save, set) else peft_config.modules_to_save,
-                    'init_lora_weights': peft_config.init_lora_weights,
-                    'applies_to': 'decoder'  # Add this to indicate which component has LoRA
-                }
-                json.dump(config_dict, f, indent=2)
-            print(f"LoRA config saved to: {lora_config_path}")
-            
-            # 3. Save full model state dict (main model with merged LoRA weights)
-            print(f"Saving full model state dict to {checkpoint_dir}")
-            # Create a copy of the model state dict with merged LoRA weights
-            full_state_dict = {}
-            
-            # Get non-decoder parameters
-            for name, param in model.named_parameters():
-                if not name.startswith('decoder.'):
-                    full_state_dict[name] = param.data.clone()
-            
-            # Get merged decoder parameters
-            merged_decoder_state = peft_model.state_dict()
-            for name, param in merged_decoder_state.items():
-                full_state_dict[f'decoder.{name}'] = param.data.clone()
-            
-            torch.save(full_state_dict, os.path.join(checkpoint_dir, "pytorch_model.bin"))
-            
-            # 4. Save base model only (without LoRA weights)
-            base_model_state = {}
-            
-            # Get non-decoder parameters
-            for name, param in model.named_parameters():
-                if not name.startswith('decoder.'):
-                    base_model_state[name] = param.data.clone()
-            
-            # Get base decoder parameters (without LoRA)
-            base_decoder_state = peft_model.get_base_model().state_dict()
-            for name, param in base_decoder_state.items():
-                base_model_state[f'decoder.{name}'] = param.data.clone()
-            
-            torch.save(base_model_state, os.path.join(checkpoint_dir, "base_model.bin"))
-            
-        else:
-            # Regular model saving (no PEFT)
-            print(f"Saving regular model state dict to {checkpoint_dir}")
-            model_state_dict = model.state_dict()
-            torch.save(model_state_dict, os.path.join(checkpoint_dir, "pytorch_model.bin"))
-        
-        # Save training state
-        checkpoint_state = {
-            'optimizer': self.optimizer.state_dict(),
-            'lr_scheduler': self.lr_scheduler.state_dict(),
-            'global_step': self.global_step,
-            'losses': self.losses,
-            'has_peft': has_peft,
-            'peft_component': 'decoder' if has_peft else None
+            peft_model.save_pretrained(adapter_dir)
+            print(f"    • adapter → {adapter_dir}")
+
+            # ---------------- 3. Save LoRA config (optional but tiny) ----------
+            lora_cfg = peft_model.peft_config[next(iter(peft_model.peft_config))]
+            lora_cfg_dict = {
+                "peft_type": str(lora_cfg.peft_type),
+                "task_type": str(lora_cfg.task_type),
+                "r": lora_cfg.r,
+                "lora_alpha": lora_cfg.lora_alpha,
+                "lora_dropout": lora_cfg.lora_dropout,
+                "target_modules": (list(lora_cfg.target_modules)
+                                if isinstance(lora_cfg.target_modules, set)
+                                else lora_cfg.target_modules),
+                "bias": str(lora_cfg.bias),
+                "modules_to_save": (list(lora_cfg.modules_to_save)
+                                    if isinstance(lora_cfg.modules_to_save, set)
+                                    else lora_cfg.modules_to_save),
+                "init_lora_weights": lora_cfg.init_lora_weights,
+                "applies_to": "decoder",
+            }
+            with open(os.path.join(checkpoint_dir, "lora_config.json"), "w") as f:
+                json.dump(lora_cfg_dict, f, indent=2)
+            print("    • lora_config.json written")
+
+            # ---------------- 4. Slim state‑dict -------------------------------
+            # Only things that were updated (requires_grad=True) – much smaller
+            slim_sd = {
+                n: p.detach().clone()
+                for n, p in model.named_parameters()
+                if p.requires_grad
+            }
+            torch.save(slim_sd, os.path.join(checkpoint_dir, "pytorch_model.bin"))
+            print(f"    • slim state‑dict ({len(slim_sd)} tensors)")
+
+            # (optional) also save the huge full model if explicitly requested
+            if save_full:
+                torch.save(model.state_dict(),
+                        os.path.join(checkpoint_dir, "pytorch_model_full.bin"))
+                print("    • full merged model saved (requested)")
+
+        # -------- 5. Training‑state --------------------------------------------
+        train_state = {
+            "optimizer": self.optimizer.state_dict(),
+            "lr_scheduler": self.lr_scheduler.state_dict(),
+            "global_step": self.global_step,
+            "losses": self.losses,
+            "has_peft": has_peft,
         }
         if additional_state:
-            checkpoint_state.update(additional_state)
-        
-        torch.save(checkpoint_state, os.path.join(checkpoint_dir, "training_state.pt"))
-        
-        print(f"Checkpoint saved to {checkpoint_dir}")
-        if has_peft:
-            print(f"  - PEFT adapter saved to: {adapter_dir}")
-            print(f"  - LoRA config saved to: {lora_config_path}")
-            print(f"  - Full merged model: pytorch_model.bin")
-            print(f"  - Base model (no LoRA): base_model.bin")
+            train_state.update(additional_state)
+        torch.save(train_state, os.path.join(checkpoint_dir, "training_state.pt"))
+        print("    • training_state.pt")
+
+        print(f"[checkpoint] done → {checkpoint_dir}")
+
 
 
     def save_checkpoint(self, checkpoint_dir, additional_state=None):
