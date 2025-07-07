@@ -10,7 +10,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from cell2text_model.model import Cell2TextModel
 from .geneformer_encoder import GeneformerModel, GeneformerConfig
 from cell2text_model.llama_decoder import Cell2TextLlamaModel, Cell2TextLlamaConfig
-from cell2text_model.projectors import MLPProjectionLayer
+from cell2text_model.projectors import MLPProjectionLayer, PerceiverIO
 
 
 def load_model(args: Dict[str, Any]) -> PeftModel:
