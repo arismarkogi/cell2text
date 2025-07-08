@@ -237,6 +237,8 @@ def fix_and_load_adapter_correct(model, adapter_dir: str, is_trainable: bool = T
         fixed_adapter_dir,
         is_trainable=is_trainable
     )
+
+    print_lora_discrepancies_fixed(model, fixed_adapter_model_path)
     
     print("\n🎉 Adapter loaded successfully onto the model!")
     return model
