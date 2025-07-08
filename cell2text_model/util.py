@@ -13,22 +13,14 @@ from cell2text_model.geneformer_encoder import GeneformerModel, GeneformerConfig
 from cell2text_model.llama_decoder import Cell2TextLlamaModel, Cell2TextLlamaConfig
 from cell2text_model.projectors import MLPProjectionLayer, PerceiverIO
 
-
 import torch
 from safetensors.torch import load_file, save_file
 import json
 import os
 import shutil
-
-import os
-import torch
-from safetensors.torch import load_file, save_file
-import shutil
-from peft import PeftModel
-
-
-from safetensors.torch import load_file
 from pathlib import Path
+
+
 def print_lora_discrepancies_fixed(model: torch.nn.Module, adapter_dir: str):
     """
     Compare LoRA parameters expected by PEFT (based on adapter config) 
@@ -103,49 +95,77 @@ def print_lora_discrepancies_fixed(model: torch.nn.Module, adapter_dir: str):
         print("✅  No unexpected tensors")
 
     print("────────────────────────────────────────────\n")
-    
-    # Also show some examples of what we're comparing
-    print("📋 EXAMPLES:")
-    print("Expected pattern examples:")
-    for i, key in enumerate(sorted(expected)[:3]):
-        print(f"   {i+1}. {key}")
-    print("\nProvided pattern examples:")
-    for i, key in enumerate(sorted(provided)[:3]):
-        print(f"   {i+1}. {key}")
-    print()
 
-def debug_model_structure(model: torch.nn.Module):
+
+def fix_adapter_keys_correct(adapter_dir, output_dir=None):
     """
-    Debug helper to show the actual model structure for target module matching.
+    Fixed version that handles the nested PEFT structure correctly.
+    The issue is that the model expects 'base_model.model.base_model.model.' 
+    but the saved adapter has 'base_model.model.'.
     """
-    print("\n🔍 MODEL STRUCTURE DEBUG:")
-    print("Modules containing 'decoder' and projection layers:")
+    if output_dir is None:
+        output_dir = adapter_dir + "_fixed"
     
-    decoder_modules = []
-    for name, module in model.named_modules():
-        if "decoder" in name and any(proj in name for proj in ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]):
-            decoder_modules.append(name)
+    # Don't re-run if it already exists
+    if os.path.exists(output_dir):
+        print(f"Fixed adapter directory already exists: {output_dir}")
+        return output_dir
+
+    os.makedirs(output_dir, exist_ok=True)
     
-    for name in sorted(decoder_modules)[:10]:  # Show first 10
-        print(f"   - {name}")
+    adapter_path = os.path.join(adapter_dir, "adapter_model.safetensors")
+    if not os.path.exists(adapter_path):
+        raise FileNotFoundError(f"adapter_model.safetensors not found in {adapter_dir}")
+        
+    state_dict = load_file(adapter_path)
+    print(f"Loaded {len(state_dict)} keys from original adapter.")
     
-    if len(decoder_modules) > 10:
-        print(f"   ... and {len(decoder_modules) - 10} more")
-    print()
+    new_state_dict = {}
+    for old_key, tensor in state_dict.items():
+        new_key = old_key
+        
+        # MAIN FIX: Handle the nested PEFT structure
+        # Transform: base_model.model.decoder.llama.model.layers...
+        # To:        base_model.model.base_model.model.decoder.llama.model.layers...
+        if old_key.startswith("base_model.model.decoder.llama.model.layers"):
+            new_key = old_key.replace(
+                "base_model.model.decoder.llama.model.layers",
+                "base_model.model.base_model.model.decoder.llama.model.layers",
+                1
+            )
+        
+        # Handle other potential patterns that might exist
+        elif old_key.startswith("base_model.model.decoder.") and "base_model.model.base_model.model." not in old_key:
+            new_key = old_key.replace(
+                "base_model.model.decoder.",
+                "base_model.model.base_model.model.decoder.",
+                1
+            )
+        
+        if new_key != old_key:
+            print(f"Remapped: {old_key}")
+            print(f"    -> TO: {new_key}")
+        
+        new_state_dict[new_key] = tensor
+
+    new_adapter_path = os.path.join(output_dir, "adapter_model.safetensors")
+    save_file(new_state_dict, new_adapter_path)
+    print(f"\nSaved fixed adapter to {new_adapter_path}")
+    
+    # Copy other essential files
+    for filename in ["adapter_config.json", "README.md", "training_args.bin"]:
+        src_path = os.path.join(adapter_dir, filename)
+        if os.path.exists(src_path):
+            dst_path = os.path.join(output_dir, filename)
+            shutil.copy2(src_path, dst_path)
+            print(f"Copied {filename}")
+            
+    return output_dir
 
 
-def fix_and_load_adapter(model, adapter_dir: str, is_trainable: bool = True) -> PeftModel:
+def fix_and_load_adapter_correct(model, adapter_dir: str, is_trainable: bool = True) -> PeftModel:
     """
-    Checks for key mismatches in a LoRA adapter, fixes them by creating a new 
-    corrected adapter directory, and loads it onto the base model.
-
-    Args:
-        model: The base PyTorch model (non-PEFT).
-        adapter_dir: Path to the original LoRA adapter directory.
-        is_trainable: Whether the loaded adapter should be trainable.
-
-    Returns:
-        A PeftModel with the correctly loaded adapter.
+    Corrected version that handles the nested PEFT structure issue.
     """
     # Determine the path for the new, fixed adapter directory
     dir_name = os.path.basename(os.path.normpath(adapter_dir))
@@ -171,18 +191,27 @@ def fix_and_load_adapter(model, adapter_dir: str, is_trainable: bool = True) -> 
         for old_key, tensor in state_dict.items():
             new_key = old_key
             
-            # Transformation 1: Add the 'decoder.' path component.
-            # Turns 'base_model.model.llama...' into 'base_model.model.decoder.llama...'
-            if old_key.startswith("base_model.model.llama.model."):
-                new_key = old_key.replace("base_model.model.llama.model.", "base_model.model.decoder.llama.model.", 1)
+            # MAIN FIX: Handle the nested PEFT structure
+            # The issue is that saved keys have: base_model.model.decoder.llama.model.layers...
+            # But expected keys have: base_model.model.base_model.model.decoder.llama.model.layers...
+            if old_key.startswith("base_model.model.decoder.llama.model.layers"):
+                new_key = old_key.replace(
+                    "base_model.model.decoder.llama.model.layers",
+                    "base_model.model.base_model.model.decoder.llama.model.layers",
+                    1
+                )
             
-            # Transformation 2: Add '.default' to LoRA weight names.
-            # Turns '...lora_A.weight' into '...lora_A.default.weight'
-            if ".lora_A.weight" in new_key or ".lora_B.weight" in new_key:
-                new_key = new_key.replace(".weight", ".default.weight")
+            # Handle other potential decoder patterns
+            elif old_key.startswith("base_model.model.decoder.") and "base_model.model.base_model.model." not in old_key:
+                new_key = old_key.replace(
+                    "base_model.model.decoder.",
+                    "base_model.model.base_model.model.decoder.",
+                    1
+                )
 
             if old_key != new_key:
-                print(f"  - Remapped: {old_key}\n    -> TO:     {new_key}")
+                print(f"  - Remapped: {old_key}")
+                print(f"    -> TO:     {new_key}")
             
             new_state_dict[new_key] = tensor
             
@@ -208,67 +237,75 @@ def fix_and_load_adapter(model, adapter_dir: str, is_trainable: bool = True) -> 
         fixed_adapter_dir,
         is_trainable=is_trainable
     )
-    print_lora_discrepancies_fixed(model, fixed_adapter_dir)
-
+    
     print("\n🎉 Adapter loaded successfully onto the model!")
     return model
 
 
-
-def fix_adapter_keys_exact(adapter_dir, output_dir=None):
+def get_target_modules_from_model(model):
     """
-    Fixes the exact key mismatch issue. This function is correct.
-    It transforms saved keys to the format the current model expects.
+    Helper function to dynamically find the correct target modules
+    by inspecting the model structure.
     """
-    if output_dir is None:
-        output_dir = adapter_dir + "_fixed"
+    target_modules = []
     
-    # Don't re-run if it already exists
-    if os.path.exists(output_dir):
-        print(f"Fixed adapter directory already exists: {output_dir}")
-        return output_dir
-
-    os.makedirs(output_dir, exist_ok=True)
+    # First, let's debug what we have
+    print("=== Model structure analysis ===")
+    decoder_modules = []
+    for name, module in model.named_modules():
+        if "decoder" in name and any(target in name for target in ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]):
+            decoder_modules.append(name)
     
-    adapter_path = os.path.join(adapter_dir, "adapter_model.safetensors")
-    if not os.path.exists(adapter_path):
-        raise FileNotFoundError(f"adapter_model.safetensors not found in {adapter_dir}")
-        
-    state_dict = load_file(adapter_path)
-    print(f"Loaded {len(state_dict)} keys from original adapter.")
+    # Show some examples
+    for name in sorted(decoder_modules)[:5]:
+        print(f"Found potential target: {name}")
+    if len(decoder_modules) > 5:
+        print(f"... and {len(decoder_modules) - 5} more")
     
-    new_state_dict = {}
-    for old_key, tensor in state_dict.items():
-        new_key = old_key
-        # Check 1: Add the '.decoder.' path segment
-        if old_key.startswith("base_model.model.llama.model.layers"):
-            new_key = old_key.replace(
-                "base_model.model.llama.model.layers",
-                "base_model.model.decoder.llama.model.layers"
-            )
-        
-        # Check 2: Add the '.default.' segment for LoRA weights
-        if ".lora_A.weight" in new_key or ".lora_B.weight" in new_key:
-            new_key = new_key.replace(".weight", ".default.weight")
-        
-        if new_key != old_key:
-            print(f"Remapped: {old_key} -> {new_key}")
-        
-        new_state_dict[new_key] = tensor
-
-    new_adapter_path = os.path.join(output_dir, "adapter_model.safetensors")
-    save_file(new_state_dict, new_adapter_path)
-    print(f"\nSaved fixed adapter to {new_adapter_path}")
+    # Check if we have a nested decoder structure
+    has_llama_decoder = any("decoder.llama" in name for name, _ in model.named_modules())
     
-    # Copy other essential files
-    for filename in ["adapter_config.json", "README.md", "training_args.bin"]:
-        src_path = os.path.join(adapter_dir, filename)
-        if os.path.exists(src_path):
-            dst_path = os.path.join(output_dir, filename)
-            shutil.copy2(src_path, dst_path)
-            print(f"Copied {filename}")
-            
-    return output_dir
+    if has_llama_decoder:
+        # Structure: model.decoder.llama.model.layers.X.self_attn.{q,k,v,o}_proj
+        print("Detected LLaMA decoder structure")
+        target_modules = [
+            "decoder.llama.model.layers.*.self_attn.q_proj",
+            "decoder.llama.model.layers.*.self_attn.k_proj", 
+            "decoder.llama.model.layers.*.self_attn.v_proj",
+            "decoder.llama.model.layers.*.self_attn.o_proj",
+            "decoder.llama.model.layers.*.mlp.gate_proj",
+            "decoder.llama.model.layers.*.mlp.up_proj",
+            "decoder.llama.model.layers.*.mlp.down_proj"
+        ]
+    else:
+        # Fallback: look for actual module names
+        attention_modules = set()
+        mlp_modules = set()
+        
+        for name, module in model.named_modules():
+            if hasattr(module, 'weight') and "decoder" in name:
+                if any(proj in name for proj in ["q_proj", "k_proj", "v_proj", "o_proj"]):
+                    # Extract the pattern up to the projection layer
+                    pattern = name.replace(name.split(".")[-1], "*")
+                    if pattern not in attention_modules:
+                        attention_modules.add(pattern[:-1])  # Remove the trailing *
+                        
+                elif any(proj in name for proj in ["gate_proj", "up_proj", "down_proj"]):
+                    pattern = name.replace(name.split(".")[-1], "*")
+                    if pattern not in mlp_modules:
+                        mlp_modules.add(pattern[:-1])  # Remove the trailing *
+        
+        # Convert to specific target modules
+        for base_pattern in attention_modules:
+            for proj in ["q_proj", "k_proj", "v_proj", "o_proj"]:
+                target_modules.append(f"{base_pattern}.{proj}")
+                
+        for base_pattern in mlp_modules:
+            for proj in ["gate_proj", "up_proj", "down_proj"]:
+                target_modules.append(f"{base_pattern}.{proj}")
+    
+    print(f"Final target modules: {target_modules}")
+    return target_modules
 
 
 def load_model(args: Dict[str, Any]) -> PeftModel:
@@ -276,22 +313,6 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
     Standard API for Cell2Text model. Used in both `train` and `generate`.
     Load base model components, and load weights from the checkpoint path 
     if provided.
-    
-    Args:
-        args: Dictionary containing model configuration with keys:
-            - geneformer_path: Path to pretrained Geneformer model
-            - llama_path: Path to pretrained LLaMA model
-            - projector: Type of projector ("mlp" or "perceiver")
-            - cell_encoder_hidden_size: Hidden size of cell encoder
-            - decoder_hidden_size: Hidden size of decoder
-            - mlp_hidden_size: Hidden size of MLP projector (if using MLP)
-            - mlp_dropout: Dropout for MLP projector
-            - top_k: Number of top tokens to keep from encoder
-            - load_model_checkpoint_path: Path to pretrained Cell2Text model checkpoint
-            - load_adapter_checkpoint_dir: Path to pretrained LoRA adapter
-            - lora_rank: Rank for LoRA adaptation
-            - fix_modality_adapter: Whether to freeze the projector/adapter
-            - Additional projector-specific args for Perceiver
     """
     
     # Create configuration for the Cell2Text model
@@ -375,37 +396,22 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
 
         print(f"  ↳ {len(proj_sd)} tensors will be loaded into cell_to_embedding")
 
-        print("Checkpoint has:", next(iter(proj_sd)))          # e.g. 'latents'
-        print("Model expects:", next(iter(model.cell_to_embedding.state_dict())))
-
         # 2) hand the sub‑dict to the projector module itself
         missing, unexpected = model.cell_to_embedding.load_state_dict(proj_sd, strict=False)
 
         if unexpected:
-            # this should now be empty – if not, you filtered/stripped wrongly
             print(f"The missing keys {missing}")
             raise ValueError(f"Still have unexpected keys: {unexpected}")
         print(f"  ✓ loaded {len(proj_sd) - len(missing)} tensors ("
             f"{len(missing)} params left at init values)")
 
     
-    
     # Set up LoRA adaptation
     if args.get("load_adapter_checkpoint_dir"):
-        # print("--- Loading and Fixing LoRA Adapter ---")
+        print("--- Loading and Fixing LoRA Adapter ---")
         
-        # # 2a. Run the fixing script to create a corrected adapter directory
-        # original_adapter_dir = args['load_adapter_checkpoint_dir']
-        # fixed_adapter_dir = fix_adapter_keys_exact(original_adapter_dir)
-
-        # # 2b. Load the adapter from the FIXED directory onto the BASE model
-        # model = PeftModel.from_pretrained(
-        #     model,
-        #     fixed_adapter_dir,
-        #     is_trainable=True
-        # )
-
-        model = fix_and_load_adapter(
+        # Use the corrected function
+        model = fix_and_load_adapter_correct(
             model=model, 
             adapter_dir=args['load_adapter_checkpoint_dir']
         )
@@ -448,82 +454,13 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
     return model
 
 
-def get_target_modules_from_model(model):
-    """
-    Helper function to dynamically find the correct target modules
-    by inspecting the model structure.
-    """
-    target_modules = []
-    
-    # First, let's debug what we have
-    print("=== Model structure analysis ===")
-    for name, module in model.named_modules():
-        if "decoder" in name and any(target in name for target in ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]):
-            print(f"Found potential target: {name}")
-    
-    # Check if we have a nested decoder structure
-    has_llama_decoder = any("decoder.llama" in name for name, _ in model.named_modules())
-    
-    if has_llama_decoder:
-        # Structure: model.decoder.llama.model.layers.X.self_attn.{q,k,v,o}_proj
-        print("Detected LLaMA decoder structure")
-        target_modules = [
-            "decoder.llama.model.layers.*.self_attn.q_proj",
-            "decoder.llama.model.layers.*.self_attn.k_proj", 
-            "decoder.llama.model.layers.*.self_attn.v_proj",
-            "decoder.llama.model.layers.*.self_attn.o_proj",
-            "decoder.llama.model.layers.*.mlp.gate_proj",
-            "decoder.llama.model.layers.*.mlp.up_proj",
-            "decoder.llama.model.layers.*.mlp.down_proj"
-        ]
-    else:
-        # Fallback: look for actual module names
-        attention_modules = set()
-        mlp_modules = set()
-        
-        for name, module in model.named_modules():
-            if hasattr(module, 'weight') and "decoder" in name:
-                if any(proj in name for proj in ["q_proj", "k_proj", "v_proj", "o_proj"]):
-                    # Extract the pattern up to the projection layer
-                    pattern = name.replace(name.split(".")[-1], "*")
-                    if pattern not in attention_modules:
-                        attention_modules.add(pattern[:-1])  # Remove the trailing *
-                        
-                elif any(proj in name for proj in ["gate_proj", "up_proj", "down_proj"]):
-                    pattern = name.replace(name.split(".")[-1], "*")
-                    if pattern not in mlp_modules:
-                        mlp_modules.add(pattern[:-1])  # Remove the trailing *
-        
-        # Convert to specific target modules
-        for base_pattern in attention_modules:
-            for proj in ["q_proj", "k_proj", "v_proj", "o_proj"]:
-                target_modules.append(f"{base_pattern}.{proj}")
-                
-        for base_pattern in mlp_modules:
-            for proj in ["gate_proj", "up_proj", "down_proj"]:
-                target_modules.append(f"{base_pattern}.{proj}")
-    
-    print(f"Final target modules: {target_modules}")
-    return target_modules
-
-
-
 def get_mlp_modules_to_save(args: Dict[str, Any]) -> list:
     """
     Get the correct module names for MLP projector based on dropout configuration.
-    
-    MLP structure:
-    - Linear(input_dim, hidden_dim)     # index 0
-    - LayerNorm(hidden_dim)            # index 1  
-    - GELU()                           # index 2
-    - [Dropout(p=dropout_prob)]        # index 3 (if dropout > 0)
-    - Linear(hidden_dim, output_dim)   # index 3 or 4
-    - LayerNorm(output_dim)            # index 4 or 5
     """
     dropout_prob = args.get("mlp_dropout", 0.0)
     
     if dropout_prob > 0:
-        # With dropout: Linear(0), LayerNorm(1), GELU(2), Dropout(3), Linear(4), LayerNorm(5)
         return [
             "cell_to_embedding.projection.0",  # First Linear layer
             "cell_to_embedding.projection.1",  # First LayerNorm
@@ -531,7 +468,6 @@ def get_mlp_modules_to_save(args: Dict[str, Any]) -> list:
             "cell_to_embedding.projection.5",  # Final LayerNorm
         ]
     else:
-        # Without dropout: Linear(0), LayerNorm(1), GELU(2), Linear(3), LayerNorm(4)
         return [
             "cell_to_embedding.projection.0",  # First Linear layer
             "cell_to_embedding.projection.1",  # First LayerNorm
