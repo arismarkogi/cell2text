@@ -484,18 +484,16 @@ def create_cell2text_config(args: Dict[str, Any]) -> PretrainedConfig:
     config.top_k = args["top_k"]
     
     # MLP projector configuration
-    if args["projector"] == "mlp":
-        config.mlp_hidden_size = args["mlp_hidden_size"]
-        config.mlp_dropout = args["mlp_dropout"]
+    config.mlp_hidden_size = args["mlp_hidden_size"]
+    config.mlp_dropout = args["mlp_dropout"]
     
     # Perceiver projector configuration
-    elif args["projector"] == "perceiver":
-        config.num_latents = args["num_latents"]
-        config.perceiver_cross_attn_layers = args["perceiver_cross_attn_layers"]
-        config.perceiver_num_heads = args["perceiver_num_heads"]
-        config.ff_mult = args["ff_mult"]
-        config.perceiver_dropout = args["perceiver_dropout"]
-        config.use_position_encoding = args["use_position_encoding"]
+    config.num_latents = args["num_latents"]
+    config.perceiver_cross_attn_layers = args["perceiver_cross_attn_layers"]
+    config.perceiver_num_heads = args["perceiver_num_heads"]
+    config.ff_mult = args["ff_mult"]
+    config.perceiver_dropout = args["perceiver_dropout"]
+    config.use_position_encoding = args["use_position_encoding"]
     
     # Geneformer configuration
     config.emb_mode = args.get("emb_mode", "gene")
