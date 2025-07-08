@@ -134,17 +134,9 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
     else:
         print("Initializing LoRA adapter")
         
-        # Define target modules for LoRA (LLaMA decoder components)
-        # Use simple patterns that PEFT can understand
-        target_modules = [
-            "q_proj",
-            "k_proj", 
-            "v_proj",
-            "o_proj",
-            "gate_proj",
-            "up_proj",
-            "down_proj"
-        ]
+        # Get the correct target modules by inspecting the model structure
+        target_modules = get_target_modules_from_model(model)
+        print(f"Target modules found: {target_modules}")
         
         # Define modules to save (projector/adapter parameters)
         modules_to_save = None
@@ -186,14 +178,61 @@ def get_target_modules_from_model(model):
     
     # Walk through the model to find attention and MLP layers
     for name, module in model.named_modules():
+        # Look for the specific patterns based on the error message
         if any(target in name for target in ["q_proj", "k_proj", "v_proj", "o_proj", 
                                            "gate_proj", "up_proj", "down_proj"]):
-            # Extract the relative module name
-            parts = name.split('.')
-            if len(parts) >= 2:
-                target_modules.append('.'.join(parts[-2:]))  # Get last two parts
+            # Check if this is in the decoder part
+            if "decoder" in name:
+                target_modules.append(name)
     
-    return list(set(target_modules))  # Remove duplicates
+    # If no full paths found, fall back to relative names
+    if not target_modules:
+        print("No full target module paths found, using relative names")
+        # Try to find the correct relative paths
+        for name, module in model.named_modules():
+            if "decoder" in name and any(target in name for target in 
+                                       ["q_proj", "k_proj", "v_proj", "o_proj", 
+                                        "gate_proj", "up_proj", "down_proj"]):
+                # Extract relative path from decoder onwards
+                decoder_idx = name.find("decoder")
+                if decoder_idx != -1:
+                    relative_path = name[decoder_idx:]
+                    target_modules.append(relative_path)
+    
+    # Remove duplicates and sort
+    target_modules = sorted(list(set(target_modules)))
+    
+    # If still no modules found, try a different approach
+    if not target_modules:
+        print("Trying alternative approach to find target modules")
+        # Look for patterns that match the error message structure
+        for name, module in model.named_modules():
+            if hasattr(module, 'weight') and module.weight is not None:
+                if any(proj in name for proj in ["q_proj", "k_proj", "v_proj", "o_proj"]):
+                    if "self_attn" in name:
+                        target_modules.append(name)
+                elif any(proj in name for proj in ["gate_proj", "up_proj", "down_proj"]):
+                    if "mlp" in name:
+                        target_modules.append(name)
+    
+    return target_modules
+
+
+def debug_model_structure(model, max_depth=3):
+    """
+    Debug function to print the model structure and help identify correct target modules.
+    """
+    print("Model structure:")
+    for name, module in model.named_modules():
+        depth = name.count('.')
+        if depth <= max_depth:
+            indent = "  " * depth
+            print(f"{indent}{name}: {type(module).__name__}")
+            
+            # Specifically look for attention and MLP components
+            if any(target in name for target in ["q_proj", "k_proj", "v_proj", "o_proj", 
+                                               "gate_proj", "up_proj", "down_proj"]):
+                print(f"{indent}  -> TARGET MODULE FOUND")
 
 
 def get_mlp_modules_to_save(args: Dict[str, Any]) -> list:
