@@ -208,7 +208,7 @@ def fix_and_load_adapter(model, adapter_dir: str, is_trainable: bool = True) -> 
         fixed_adapter_dir,
         is_trainable=is_trainable
     )
-    print_lora_discrepancies(model, fixed_adapter_dir)
+    print_lora_discrepancies_fixed(model, fixed_adapter_dir)
 
     print("\n🎉 Adapter loaded successfully onto the model!")
     return model
