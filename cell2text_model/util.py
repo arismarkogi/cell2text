@@ -42,7 +42,7 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
     
     # Load Geneformer encoder (frozen)
     geneformer_config = GeneformerConfig(
-        emb_mode=args.get("emb_mode", "cell"),
+        emb_mode=args.get("emb_mode", "gene"),
         max_ncells=args.get("max_ncells", 1000),
         emb_layer=args.get("emb_layer", -1),
         emb_label=args.get("emb_label", None),
@@ -61,7 +61,7 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
     # Load LLaMA decoder
     llama_config = Cell2TextLlamaConfig(
         max_length=args.get("max_length", 100),
-        num_beams=args.get("num_beams", 4),
+        num_beams=args.get("num_beams", 1),
         early_stopping=args.get("early_stopping", True),
         no_repeat_ngram_size=args.get("no_repeat_ngram_size", 3),
         temperature=args.get("temperature", 1.0),
@@ -129,7 +129,7 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
     # Set up LoRA adaptation
     if args.get("load_adapter_checkpoint_dir"):
         print(f"Loading LoRA adapter from {args['load_adapter_checkpoint_dir']}")
-        model =  AutoPeftModelForCausalLM.from_pretrained(
+        model =  PeftModel.from_pretrained(
             model,
             args["load_adapter_checkpoint_dir"],
             is_trainable=True
