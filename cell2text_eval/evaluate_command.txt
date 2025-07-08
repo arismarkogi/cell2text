@@ -8,5 +8,5 @@ python3 /home/arism/cell2text/cell2text_eval/run_evaluation.py \
     --token_dictionary_path /home/arism/cell2text/Geneformer/geneformer/token_dictionary_gc104M.pkl \
     --projector perceiver \
     --num_latents 128 \
-    --num_heads 2 \
+    --perceiver_num_heads 2 \
     --ff_mult 1.5 

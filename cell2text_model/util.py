@@ -26,6 +26,56 @@ from safetensors.torch import load_file, save_file
 import shutil
 from peft import PeftModel
 
+
+from safetensors.torch import load_file
+from pathlib import Path
+
+def print_lora_discrepancies(model: torch.nn.Module, adapter_dir: str):
+    """
+    Compare LoRA parameters expected by `model` with those found in
+    `adapter_model.safetensors` inside `adapter_dir`, and print a diff.
+    """
+    adapter_path = Path(adapter_dir) / "adapter_model.safetensors"
+    if not adapter_path.exists():
+        raise FileNotFoundError(f"Expected adapter file not found: {adapter_path}")
+
+    # 1) All LoRA param names the PEFT‑wrapped model will try to load
+    expected = {
+        n for n, _ in model.named_parameters()
+        if ".lora_" in n   # catches lora_A, lora_B, and any future suffixes
+    }
+
+    # 2) All tensor names that actually live in the adapter file
+    provided = set(load_file(adapter_path).keys())
+
+    missing     = sorted(expected - provided)
+    unexpected  = sorted(provided - expected)
+
+    print("\n┌──────────────────────────────────────────┐")
+    print("│           LoRA PARAMETER DIFF            │")
+    print("└──────────────────────────────────────────┘")
+    print(f"Expected by model : {len(expected)} tensors")
+    print(f"Provided by file  : {len(provided)} tensors\n")
+
+    if missing:
+        print(f"❌  MISSING ({len(missing)}):")
+        for k in missing:
+            print(f"   - {k}")
+    else:
+        print("✅  No missing tensors")
+
+    print()
+
+    if unexpected:
+        print(f"⚠️  UNEXPECTED ({len(unexpected)}):")
+        for k in unexpected:
+            print(f"   - {k}")
+    else:
+        print("✅  No unexpected tensors")
+
+    print("────────────────────────────────────────────\n")
+
+
 def fix_and_load_adapter(model, adapter_dir: str, is_trainable: bool = True) -> PeftModel:
     """
     Checks for key mismatches in a LoRA adapter, fixes them by creating a new 
@@ -100,6 +150,8 @@ def fix_and_load_adapter(model, adapter_dir: str, is_trainable: bool = True) -> 
         fixed_adapter_dir,
         is_trainable=is_trainable
     )
+    print_lora_discrepancies(model, fixed_adapter_dir)
+
     print("\n🎉 Adapter loaded successfully onto the model!")
     return model
 
