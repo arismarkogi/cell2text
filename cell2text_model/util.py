@@ -176,47 +176,82 @@ def get_target_modules_from_model(model):
     """
     target_modules = []
     
-    # Walk through the model to find attention and MLP layers
+    # First, let's debug what we have
+    print("=== Model structure analysis ===")
     for name, module in model.named_modules():
-        # Look for the specific patterns based on the error message
-        if any(target in name for target in ["q_proj", "k_proj", "v_proj", "o_proj", 
-                                           "gate_proj", "up_proj", "down_proj"]):
-            # Check if this is in the decoder part
-            if "decoder" in name:
-                target_modules.append(name)
+        if "decoder" in name and any(target in name for target in ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]):
+            print(f"Found potential target: {name}")
     
-    # If no full paths found, fall back to relative names
-    if not target_modules:
-        print("No full target module paths found, using relative names")
-        # Try to find the correct relative paths
+    # Check if we have a nested decoder structure
+    has_llama_decoder = any("decoder.llama" in name for name, _ in model.named_modules())
+    
+    if has_llama_decoder:
+        # Structure: model.decoder.llama.model.layers.X.self_attn.{q,k,v,o}_proj
+        print("Detected LLaMA decoder structure")
+        target_modules = [
+            "decoder.llama.model.layers.*.self_attn.q_proj",
+            "decoder.llama.model.layers.*.self_attn.k_proj", 
+            "decoder.llama.model.layers.*.self_attn.v_proj",
+            "decoder.llama.model.layers.*.self_attn.o_proj",
+            "decoder.llama.model.layers.*.mlp.gate_proj",
+            "decoder.llama.model.layers.*.mlp.up_proj",
+            "decoder.llama.model.layers.*.mlp.down_proj"
+        ]
+    else:
+        # Fallback: look for actual module names
+        attention_modules = set()
+        mlp_modules = set()
+        
         for name, module in model.named_modules():
-            if "decoder" in name and any(target in name for target in 
-                                       ["q_proj", "k_proj", "v_proj", "o_proj", 
-                                        "gate_proj", "up_proj", "down_proj"]):
-                # Extract relative path from decoder onwards
-                decoder_idx = name.find("decoder")
-                if decoder_idx != -1:
-                    relative_path = name[decoder_idx:]
-                    target_modules.append(relative_path)
-    
-    # Remove duplicates and sort
-    target_modules = sorted(list(set(target_modules)))
-    
-    # If still no modules found, try a different approach
-    if not target_modules:
-        print("Trying alternative approach to find target modules")
-        # Look for patterns that match the error message structure
-        for name, module in model.named_modules():
-            if hasattr(module, 'weight') and module.weight is not None:
+            if hasattr(module, 'weight') and "decoder" in name:
                 if any(proj in name for proj in ["q_proj", "k_proj", "v_proj", "o_proj"]):
-                    if "self_attn" in name:
-                        target_modules.append(name)
+                    # Extract the pattern up to the projection layer
+                    pattern = name.replace(name.split(".")[-1], "*")
+                    if pattern not in attention_modules:
+                        attention_modules.add(pattern[:-1])  # Remove the trailing *
+                        
                 elif any(proj in name for proj in ["gate_proj", "up_proj", "down_proj"]):
-                    if "mlp" in name:
-                        target_modules.append(name)
+                    pattern = name.replace(name.split(".")[-1], "*")
+                    if pattern not in mlp_modules:
+                        mlp_modules.add(pattern[:-1])  # Remove the trailing *
+        
+        # Convert to specific target modules
+        for base_pattern in attention_modules:
+            for proj in ["q_proj", "k_proj", "v_proj", "o_proj"]:
+                target_modules.append(f"{base_pattern}.{proj}")
+                
+        for base_pattern in mlp_modules:
+            for proj in ["gate_proj", "up_proj", "down_proj"]:
+                target_modules.append(f"{base_pattern}.{proj}")
     
+    print(f"Final target modules: {target_modules}")
     return target_modules
 
+
+def debug_model_structure_detailed(model):
+    """
+    Enhanced debug function to understand the exact model structure
+    """
+    print("=== DETAILED MODEL STRUCTURE ===")
+    decoder_modules = []
+    
+    for name, module in model.named_modules():
+        if "decoder" in name:
+            decoder_modules.append((name, type(module).__name__))
+            
+    # Sort by depth and name
+    decoder_modules.sort(key=lambda x: (x[0].count('.'), x[0]))
+    
+    for name, module_type in decoder_modules:
+        depth = name.count('.')
+        indent = "  " * depth
+        print(f"{indent}{name}: {module_type}")
+        
+        # Highlight projection layers
+        if any(proj in name for proj in ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]):
+            print(f"{indent}  ⭐ TARGET CANDIDATE")
+    
+    print("=== END STRUCTURE ===")
 
 def debug_model_structure(model, max_depth=3):
     """
