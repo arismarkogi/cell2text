@@ -14,6 +14,67 @@ from cell2text_model.llama_decoder import Cell2TextLlamaModel, Cell2TextLlamaCon
 from cell2text_model.projectors import MLPProjectionLayer, PerceiverIO
 
 
+import torch
+from safetensors.torch import load_file, save_file
+import json
+import os
+import shutil
+
+def fix_adapter_keys_exact(adapter_dir, output_dir=None):
+    """
+    Fix the exact key mismatch issue you're experiencing
+    """
+    if output_dir is None:
+        output_dir = adapter_dir + "_fixed"
+    
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Load the adapter
+    adapter_path = os.path.join(adapter_dir, "adapter_model.safetensors")
+    state_dict = load_file(adapter_path)
+    
+    print(f"Loaded {len(state_dict)} keys from adapter")
+    
+    # Fix the keys
+    new_state_dict = {}
+    
+    for old_key, tensor in state_dict.items():
+        if old_key.startswith("base_model.model.llama.model.layers"):
+            # Transform: base_model.model.llama.model.layers -> base_model.model.decoder.llama.model.layers
+            # And: .lora_A.weight -> .lora_A.default.weight
+            new_key = old_key.replace(
+                "base_model.model.llama.model.layers",
+                "base_model.model.decoder.llama.model.layers"
+            )
+            new_key = new_key.replace(".weight", ".default.weight")
+            
+            new_state_dict[new_key] = tensor
+            print(f"Fixed: {old_key} -> {new_key}")
+            
+        else:
+            # Keep other keys unchanged (like cell_to_embedding keys)
+            new_state_dict[old_key] = tensor
+            print(f"Kept: {old_key}")
+    
+    # Save the fixed adapter
+    new_adapter_path = os.path.join(output_dir, "adapter_model.safetensors")
+    save_file(new_state_dict, new_adapter_path)
+    print(f"Saved fixed adapter to {new_adapter_path}")
+    
+    # Copy other files
+    for filename in ["adapter_config.json", "README.md"]:
+        src_path = os.path.join(adapter_dir, filename)
+        if os.path.exists(src_path):
+            dst_path = os.path.join(output_dir, filename)
+            shutil.copy2(src_path, dst_path)
+            print(f"Copied {filename}")
+    
+    print(f"\nFixed adapter saved to: {output_dir}")
+    print("You can now use this directory with load_adapter_checkpoint_dir")
+    
+    return output_dir
+
+
 def load_model(args: Dict[str, Any]) -> PeftModel:
     """
     Standard API for Cell2Text model. Used in both `train` and `generate`.
@@ -129,9 +190,12 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
     # Set up LoRA adaptation
     if args.get("load_adapter_checkpoint_dir"):
         print(f"Loading LoRA adapter from {args['load_adapter_checkpoint_dir']}")
+        
+        new_adapter_dir = fix_adapter_keys_exact(args["load_adapter_checkpoint_dir"])
+
         model =  PeftModel.from_pretrained(
             model,
-            args["load_adapter_checkpoint_dir"],
+            new_adapter_dir,
             is_trainable=True
         )
     else:
