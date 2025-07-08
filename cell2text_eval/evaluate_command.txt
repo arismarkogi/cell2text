@@ -6,3 +6,4 @@ python3 /home/arism/cell2text/cell2text_eval/run_evaluation.py \
     --llama_path  meta-llama/Llama-3.2-3B-Instruct \
     --adapter_checkpoint_dir /home/arism/deepspeed_training/full_1epoch_batchsize4_gradacc8_perceiver_numlatents_ffmult1.5_numheads2_selfattn4/full_1epoch_batchsize4_gradacc8_perceiver_numlatents_ffmult1.5_numheads2_selfattn4_best_model/adapter \
     --token_dictionary_path /home/arism/cell2text/Geneformer/geneformer/token_dictionary_gc104M.pkl
+    --projector mlp

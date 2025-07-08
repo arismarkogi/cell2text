@@ -273,6 +273,7 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
 
         if unexpected:
             # this should now be empty – if not, you filtered/stripped wrongly
+            print(f"The missing keys {missing}")
             raise ValueError(f"Still have unexpected keys: {unexpected}")
         print(f"  ✓ loaded {len(proj_sd) - len(missing)} tensors ("
             f"{len(missing)} params left at init values)")
