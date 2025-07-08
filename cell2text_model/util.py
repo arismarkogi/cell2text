@@ -253,9 +253,24 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
         param.requires_grad = False
     
     if args.get("load_model_checkpoint_path"):
-        print(f"Loading base model weights from {args['load_model_checkpoint_path']}")
-        state_dict = torch.load(args["load_model_checkpoint_path"], map_location="cpu")
-        model.load_state_dict(state_dict, strict=False)
+        ckpt_path = args["load_model_checkpoint_path"]
+        print(f"Loading *cell_to_embedding* weights from {ckpt_path}")
+
+        # ➊ load the checkpoint on CPU (don't let it shove things onto GPU yet)
+        full_sd = torch.load(ckpt_path, map_location="cpu")
+
+        # ➋ filter for keys that belong to the projector
+        #       keep any key that starts with "cell_to_embedding."
+        proj_sd = {k: v for k, v in full_sd.items() if k.startswith("cell_to_embedding.")}
+
+        print(f"  ↳ found {len(proj_sd)} projector tensors")
+
+        # ➌ now load them with strict=False so that the rest of the model is untouched
+        missing, unexpected = model.load_state_dict(proj_sd, strict=False)
+        #       - missing: all the non‑projector parameters we purposely skipped
+        #       - unexpected: should be empty because we filtered correctly
+        assert len(unexpected) == 0, f"Unexpected keys: {unexpected}"
+        print(f"  ✓ loaded projector. {len(missing)} keys intentionally left unchanged.")
     
     
     # Set up LoRA adaptation
