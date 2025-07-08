@@ -19,6 +19,22 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
     Standard API for Cell2Text model. Used in both `train` and `generate`.
     Load base model components, and load weights from the checkpoint path 
     if provided.
+    
+    Args:
+        args: Dictionary containing model configuration with keys:
+            - geneformer_path: Path to pretrained Geneformer model
+            - llama_path: Path to pretrained LLaMA model
+            - projector: Type of projector ("mlp" or "perceiver")
+            - cell_encoder_hidden_size: Hidden size of cell encoder
+            - decoder_hidden_size: Hidden size of decoder
+            - mlp_hidden_size: Hidden size of MLP projector (if using MLP)
+            - mlp_dropout: Dropout for MLP projector
+            - top_k: Number of top tokens to keep from encoder
+            - load_model_checkpoint_path: Path to pretrained Cell2Text model checkpoint
+            - load_adapter_checkpoint_dir: Path to pretrained LoRA adapter
+            - lora_rank: Rank for LoRA adaptation
+            - fix_modality_adapter: Whether to freeze the projector/adapter
+            - Additional projector-specific args for Perceiver
     """
     
     # Create configuration for the Cell2Text model
@@ -113,7 +129,7 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
     # Set up LoRA adaptation
     if args.get("load_adapter_checkpoint_dir"):
         print(f"Loading LoRA adapter from {args['load_adapter_checkpoint_dir']}")
-        model = PeftModel.from_pretrained(
+        model =  PeftModel.from_pretrained(
             model,
             args["load_adapter_checkpoint_dir"],
             is_trainable=True
@@ -164,62 +180,51 @@ def get_target_modules_from_model(model):
     
     # First, let's debug what we have
     print("=== Model structure analysis ===")
-    
-    # Find all relevant projection layers
-    projection_layers = []
     for name, module in model.named_modules():
         if "decoder" in name and any(target in name for target in ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]):
-            projection_layers.append(name)
-            print(f"Found projection layer: {name}")
-    
-    # Extract the exact module names (no wildcards)
-    target_modules = projection_layers
-    
-    # If we found specific layers, use them directly
-    if target_modules:
-        print(f"Using specific target modules: {target_modules}")
-        return target_modules
-    
-    # Fallback: use pattern matching
-    print("No specific modules found, using pattern matching")
+            print(f"Found potential target: {name}")
     
     # Check if we have a nested decoder structure
     has_llama_decoder = any("decoder.llama" in name for name, _ in model.named_modules())
     
     if has_llama_decoder:
+        # Structure: model.decoder.llama.model.layers.X.self_attn.{q,k,v,o}_proj
         print("Detected LLaMA decoder structure")
-        # Find the actual layer structure
-        layer_pattern = None
-        for name, module in model.named_modules():
-            if "decoder.llama.model.layers" in name and "self_attn.q_proj" in name:
-                # Extract pattern like "decoder.llama.model.layers.0.self_attn.q_proj"
-                layer_num = name.split("layers.")[1].split(".")[0]
-                layer_pattern = f"decoder.llama.model.layers.{layer_num}"
-                break
+        target_modules = [
+            "decoder.llama.model.layers.*.self_attn.q_proj",
+            "decoder.llama.model.layers.*.self_attn.k_proj", 
+            "decoder.llama.model.layers.*.self_attn.v_proj",
+            "decoder.llama.model.layers.*.self_attn.o_proj",
+            "decoder.llama.model.layers.*.mlp.gate_proj",
+            "decoder.llama.model.layers.*.mlp.up_proj",
+            "decoder.llama.model.layers.*.mlp.down_proj"
+        ]
+    else:
+        # Fallback: look for actual module names
+        attention_modules = set()
+        mlp_modules = set()
         
-        if layer_pattern:
-            # Get all layer numbers
-            layer_nums = set()
-            for name, module in model.named_modules():
-                if "decoder.llama.model.layers" in name:
-                    try:
-                        layer_num = name.split("layers.")[1].split(".")[0]
-                        layer_nums.add(int(layer_num))
-                    except:
-                        continue
-            
-            # Create target modules for all layers
-            for layer_num in sorted(layer_nums):
-                base_path = f"decoder.llama.model.layers.{layer_num}"
-                target_modules.extend([
-                    f"{base_path}.self_attn.q_proj",
-                    f"{base_path}.self_attn.k_proj", 
-                    f"{base_path}.self_attn.v_proj",
-                    f"{base_path}.self_attn.o_proj",
-                    f"{base_path}.mlp.gate_proj",
-                    f"{base_path}.mlp.up_proj",
-                    f"{base_path}.mlp.down_proj"
-                ])
+        for name, module in model.named_modules():
+            if hasattr(module, 'weight') and "decoder" in name:
+                if any(proj in name for proj in ["q_proj", "k_proj", "v_proj", "o_proj"]):
+                    # Extract the pattern up to the projection layer
+                    pattern = name.replace(name.split(".")[-1], "*")
+                    if pattern not in attention_modules:
+                        attention_modules.add(pattern[:-1])  # Remove the trailing *
+                        
+                elif any(proj in name for proj in ["gate_proj", "up_proj", "down_proj"]):
+                    pattern = name.replace(name.split(".")[-1], "*")
+                    if pattern not in mlp_modules:
+                        mlp_modules.add(pattern[:-1])  # Remove the trailing *
+        
+        # Convert to specific target modules
+        for base_pattern in attention_modules:
+            for proj in ["q_proj", "k_proj", "v_proj", "o_proj"]:
+                target_modules.append(f"{base_pattern}.{proj}")
+                
+        for base_pattern in mlp_modules:
+            for proj in ["gate_proj", "up_proj", "down_proj"]:
+                target_modules.append(f"{base_pattern}.{proj}")
     
     print(f"Final target modules: {target_modules}")
     return target_modules
@@ -233,7 +238,7 @@ def debug_model_structure_detailed(model):
     decoder_modules = []
     
     for name, module in model.named_modules():
-        if "decoder" in name or "cell_to_embedding" in name:
+        if "decoder" in name:
             decoder_modules.append((name, type(module).__name__))
             
     # Sort by depth and name
@@ -249,65 +254,6 @@ def debug_model_structure_detailed(model):
             print(f"{indent}  ⭐ TARGET CANDIDATE")
     
     print("=== END STRUCTURE ===")
-
-
-def fix_adapter_keys(adapter_checkpoint_dir: str, output_dir: str = None):
-    """
-    Fix the adapter keys to match the expected format.
-    This function converts keys from the old format to the new format.
-    
-    Args:
-        adapter_checkpoint_dir: Directory containing the adapter checkpoint
-        output_dir: Directory to save the fixed adapter (if None, overwrites original)
-    """
-    import safetensors
-    from safetensors.torch import load_file, save_file
-    import json
-    
-    if output_dir is None:
-        output_dir = adapter_checkpoint_dir
-    
-    # Load the adapter model
-    adapter_path = os.path.join(adapter_checkpoint_dir, "adapter_model.safetensors")
-    if not os.path.exists(adapter_path):
-        print(f"No adapter_model.safetensors found at {adapter_path}")
-        return
-    
-    print(f"Loading adapter from {adapter_path}")
-    state_dict = load_file(adapter_path)
-    
-    # Create key mapping
-    new_state_dict = {}
-    for old_key, tensor in state_dict.items():
-        # Convert keys from old format to new format
-        if old_key.startswith("base_model.model.llama.model.layers"):
-            # Add decoder prefix and .default suffix
-            new_key = old_key.replace("base_model.model.llama.model.layers", 
-                                    "base_model.model.decoder.llama.model.layers")
-            # Add .default before .weight
-            new_key = new_key.replace(".weight", ".default.weight")
-            new_state_dict[new_key] = tensor
-            print(f"Converted: {old_key} -> {new_key}")
-        else:
-            # Keep other keys as-is (like cell_to_embedding keys)
-            new_state_dict[old_key] = tensor
-            print(f"Kept: {old_key}")
-    
-    # Save the fixed adapter
-    output_path = os.path.join(output_dir, "adapter_model.safetensors")
-    save_file(new_state_dict, output_path)
-    print(f"Fixed adapter saved to {output_path}")
-    
-    # Copy other files
-    for filename in ["adapter_config.json", "README.md"]:
-        src_path = os.path.join(adapter_checkpoint_dir, filename)
-        if os.path.exists(src_path):
-            dst_path = os.path.join(output_dir, filename)
-            if src_path != dst_path:
-                import shutil
-                shutil.copy2(src_path, dst_path)
-                print(f"Copied {filename}")
-
 
 def debug_model_structure(model, max_depth=3):
     """
@@ -329,10 +275,19 @@ def debug_model_structure(model, max_depth=3):
 def get_mlp_modules_to_save(args: Dict[str, Any]) -> list:
     """
     Get the correct module names for MLP projector based on dropout configuration.
+    
+    MLP structure:
+    - Linear(input_dim, hidden_dim)     # index 0
+    - LayerNorm(hidden_dim)            # index 1  
+    - GELU()                           # index 2
+    - [Dropout(p=dropout_prob)]        # index 3 (if dropout > 0)
+    - Linear(hidden_dim, output_dim)   # index 3 or 4
+    - LayerNorm(output_dim)            # index 4 or 5
     """
     dropout_prob = args.get("mlp_dropout", 0.0)
     
     if dropout_prob > 0:
+        # With dropout: Linear(0), LayerNorm(1), GELU(2), Dropout(3), Linear(4), LayerNorm(5)
         return [
             "cell_to_embedding.projection.0",  # First Linear layer
             "cell_to_embedding.projection.1",  # First LayerNorm
@@ -340,6 +295,7 @@ def get_mlp_modules_to_save(args: Dict[str, Any]) -> list:
             "cell_to_embedding.projection.5",  # Final LayerNorm
         ]
     else:
+        # Without dropout: Linear(0), LayerNorm(1), GELU(2), Linear(3), LayerNorm(4)
         return [
             "cell_to_embedding.projection.0",  # First Linear layer
             "cell_to_embedding.projection.1",  # First LayerNorm
@@ -394,4 +350,3 @@ def create_cell2text_config(args: Dict[str, Any]) -> PretrainedConfig:
     config.top_p = args.get("top_p", 1.0)
     
     return config
-
