@@ -20,6 +20,91 @@ import json
 import os
 import shutil
 
+import os
+import torch
+from safetensors.torch import load_file, save_file
+import shutil
+from peft import PeftModel
+
+def fix_and_load_adapter(model, adapter_dir: str, is_trainable: bool = True) -> PeftModel:
+    """
+    Checks for key mismatches in a LoRA adapter, fixes them by creating a new 
+    corrected adapter directory, and loads it onto the base model.
+
+    Args:
+        model: The base PyTorch model (non-PEFT).
+        adapter_dir: Path to the original LoRA adapter directory.
+        is_trainable: Whether the loaded adapter should be trainable.
+
+    Returns:
+        A PeftModel with the correctly loaded adapter.
+    """
+    # Determine the path for the new, fixed adapter directory
+    dir_name = os.path.basename(os.path.normpath(adapter_dir))
+    parent_dir = os.path.dirname(os.path.normpath(adapter_dir))
+    fixed_adapter_dir = os.path.join(parent_dir, f"{dir_name}_fixed")
+
+    print(f"Searching for adapter config in: {adapter_dir}")
+    print(f"Will save/load fixed adapter from: {fixed_adapter_dir}")
+    
+    # Create the fixed adapter only if it doesn't already exist
+    if not os.path.exists(fixed_adapter_dir):
+        print("Fixed adapter not found. Creating a new one...")
+        os.makedirs(fixed_adapter_dir, exist_ok=True)
+        
+        original_adapter_path = os.path.join(adapter_dir, "adapter_model.safetensors")
+        if not os.path.exists(original_adapter_path):
+            raise FileNotFoundError(f"'adapter_model.safetensors' not found in '{adapter_dir}'")
+            
+        state_dict = load_file(original_adapter_path)
+        new_state_dict = {}
+        print("\nTransforming adapter keys...")
+
+        for old_key, tensor in state_dict.items():
+            new_key = old_key
+            
+            # Transformation 1: Add the 'decoder.' path component.
+            # Turns 'base_model.model.llama...' into 'base_model.model.decoder.llama...'
+            if old_key.startswith("base_model.model.llama.model."):
+                new_key = old_key.replace("base_model.model.llama.model.", "base_model.model.decoder.llama.model.", 1)
+            
+            # Transformation 2: Add '.default' to LoRA weight names.
+            # Turns '...lora_A.weight' into '...lora_A.default.weight'
+            if ".lora_A.weight" in new_key or ".lora_B.weight" in new_key:
+                new_key = new_key.replace(".weight", ".default.weight")
+
+            if old_key != new_key:
+                print(f"  - Remapped: {old_key}\n    -> TO:     {new_key}")
+            
+            new_state_dict[new_key] = tensor
+            
+        # Save the new state dict
+        fixed_adapter_model_path = os.path.join(fixed_adapter_dir, "adapter_model.safetensors")
+        save_file(new_state_dict, fixed_adapter_model_path)
+        
+        # Copy other essential files
+        for filename in ["adapter_config.json", "README.md"]:
+            src = os.path.join(adapter_dir, filename)
+            dst = os.path.join(fixed_adapter_dir, filename)
+            if os.path.exists(src):
+                shutil.copy2(src, dst)
+        
+        print(f"\n✅ Successfully created fixed adapter at: {fixed_adapter_dir}")
+    
+    else:
+        print(f"✅ Using existing fixed adapter from: {fixed_adapter_dir}")
+
+    # Load the adapter from the FIXED directory
+    model = PeftModel.from_pretrained(
+        model,
+        fixed_adapter_dir,
+        is_trainable=is_trainable
+    )
+    print("\n🎉 Adapter loaded successfully onto the model!")
+    return model
+
+
+
 def fix_adapter_keys_exact(adapter_dir, output_dir=None):
     """
     Fixes the exact key mismatch issue. This function is correct.
@@ -175,17 +260,22 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
     
     # Set up LoRA adaptation
     if args.get("load_adapter_checkpoint_dir"):
-        print("--- Loading and Fixing LoRA Adapter ---")
+        # print("--- Loading and Fixing LoRA Adapter ---")
         
-        # 2a. Run the fixing script to create a corrected adapter directory
-        original_adapter_dir = args['load_adapter_checkpoint_dir']
-        fixed_adapter_dir = fix_adapter_keys_exact(original_adapter_dir)
+        # # 2a. Run the fixing script to create a corrected adapter directory
+        # original_adapter_dir = args['load_adapter_checkpoint_dir']
+        # fixed_adapter_dir = fix_adapter_keys_exact(original_adapter_dir)
 
-        # 2b. Load the adapter from the FIXED directory onto the BASE model
-        model = PeftModel.from_pretrained(
-            model,
-            fixed_adapter_dir,
-            is_trainable=True
+        # # 2b. Load the adapter from the FIXED directory onto the BASE model
+        # model = PeftModel.from_pretrained(
+        #     model,
+        #     fixed_adapter_dir,
+        #     is_trainable=True
+        # )
+
+        model = fix_and_load_adapter(
+            model=model, 
+            adapter_dir=args['load_adapter_checkpoint_dir']
         )
         print("\nSuccessfully loaded fixed LoRA adapter.")
 
