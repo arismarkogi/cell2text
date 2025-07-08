@@ -4,6 +4,7 @@ from typing import Dict, Any
 from transformers import PretrainedConfig
 import os
 import sys
+from peft import AutoPeftModelForCausalLM
 
 # Import your model classes
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -128,7 +129,7 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
     # Set up LoRA adaptation
     if args.get("load_adapter_checkpoint_dir"):
         print(f"Loading LoRA adapter from {args['load_adapter_checkpoint_dir']}")
-        model = PeftModel.from_pretrained(
+        model =  AutoPeftModelForCausalLM.from_pretrained(
             model,
             args["load_adapter_checkpoint_dir"],
             is_trainable=True
