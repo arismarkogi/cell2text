@@ -29,38 +29,65 @@ from peft import PeftModel
 
 from safetensors.torch import load_file
 from pathlib import Path
-
-def print_lora_discrepancies(model: torch.nn.Module, adapter_dir: str):
+def print_lora_discrepancies_fixed(model: torch.nn.Module, adapter_dir: str):
     """
-    Compare LoRA parameters expected by `model` with those found in
-    `adapter_model.safetensors` inside `adapter_dir`, and print a diff.
+    Compare LoRA parameters expected by PEFT (based on adapter config) 
+    with those found in adapter_model.safetensors, and print a diff.
     """
     adapter_path = Path(adapter_dir) / "adapter_model.safetensors"
+    config_path = Path(adapter_dir) / "adapter_config.json"
+    
     if not adapter_path.exists():
         raise FileNotFoundError(f"Expected adapter file not found: {adapter_path}")
+    if not config_path.exists():
+        raise FileNotFoundError(f"Expected config file not found: {config_path}")
 
-    # 1) All LoRA param names the PEFT‑wrapped model will try to load
-    expected = {
-        n for n, _ in model.named_parameters()
-        if ".lora_" in n   # catches lora_A, lora_B, and any future suffixes
-    }
+    # Load adapter config
+    with open(config_path, 'r') as f:
+        adapter_config = json.load(f)
+    
+    # Get target modules from config
+    target_modules = adapter_config.get('target_modules', [])
+    
+    # Generate expected parameter names based on model structure and config
+    expected = set()
+    
+    # Walk through the model and find modules that match target patterns
+    for name, module in model.named_modules():
+        # Check if this module matches any target pattern
+        module_matches = False
+        for target in target_modules:
+            if target.replace('*', '') in name or name.endswith(target.replace('*', '')):
+                module_matches = True
+                break
+        
+        if module_matches and hasattr(module, 'weight'):
+            # For each matching module, expect lora_A and lora_B parameters
+            base_name = f"base_model.model.{name}"
+            expected.add(f"{base_name}.lora_A.default.weight")
+            expected.add(f"{base_name}.lora_B.default.weight")
+            # Also add scaling parameter if it exists
+            if adapter_config.get('use_rslora', False):
+                expected.add(f"{base_name}.lora_magnitude_vector.default.weight")
 
-    # 2) All tensor names that actually live in the adapter file
+    # Load what's actually provided
     provided = set(load_file(adapter_path).keys())
 
-    missing     = sorted(expected - provided)
-    unexpected  = sorted(provided - expected)
+    missing = sorted(expected - provided)
+    unexpected = sorted(provided - expected)
 
     print("\n┌──────────────────────────────────────────┐")
-    print("│           LoRA PARAMETER DIFF            │")
+    print("│           LoRA PARAMETER DIFF (FIXED)    │")
     print("└──────────────────────────────────────────┘")
-    print(f"Expected by model : {len(expected)} tensors")
-    print(f"Provided by file  : {len(provided)} tensors\n")
+    print(f"Expected by PEFT config: {len(expected)} tensors")
+    print(f"Provided by file       : {len(provided)} tensors\n")
 
     if missing:
         print(f"❌  MISSING ({len(missing)}):")
-        for k in missing:
+        for k in missing[:10]:  # Show first 10 to avoid spam
             print(f"   - {k}")
+        if len(missing) > 10:
+            print(f"   ... and {len(missing) - 10} more")
     else:
         print("✅  No missing tensors")
 
@@ -68,12 +95,43 @@ def print_lora_discrepancies(model: torch.nn.Module, adapter_dir: str):
 
     if unexpected:
         print(f"⚠️  UNEXPECTED ({len(unexpected)}):")
-        for k in unexpected:
+        for k in unexpected[:10]:  # Show first 10 to avoid spam
             print(f"   - {k}")
+        if len(unexpected) > 10:
+            print(f"   ... and {len(unexpected) - 10} more")
     else:
         print("✅  No unexpected tensors")
 
     print("────────────────────────────────────────────\n")
+    
+    # Also show some examples of what we're comparing
+    print("📋 EXAMPLES:")
+    print("Expected pattern examples:")
+    for i, key in enumerate(sorted(expected)[:3]):
+        print(f"   {i+1}. {key}")
+    print("\nProvided pattern examples:")
+    for i, key in enumerate(sorted(provided)[:3]):
+        print(f"   {i+1}. {key}")
+    print()
+
+def debug_model_structure(model: torch.nn.Module):
+    """
+    Debug helper to show the actual model structure for target module matching.
+    """
+    print("\n🔍 MODEL STRUCTURE DEBUG:")
+    print("Modules containing 'decoder' and projection layers:")
+    
+    decoder_modules = []
+    for name, module in model.named_modules():
+        if "decoder" in name and any(proj in name for proj in ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]):
+            decoder_modules.append(name)
+    
+    for name in sorted(decoder_modules)[:10]:  # Show first 10
+        print(f"   - {name}")
+    
+    if len(decoder_modules) > 10:
+        print(f"   ... and {len(decoder_modules) - 10} more")
+    print()
 
 
 def fix_and_load_adapter(model, adapter_dir: str, is_trainable: bool = True) -> PeftModel:
