@@ -333,7 +333,7 @@ def main():
                         help="Number of cross attention layers in Perceiver")
     parser.add_argument("--perceiver_num_heads", type=int, default=8,
                         help="Number of attention heads in Perceiver")
-    parser.add_argument("--ff_mult", type=int, default=4,
+    parser.add_argument("--ff_mult", type=float, default=4,
                         help="Feed forward multiplier in Perceiver")
     parser.add_argument("--perceiver_dropout", type=float, default=0.1,
                         help="Dropout rate in Perceiver")
