@@ -8,7 +8,7 @@ import sys
 # Import your model classes
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from cell2text_model.model import Cell2TextModel
-from .geneformer_encoder import GeneformerModel, GeneformerConfig
+from cell2text_model.geneformer_encoder import GeneformerModel, GeneformerConfig
 from cell2text_model.llama_decoder import Cell2TextLlamaModel, Cell2TextLlamaConfig
 from cell2text_model.projectors import MLPProjectionLayer, PerceiverIO
 
@@ -104,6 +104,8 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
     # Freeze the Geneformer encoder
     for param in model.cell_encoder.parameters():
         param.requires_grad = False
+    
+    debug_model_structure_detailed(model)
     
     # Overwrite weights of base model if checkpoint path is provided
     if args.get("load_model_checkpoint_path"):
