@@ -449,47 +449,6 @@ def get_target_modules_from_model(model):
     return target_modules
 
 
-def debug_model_structure_detailed(model):
-    """
-    Enhanced debug function to understand the exact model structure
-    """
-    print("=== DETAILED MODEL STRUCTURE ===")
-    decoder_modules = []
-    
-    for name, module in model.named_modules():
-        if "decoder" in name:
-            decoder_modules.append((name, type(module).__name__))
-            
-    # Sort by depth and name
-    decoder_modules.sort(key=lambda x: (x[0].count('.'), x[0]))
-    
-    for name, module_type in decoder_modules:
-        depth = name.count('.')
-        indent = "  " * depth
-        print(f"{indent}{name}: {module_type}")
-        
-        # Highlight projection layers
-        if any(proj in name for proj in ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]):
-            print(f"{indent}  ⭐ TARGET CANDIDATE")
-    
-    print("=== END STRUCTURE ===")
-
-def debug_model_structure(model, max_depth=3):
-    """
-    Debug function to print the model structure and help identify correct target modules.
-    """
-    print("Model structure:")
-    for name, module in model.named_modules():
-        depth = name.count('.')
-        if depth <= max_depth:
-            indent = "  " * depth
-            print(f"{indent}{name}: {type(module).__name__}")
-            
-            # Specifically look for attention and MLP components
-            if any(target in name for target in ["q_proj", "k_proj", "v_proj", "o_proj", 
-                                               "gate_proj", "up_proj", "down_proj"]):
-                print(f"{indent}  -> TARGET MODULE FOUND")
-
 
 def get_mlp_modules_to_save(args: Dict[str, Any]) -> list:
     """

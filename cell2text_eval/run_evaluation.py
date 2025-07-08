@@ -182,7 +182,7 @@ def run_evaluation(rank, world_size, args):
     
     model = load_model(model_args)
     # Debug the adapter
-    debug_adapter_keys("/home/arism/deepspeed_training/full_1epoch_batchsize4_gradacc8_perceiver_numlatents_ffmult1.5_numheads2_selfattn4/full_1epoch_batchsize4_gradacc8_perceiver_numlatents_ffmult1.5_numheads2_selfattn4_best_model/adapter", model)
+    #debug_adapter_keys("/home/arism/deepspeed_training/full_1epoch_batchsize4_gradacc8_perceiver_numlatents_ffmult1.5_numheads2_selfattn4/full_1epoch_batchsize4_gradacc8_perceiver_numlatents_ffmult1.5_numheads2_selfattn4_best_model/adapter", model)
     model.to(rank)
     
     # Wrap model with DDP
