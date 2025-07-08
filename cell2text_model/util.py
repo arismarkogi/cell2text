@@ -22,56 +22,57 @@ import shutil
 
 def fix_adapter_keys_exact(adapter_dir, output_dir=None):
     """
-    Fix the exact key mismatch issue you're experiencing
+    Fixes the exact key mismatch issue. This function is correct.
+    It transforms saved keys to the format the current model expects.
     """
     if output_dir is None:
         output_dir = adapter_dir + "_fixed"
     
+    # Don't re-run if it already exists
+    if os.path.exists(output_dir):
+        print(f"Fixed adapter directory already exists: {output_dir}")
+        return output_dir
+
     os.makedirs(output_dir, exist_ok=True)
     
-    # Load the adapter
     adapter_path = os.path.join(adapter_dir, "adapter_model.safetensors")
+    if not os.path.exists(adapter_path):
+        raise FileNotFoundError(f"adapter_model.safetensors not found in {adapter_dir}")
+        
     state_dict = load_file(adapter_path)
+    print(f"Loaded {len(state_dict)} keys from original adapter.")
     
-    print(f"Loaded {len(state_dict)} keys from adapter")
-    
-    # Fix the keys
     new_state_dict = {}
-    
     for old_key, tensor in state_dict.items():
+        new_key = old_key
+        # Check 1: Add the '.decoder.' path segment
         if old_key.startswith("base_model.model.llama.model.layers"):
-            # Transform: base_model.model.llama.model.layers -> base_model.model.decoder.llama.model.layers
-            # And: .lora_A.weight -> .lora_A.default.weight
             new_key = old_key.replace(
                 "base_model.model.llama.model.layers",
                 "base_model.model.decoder.llama.model.layers"
             )
+        
+        # Check 2: Add the '.default.' segment for LoRA weights
+        if ".lora_A.weight" in new_key or ".lora_B.weight" in new_key:
             new_key = new_key.replace(".weight", ".default.weight")
-            
-            new_state_dict[new_key] = tensor
-            print(f"Fixed: {old_key} -> {new_key}")
-            
-        else:
-            # Keep other keys unchanged (like cell_to_embedding keys)
-            new_state_dict[old_key] = tensor
-            print(f"Kept: {old_key}")
-    
-    # Save the fixed adapter
+        
+        if new_key != old_key:
+            print(f"Remapped: {old_key} -> {new_key}")
+        
+        new_state_dict[new_key] = tensor
+
     new_adapter_path = os.path.join(output_dir, "adapter_model.safetensors")
     save_file(new_state_dict, new_adapter_path)
-    print(f"Saved fixed adapter to {new_adapter_path}")
+    print(f"\nSaved fixed adapter to {new_adapter_path}")
     
-    # Copy other files
-    for filename in ["adapter_config.json", "README.md"]:
+    # Copy other essential files
+    for filename in ["adapter_config.json", "README.md", "training_args.bin"]:
         src_path = os.path.join(adapter_dir, filename)
         if os.path.exists(src_path):
             dst_path = os.path.join(output_dir, filename)
             shutil.copy2(src_path, dst_path)
             print(f"Copied {filename}")
-    
-    print(f"\nFixed adapter saved to: {output_dir}")
-    print("You can now use this directory with load_adapter_checkpoint_dir")
-    
+            
     return output_dir
 
 
@@ -157,47 +158,37 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
     else:
         raise ValueError(f"Unknown projector type: {args['projector']}")
         
-    # Create the full Cell2Text model
+    # 1. Create the BASE model (NOT a PeftModel yet)
     model = Cell2TextModel(config)
     model.cell_encoder = geneformer_encoder
     model.decoder = llama_decoder
     model.cell_to_embedding = adapter
     
-    # Freeze the Geneformer encoder
     for param in model.cell_encoder.parameters():
         param.requires_grad = False
     
-    debug_model_structure_detailed(model)
-    
-    # Overwrite weights of base model if checkpoint path is provided
     if args.get("load_model_checkpoint_path"):
-        print(f"Loading {args['load_model_checkpoint_path']}")
-        model_state_dict = torch.load(
-            args["load_model_checkpoint_path"],
-            weights_only=True,
-            map_location="cpu"
-        )
-        # Handle different checkpoint formats
-        if "model_state_dict" in model_state_dict:
-            state_dict = model_state_dict["model_state_dict"]
-        elif "state_dict" in model_state_dict:
-            state_dict = model_state_dict["state_dict"]
-        else:
-            state_dict = model_state_dict
-        
+        print(f"Loading base model weights from {args['load_model_checkpoint_path']}")
+        state_dict = torch.load(args["load_model_checkpoint_path"], map_location="cpu")
         model.load_state_dict(state_dict, strict=False)
+    
     
     # Set up LoRA adaptation
     if args.get("load_adapter_checkpoint_dir"):
-        print(f"Loading LoRA adapter from {args['load_adapter_checkpoint_dir']}")
+        print("--- Loading and Fixing LoRA Adapter ---")
         
-        new_adapter_dir = fix_adapter_keys_exact(args["load_adapter_checkpoint_dir"])
+        # 2a. Run the fixing script to create a corrected adapter directory
+        original_adapter_dir = args['load_adapter_checkpoint_dir']
+        fixed_adapter_dir = fix_adapter_keys_exact(original_adapter_dir)
 
-        model =  PeftModel.from_pretrained(
+        # 2b. Load the adapter from the FIXED directory onto the BASE model
+        model = PeftModel.from_pretrained(
             model,
-            new_adapter_dir,
+            fixed_adapter_dir,
             is_trainable=True
         )
+        print("\nSuccessfully loaded fixed LoRA adapter.")
+
     else:
         print("Initializing LoRA adapter")
         
