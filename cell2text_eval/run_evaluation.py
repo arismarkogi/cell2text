@@ -72,7 +72,6 @@ def create_model_args(args):
         "fix_modality_adapter": args.fix_modality_adapter,
     }
 
-    print(f"args.use_position_encoding: {args.use_position_encoding}")
     
     # Add Perceiver-specific settings if using perceiver projector
     if args.projector == "perceiver":
@@ -84,7 +83,6 @@ def create_model_args(args):
             "perceiver_dropout": args.perceiver_dropout,
             "use_position_encoding": args.use_position_encoding,
         })
-        print(f"args.use_position_encoding: {args.use_position_encoding}")
     
     return model_args
 
@@ -101,15 +99,10 @@ def run_evaluation(rank, world_size, args):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
-    print(args)
     
     # Create model arguments
     model_args = create_model_args(args)
     
-    print("Printing Model Arguments")
-    for arg in model_args:
-        print(arg, model_args[f"{arg}"])
-
 
     # Load model using the proper load_model function
     if rank == 0:
@@ -303,7 +296,6 @@ def main():
     #THIS IS NOT OK NEEDS MORE DEBUGGING
     args.use_position_encoding = False
 
-    print(f"INSIDE MAIN args.use_position_encoding: {args.use_position_encoding}")
     
     # Spawn processes for DDP
     mp.spawn(run_evaluation, args=(world_size, args), nprocs=world_size, join=True)

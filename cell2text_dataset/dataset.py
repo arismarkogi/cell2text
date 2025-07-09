@@ -58,11 +58,9 @@ class Cell2TextDataset(Dataset):
         
         # Create chat template with placeholder tokens
         if self.projector == "mlp" and self.top_k is not None:
-                print("I am MLP")
                 placeholder_length = min(len(expression_ids), self.top_k)
         
         elif self.projector == "perceiver" and self.num_latents is not None:
-            print("I AM HERE i am perceiver")
             placeholder_length = self.num_latents
         
         placeholder_string = self.placeholder_token * placeholder_length

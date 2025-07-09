@@ -140,36 +140,35 @@ def evaluate_cell2text_model(model: Cell2TextModel,
             
             # Calculate loss if we have target descriptions
             val_loss = None
-            if "description_input_ids" in batch and batch["description_input_ids"] is not None:
-                description_ids = batch["description_input_ids"].to(device)
+            # if "description_input_ids" in batch and batch["description_input_ids"] is not None:
+            #     description_ids = batch["description_input_ids"].to(device)
                 
-                # Create combined input and labels for loss calculation
-                combined_input_ids = torch.cat([text_input_ids, description_ids], dim=1)
-                combined_attention_mask = torch.cat([
-                    text_attention_mask, 
-                    torch.ones_like(description_ids, dtype=torch.bool)
-                ], dim=1)
+            #     # Create combined input and labels for loss calculation
+            #     combined_input_ids = torch.cat([text_input_ids, description_ids], dim=1)
+            #     combined_attention_mask = torch.cat([
+            #         text_attention_mask, 
+            #         torch.ones_like(description_ids, dtype=torch.bool)
+            #     ], dim=1)
                 
-                # Create labels: ignore prompt tokens (-100), use description tokens for loss
-                prompt_labels = torch.full_like(text_input_ids, fill_value=-100)
-                combined_labels = torch.cat([prompt_labels, description_ids], dim=1)
+            #     # Create labels: ignore prompt tokens (-100), use description tokens for loss
+            #     prompt_labels = torch.full_like(text_input_ids, fill_value=-100)
+            #     combined_labels = torch.cat([prompt_labels, description_ids], dim=1)
                 
-                # Forward pass with labels for loss calculation
-                try:
-                    outputs = model(
-                        expression_tokens=expression_tokens,
-                        expression_token_lengths=expression_token_lengths,
-                        input_ids=combined_input_ids,
-                        attention_mask=combined_attention_mask,
-                        labels=combined_labels,
-                        return_dict=True
-                    )
-                    val_loss = outputs.loss.item()
-                    print(val_loss)
-                    val_losses.append(val_loss)
-                except Exception as e:
-                    if is_main_process:
-                        print(f"Warning: Could not calculate loss - {e}")
+            #     # Forward pass with labels for loss calculation
+            #     try:
+            #         outputs = model(
+            #             expression_tokens=expression_tokens,
+            #             expression_token_lengths=expression_token_lengths,
+            #             input_ids=combined_input_ids,
+            #             attention_mask=combined_attention_mask,
+            #             labels=combined_labels,
+            #             return_dict=True
+            #         )
+            #         val_loss = outputs.loss.item()
+            #         val_losses.append(val_loss)
+            #     except Exception as e:
+            #         if is_main_process:
+            #             print(f"Warning: Could not calculate loss - {e}")
             
             # Generate descriptions
             generated = model.generate_cell_description(
@@ -179,7 +178,6 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                 attention_mask=text_attention_mask,
                 device=device
             )
-            print(generated)
             
             # Handle both single string and list of strings return
             if isinstance(generated, str):
