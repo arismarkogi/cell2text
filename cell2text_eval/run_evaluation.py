@@ -245,7 +245,7 @@ def main():
     # Generation arguments
     parser.add_argument("--max_length", type=int, default=100,
                         help="Maximum generation length")
-    parser.add_argument("--num_beams", type=int, default=4,
+    parser.add_argument("--num_beams", type=int, default=1,
                         help="Number of beams for beam search")
     parser.add_argument("--early_stopping", type=bool, default=True,
                         help="Use early stopping")

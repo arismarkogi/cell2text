@@ -165,6 +165,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                         return_dict=True
                     )
                     val_loss = outputs.loss.item()
+                    print(val_loss)
                     val_losses.append(val_loss)
                 except Exception as e:
                     if is_main_process:
@@ -178,6 +179,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                 attention_mask=text_attention_mask,
                 device=device
             )
+            print(generated)
             
             # Handle both single string and list of strings return
             if isinstance(generated, str):
