@@ -174,6 +174,11 @@ def run_evaluation(rank, world_size, args):
     # Create model arguments
     model_args = create_model_args(args)
     
+    print("Printing Model Arguments")
+    for arg in model_args:
+        print(arg)
+
+
     # Load model using the proper load_model function
     if rank == 0:
         print(f"Loading model from: {args.checkpoint_path}")

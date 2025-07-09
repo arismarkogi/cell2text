@@ -80,7 +80,7 @@ def load_model(args: Dict[str, Any]) -> Cell2TextModel:
         print(f'USE_POSITION_ENCODINGS: {args["use_position_encoding"]}')
     else:
         raise ValueError(f"Unknown projector type: {args['projector']}")
-        
+    
     # Create the base model
     model = Cell2TextModel(config)
     model.cell_encoder = geneformer_encoder
