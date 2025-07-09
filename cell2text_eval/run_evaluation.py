@@ -294,7 +294,7 @@ def main():
     print(f"Using {world_size} GPUs for evaluation")
     
     #THIS IS NOT OK NEEDS MORE DEBUGGING
-    args.use_position_encoding = False
+    #args.use_position_encoding = False
 
     
     # Spawn processes for DDP
