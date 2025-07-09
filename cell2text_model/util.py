@@ -414,15 +414,7 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
         print("--- Loading LoRA Adapter for Decoder Only ---")
         
         # First apply LoRA to decoder
-        target_modules = [
-            "llama.model.layers.*.self_attn.q_proj",
-            "llama.model.layers.*.self_attn.k_proj", 
-            "llama.model.layers.*.self_attn.v_proj",
-            "llama.model.layers.*.self_attn.o_proj",
-            "llama.model.layers.*.mlp.gate_proj",
-            "llama.model.layers.*.mlp.up_proj",
-            "llama.model.layers.*.mlp.down_proj"
-        ]
+        target_modules = get_target_modules_from_model(model.decoder)
         
         lora_config = LoraConfig(
             r=args["lora_rank"],
