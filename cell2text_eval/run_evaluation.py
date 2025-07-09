@@ -337,7 +337,7 @@ def main():
                         help="Feed forward multiplier in Perceiver")
     parser.add_argument("--perceiver_dropout", type=float, default=0.1,
                         help="Dropout rate in Perceiver")
-    parser.add_argument("--use_position_encoding", type=bool, default=True,
+    parser.add_argument("--use_position_encoding", type=bool, default=False,
                         help="Use position encoding in Perceiver")
     
     # Evaluation arguments
