@@ -9,4 +9,5 @@ python3 /home/arism/cell2text/cell2text_eval/run_evaluation.py \
     --projector perceiver \
     --num_latents 128 \
     --perceiver_num_heads 2 \
-    --ff_mult 1.5 
+    --ff_mult 1.5  \
+    --perceiver_cross_attn_layers 1

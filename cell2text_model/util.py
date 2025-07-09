@@ -413,8 +413,8 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
         print("--- Loading and Fixing LoRA Adapter ---")
         
         # Use the corrected function
-        model = fix_and_load_adapter_correct(
-            model=model, 
+        model.decoder = fix_and_load_adapter_correct(
+            model=model.decoder, 
             adapter_dir=args['load_adapter_checkpoint_dir']
         )
         print("\nSuccessfully loaded fixed LoRA adapter.")
