@@ -602,6 +602,7 @@ def load_model(args: Dict[str, Any]) -> Cell2TextModel:
             dropout=args["perceiver_dropout"],
             use_position_encoding=args["use_position_encoding"]
         )
+        print(f"USE_POSITION_ENCODINGS: {args["use_position_encoding"]}")
     else:
         raise ValueError(f"Unknown projector type: {args['projector']}")
         

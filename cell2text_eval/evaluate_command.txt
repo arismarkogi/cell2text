@@ -10,4 +10,5 @@ python3 /home/arism/cell2text/cell2text_eval/run_evaluation.py \
     --num_latents 128 \
     --perceiver_num_heads 2 \
     --ff_mult 1.5  \
-    --perceiver_cross_attn_layers 1
+    --perceiver_cross_attn_layers 1 \
+    --save_results /home/arism/results/full_1epoch_batchsize4_gradacc8_perceiver_numlatents_ffmult1.5_numheads2_selfattn4.json
