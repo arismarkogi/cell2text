@@ -72,7 +72,7 @@ def create_model_args(args):
         "fix_modality_adapter": args.fix_modality_adapter,
     }
 
-    print(f"args.use_position_encofing: {args.use_position_encoding}")
+    print(f"args.use_position_encoding: {args.use_position_encoding}")
     
     # Add Perceiver-specific settings if using perceiver projector
     if args.projector == "perceiver":
@@ -84,7 +84,7 @@ def create_model_args(args):
             "perceiver_dropout": args.perceiver_dropout,
             "use_position_encoding": args.use_position_encoding,
         })
-        print(f"args.use_position_encofing: {args.use_position_encoding}")
+        print(f"args.use_position_encoding: {args.use_position_encoding}")
     
     return model_args
 
@@ -299,6 +299,9 @@ def main():
         world_size = 1
     
     print(f"Using {world_size} GPUs for evaluation")
+    
+    #THIS IS NOT OK NEEDS MORE DEBUGGING
+    args.use_position_encoding = False
 
     print(f"INSIDE MAIN args.use_position_encoding: {args.use_position_encoding}")
     
