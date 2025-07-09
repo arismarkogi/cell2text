@@ -176,7 +176,7 @@ def run_evaluation(rank, world_size, args):
     
     print("Printing Model Arguments")
     for arg in model_args:
-        print(arg)
+        print(arg, args[f"{arg}"])
 
 
     # Load model using the proper load_model function
