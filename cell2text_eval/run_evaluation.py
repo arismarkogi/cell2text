@@ -329,9 +329,9 @@ def main():
     # Perceiver arguments (only used if projector == "perceiver")
     parser.add_argument("--num_latents", type=int, default=128,
                         help="Number of latent tokens for Perceiver")
-    parser.add_argument("--perceiver_cross_attn_layers", type=int, default=2,
+    parser.add_argument("--perceiver_cross_attn_layers", type=int, default=1,
                         help="Number of cross attention layers in Perceiver")
-    parser.add_argument("--perceiver_num_heads", type=int, default=8,
+    parser.add_argument("--perceiver_num_heads", type=int, default=2,
                         help="Number of attention heads in Perceiver")
     parser.add_argument("--ff_mult", type=float, default=4,
                         help="Feed forward multiplier in Perceiver")
