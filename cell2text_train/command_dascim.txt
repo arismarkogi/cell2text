@@ -9,11 +9,11 @@ python3 /home/arism/cell2text/cell2text_train/train_ddp.py \
     --top_k 256 \
     --epochs 1 \
     --decoder_hidden_size 3072 \
-    --projector perceiver \
+    --projector mlp \
     --mlp_hidden_size 2048 \
     --mode full \
     --num_beams 1 \
-    --experiment_name full_1epoch_batchsize4_gradacc8_perceiver_numlatents_ffmult1.5_numheads2_selfattn4 \
+    --experiment_name full_1epoch_batchsize4_gradacc8_mlp_hiddendim2048_topk256\
     --num_latents 128 \
     --num_heads 2 \
     --ff_mult 1.5 \

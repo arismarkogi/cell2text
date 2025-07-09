@@ -409,15 +409,41 @@ def load_model(args: Dict[str, Any]) -> PeftModel:
 
     
     # Set up LoRA adaptation
+    # Apply LoRA to decoder only
     if args.get("load_adapter_checkpoint_dir"):
-        print("--- Loading and Fixing LoRA Adapter ---")
+        print("--- Loading LoRA Adapter for Decoder Only ---")
         
-        # Use the corrected function
-        model = fix_and_load_adapter_correct(
-            model=model, 
-            adapter_dir=args['load_adapter_checkpoint_dir']
+        # First apply LoRA to decoder
+        target_modules = [
+            "llama.model.layers.*.self_attn.q_proj",
+            "llama.model.layers.*.self_attn.k_proj", 
+            "llama.model.layers.*.self_attn.v_proj",
+            "llama.model.layers.*.self_attn.o_proj",
+            "llama.model.layers.*.mlp.gate_proj",
+            "llama.model.layers.*.mlp.up_proj",
+            "llama.model.layers.*.mlp.down_proj"
+        ]
+        
+        lora_config = LoraConfig(
+            r=args["lora_rank"],
+            lora_alpha=args["lora_rank"] * 2,
+            lora_dropout=0.1,
+            bias="none",
+            init_lora_weights=True,
+            target_modules=target_modules,
         )
-        print("\nSuccessfully loaded fixed LoRA adapter.")
+        
+        # Apply LoRA to decoder
+        model.decoder = get_peft_model(model.decoder, lora_config)
+        
+        # Now load the adapter weights
+        model.decoder = PeftModel.from_pretrained(
+            model.decoder.get_base_model(),  # Get the base model
+            args['load_adapter_checkpoint_dir'],
+            is_trainable=True
+        )
+        
+        print("✅ LoRA adapter loaded successfully to decoder only!")
 
     else:
         print("Initializing LoRA adapter")
