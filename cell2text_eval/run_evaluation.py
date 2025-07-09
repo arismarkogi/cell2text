@@ -82,81 +82,9 @@ def create_model_args(args):
             "perceiver_dropout": args.perceiver_dropout,
             "use_position_encoding": args.use_position_encoding,
         })
+        print(f"args.use_position_encofing: {args.use_position_encoding}")
     
     return model_args
-import torch
-from safetensors.torch import load_file
-import json
-import os
-
-def debug_adapter_keys(adapter_dir, base_model):
-    """
-    Debug script to see exactly what keys exist vs what's expected
-    """
-    print("="*60)
-    print("DEBUGGING ADAPTER KEYS")
-    print("="*60)
-    
-    # 1. Load adapter config
-    config_path = os.path.join(adapter_dir, "adapter_config.json")
-    if os.path.exists(config_path):
-        with open(config_path, 'r') as f:
-            adapter_config = json.load(f)
-        print(f"Adapter config target_modules: {adapter_config.get('target_modules', 'NOT FOUND')}")
-        print(f"Adapter config modules_to_save: {adapter_config.get('modules_to_save', 'NOT FOUND')}")
-    else:
-        print("No adapter_config.json found!")
-    
-    # 2. Load actual adapter weights
-    adapter_path = os.path.join(adapter_dir, "adapter_model.safetensors")
-    if os.path.exists(adapter_path):
-        adapter_state = load_file(adapter_path)
-        print(f"\nACTUAL ADAPTER KEYS ({len(adapter_state)} total):")
-        for key in sorted(adapter_state.keys())[:10]:  # Show first 10
-            print(f"  {key}")
-        if len(adapter_state) > 10:
-            print(f"  ... and {len(adapter_state) - 10} more keys")
-    else:
-        print("No adapter_model.safetensors found!")
-    
-    # 3. Check what the model expects
-    print(f"\nMODEL STRUCTURE (decoder parts only):")
-    decoder_modules = []
-    for name, module in base_model.named_modules():
-        if "decoder" in name and any(x in name for x in ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]):
-            decoder_modules.append(name)
-    
-    print(f"Found {len(decoder_modules)} target modules in model:")
-    for name in sorted(decoder_modules)[:10]:
-        print(f"  {name}")
-    if len(decoder_modules) > 10:
-        print(f"  ... and {len(decoder_modules) - 10} more")
-    
-    # 4. Try to load PEFT model and see what it expects
-    print(f"\nTRYING TO LOAD PEFT MODEL...")
-    try:
-        from peft import PeftModel
-        peft_model = PeftModel.from_pretrained(base_model, adapter_dir, is_trainable=True)
-        print("SUCCESS: PEFT model loaded!")
-    except Exception as e:
-        error_msg = str(e)
-        print(f"ERROR: {error_msg}")
-        
-        # Extract expected keys from error message
-        if "Found missing adapter keys" in error_msg:
-            # Find the part with missing keys
-            start = error_msg.find("['")
-            end = error_msg.find("']", start)
-            if start != -1 and end != -1:
-                missing_keys_str = error_msg[start+2:end]
-                missing_keys = missing_keys_str.split("', '")
-                print(f"\nEXPECTED KEYS (from error message):")
-                for key in missing_keys[:10]:
-                    print(f"  {key}")
-                if len(missing_keys) > 10:
-                    print(f"  ... and {len(missing_keys) - 10} more")
-    
-    print("="*60)
 
 def run_evaluation(rank, world_size, args):
     """Run evaluation on one GPU"""
@@ -189,7 +117,6 @@ def run_evaluation(rank, world_size, args):
     
     model = load_model(model_args)
     # Debug the adapter
-    #debug_adapter_keys("/home/arism/deepspeed_training/full_1epoch_batchsize4_gradacc8_perceiver_numlatents_ffmult1.5_numheads2_selfattn4/full_1epoch_batchsize4_gradacc8_perceiver_numlatents_ffmult1.5_numheads2_selfattn4_best_model/adapter", model)
     model.to(rank)
     
     # Wrap model with DDP
