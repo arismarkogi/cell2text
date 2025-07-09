@@ -71,6 +71,8 @@ def create_model_args(args):
         "lora_rank": args.lora_rank,
         "fix_modality_adapter": args.fix_modality_adapter,
     }
+
+    print(f"args.use_position_encofing: {args.use_position_encoding}")
     
     # Add Perceiver-specific settings if using perceiver projector
     if args.projector == "perceiver":
@@ -297,6 +299,8 @@ def main():
         world_size = 1
     
     print(f"Using {world_size} GPUs for evaluation")
+
+    print(f"INSIDE MAIN args.use_position_encoding: {args.use_position_encoding}")
     
     # Spawn processes for DDP
     mp.spawn(run_evaluation, args=(world_size, args), nprocs=world_size, join=True)
