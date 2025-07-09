@@ -171,6 +171,8 @@ def run_evaluation(rank, world_size, args):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
+    print(args)
+    
     # Create model arguments
     model_args = create_model_args(args)
     
