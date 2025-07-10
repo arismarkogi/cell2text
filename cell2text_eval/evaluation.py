@@ -7,9 +7,13 @@ from tqdm import tqdm
 from cell2text_model.model import Cell2TextModel
 from torch.utils.data import DataLoader
 from transformers import PreTrainedTokenizer
-from collections import Counter
+from collections import Counter, defaultdict
 import json
 from .celltype_extractor import calculate_cell_type_metrics, CellTypeExtractor
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import confusion_matrix, classification_report
+import pandas as pd
 
 import os
 import sys
@@ -72,6 +76,203 @@ def collect_cell_type_matches(predicted_types, target_types, world_size, rank):
     return predicted_types, target_types, global_matches, global_total
 
 
+def analyze_wrong_predictions(predicted_types, target_types, top_k=20):
+    """
+    Analyze wrong predictions and return the most common target-predicted pairs
+    
+    Args:
+        predicted_types: List of predicted cell types
+        target_types: List of target cell types
+        top_k: Number of top wrong prediction pairs to return
+        
+    Returns:
+        dict: Analysis of wrong predictions
+    """
+    wrong_pairs = []
+    correct_predictions = 0
+    
+    for pred, target in zip(predicted_types, target_types):
+        if pred == target:
+            correct_predictions += 1
+        else:
+            wrong_pairs.append((target, pred))
+    
+    # Count frequency of wrong pairs
+    wrong_pair_counts = Counter(wrong_pairs)
+    
+    # Analyze by target type (what was confused)
+    target_confusion = defaultdict(list)
+    for (target, pred), count in wrong_pair_counts.items():
+        target_confusion[target].append((pred, count))
+    
+    # Sort confusions for each target type
+    for target in target_confusion:
+        target_confusion[target].sort(key=lambda x: x[1], reverse=True)
+    
+    # Analyze by predicted type (what it was confused as)
+    pred_confusion = defaultdict(list)
+    for (target, pred), count in wrong_pair_counts.items():
+        pred_confusion[pred].append((target, count))
+    
+    # Sort confusions for each predicted type
+    for pred in pred_confusion:
+        pred_confusion[pred].sort(key=lambda x: x[1], reverse=True)
+    
+    analysis = {
+        'total_samples': len(predicted_types),
+        'correct_predictions': correct_predictions,
+        'wrong_predictions': len(predicted_types) - correct_predictions,
+        'accuracy': correct_predictions / len(predicted_types) if predicted_types else 0,
+        'most_common_wrong_pairs': wrong_pair_counts.most_common(top_k),
+        'target_confusion': dict(target_confusion),
+        'pred_confusion': dict(pred_confusion),
+        'unique_wrong_pairs': len(wrong_pair_counts)
+    }
+    
+    return analysis
+
+
+def create_confusion_matrix(predicted_types, target_types, save_path=None, top_k=20):
+    """
+    Create and save confusion matrix for cell type predictions
+    
+    Args:
+        predicted_types: List of predicted cell types
+        target_types: List of target cell types
+        save_path: Path to save the confusion matrix plot
+        top_k: Number of most common cell types to include in the matrix
+    """
+    if not predicted_types or not target_types:
+        print("Warning: No predictions or targets available for confusion matrix")
+        return None, None
+    
+    # Get the most common cell types
+    all_types = set(predicted_types + target_types)
+    type_counts = Counter(target_types)
+    
+    if len(all_types) > top_k:
+        # Use top_k most common types plus "Other" category
+        top_types = [ct for ct, _ in type_counts.most_common(top_k)]
+        
+        # Map less common types to "Other"
+        mapped_predicted = []
+        mapped_target = []
+        
+        for pred, target in zip(predicted_types, target_types):
+            mapped_pred = pred if pred in top_types else "Other"
+            mapped_target = target if target in top_types else "Other"
+            mapped_predicted.append(mapped_pred)
+            mapped_target.append(mapped_target)
+        
+        labels = top_types + ["Other"]
+    else:
+        # Use all types
+        labels = sorted(list(all_types))
+        mapped_predicted = predicted_types
+        mapped_target = target_types
+    
+    # Create confusion matrix
+    cm = confusion_matrix(mapped_target, mapped_predicted, labels=labels)
+    
+    # Create DataFrame for better visualization
+    cm_df = pd.DataFrame(cm, index=labels, columns=labels)
+    
+    # Create the plot
+    if save_path:
+        plt.figure(figsize=(max(12, len(labels) * 0.8), max(10, len(labels) * 0.7)))
+        
+        # Create heatmap
+        sns.heatmap(cm_df, annot=True, fmt='d', cmap='Blues', cbar=True,
+                   square=True, linewidths=0.5, 
+                   xticklabels=True, yticklabels=True)
+        
+        plt.title(f'Cell Type Prediction Confusion Matrix\n(Top {top_k} most common types)', 
+                 fontsize=14, fontweight='bold')
+        plt.xlabel('Predicted Cell Type', fontsize=12)
+        plt.ylabel('True Cell Type', fontsize=12)
+        
+        # Rotate labels for better readability
+        plt.xticks(rotation=45, ha='right')
+        plt.yticks(rotation=0)
+        
+        # Adjust layout to prevent label cutoff
+        plt.tight_layout()
+        
+        # Save the plot
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print(f"Confusion matrix saved to: {save_path}")
+    
+    # Generate classification report
+    report = classification_report(mapped_target, mapped_predicted, 
+                                 target_names=labels, output_dict=True)
+    
+    return cm_df, report
+
+
+def save_wrong_predictions_report(wrong_pred_analysis, save_path):
+    """
+    Save detailed wrong predictions analysis to file
+    
+    Args:
+        wrong_pred_analysis: Analysis from analyze_wrong_predictions
+        save_path: Path to save the report
+    """
+    report_lines = []
+    
+    # Summary
+    report_lines.append("WRONG PREDICTIONS ANALYSIS REPORT")
+    report_lines.append("=" * 50)
+    report_lines.append(f"Total Samples: {wrong_pred_analysis['total_samples']}")
+    report_lines.append(f"Correct Predictions: {wrong_pred_analysis['correct_predictions']}")
+    report_lines.append(f"Wrong Predictions: {wrong_pred_analysis['wrong_predictions']}")
+    report_lines.append(f"Accuracy: {wrong_pred_analysis['accuracy']:.4f}")
+    report_lines.append(f"Unique Wrong Pairs: {wrong_pred_analysis['unique_wrong_pairs']}")
+    report_lines.append("")
+    
+    # Most common wrong pairs
+    report_lines.append("MOST COMMON WRONG PREDICTION PAIRS")
+    report_lines.append("-" * 40)
+    report_lines.append("Format: (Target -> Predicted) Count")
+    report_lines.append("")
+    
+    for i, ((target, pred), count) in enumerate(wrong_pred_analysis['most_common_wrong_pairs'], 1):
+        report_lines.append(f"{i:2d}. ({target} -> {pred}) {count}")
+    
+    report_lines.append("")
+    
+    # Target confusion analysis
+    report_lines.append("TARGET CONFUSION ANALYSIS")
+    report_lines.append("-" * 30)
+    report_lines.append("What each true cell type was confused as:")
+    report_lines.append("")
+    
+    for target, confusions in sorted(wrong_pred_analysis['target_confusion'].items()):
+        report_lines.append(f"TRUE: {target}")
+        for pred, count in confusions[:5]:  # Show top 5 confusions
+            report_lines.append(f"  -> {pred}: {count}")
+        report_lines.append("")
+    
+    # Prediction confusion analysis
+    report_lines.append("PREDICTION CONFUSION ANALYSIS")
+    report_lines.append("-" * 32)
+    report_lines.append("What was confused as each predicted cell type:")
+    report_lines.append("")
+    
+    for pred, confusions in sorted(wrong_pred_analysis['pred_confusion'].items()):
+        report_lines.append(f"PREDICTED: {pred}")
+        for target, count in confusions[:5]:  # Show top 5 confusions
+            report_lines.append(f"  <- {target}: {count}")
+        report_lines.append("")
+    
+    # Write to file
+    with open(save_path, 'w') as f:
+        f.write('\n'.join(report_lines))
+    
+    print(f"Wrong predictions report saved to: {save_path}")
+
+
 def evaluate_cell2text_model(model: Cell2TextModel, 
                            val_loader: DataLoader, 
                            tokenizer: PreTrainedTokenizer, 
@@ -80,9 +281,12 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                            save_results: str = None,
                            use_ddp: bool = False,
                            use_bertscore: bool = True,
-                           bertscore_model: str = "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext"):
+                           bertscore_model: str = "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext",
+                           create_confusion_matrix_plot: bool = True,
+                           confusion_matrix_path: str = None,
+                           wrong_predictions_report_path: str = None):
     """
-    Enhanced evaluation function for DDP training with BERTScore support
+    Enhanced evaluation function for DDP training with BERTScore support, confusion matrix, and wrong predictions analysis
     """
     
     # Check if we're in a distributed setting
@@ -341,6 +545,20 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         predicted_cell_types, target_cell_types, global_matches, global_total
     )
     
+    # Analyze wrong predictions (only on main process)
+    wrong_pred_analysis = None
+    if is_main_process and predicted_cell_types and target_cell_types:
+        wrong_pred_analysis = analyze_wrong_predictions(predicted_cell_types, target_cell_types)
+    
+    # Create confusion matrix (only on main process)
+    confusion_matrix_df = None
+    classification_report_dict = None
+    if is_main_process and predicted_cell_types and target_cell_types and create_confusion_matrix_plot:
+        cm_path = confusion_matrix_path or (save_results.replace('.json', '_confusion_matrix.png') if save_results else 'confusion_matrix.png')
+        confusion_matrix_df, classification_report_dict = create_confusion_matrix(
+            predicted_cell_types, target_cell_types, save_path=cm_path
+        )
+    
     # Print results only on main process
     if is_main_process:
         print(f"\n{'='*60}")
@@ -367,6 +585,23 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         print(f"  Precision: {cell_type_metrics['precision']:.4f}")
         print(f"  Recall: {cell_type_metrics['recall']:.4f}")
         print(f"  Total Samples: {cell_type_metrics['total_samples']}")
+        
+        # Print wrong predictions analysis
+        if wrong_pred_analysis:
+            print(f"\n{'='*60}")
+            print(f"WRONG PREDICTIONS ANALYSIS")
+            print(f"{'='*60}")
+            print(f"Total Wrong Predictions: {wrong_pred_analysis['wrong_predictions']}")
+            print(f"Unique Wrong Pairs: {wrong_pred_analysis['unique_wrong_pairs']}")
+            
+            print(f"\nTop 10 Most Common Wrong Prediction Pairs:")
+            for i, ((target, pred), count) in enumerate(wrong_pred_analysis['most_common_wrong_pairs'][:10], 1):
+                print(f"  {i:2d}. {target} -> {pred} ({count} times)")
+            
+            # Save detailed wrong predictions report
+            if wrong_predictions_report_path or save_results:
+                report_path = wrong_predictions_report_path or (save_results.replace('.json', '_wrong_predictions.txt') if save_results else 'wrong_predictions_report.txt')
+                save_wrong_predictions_report(wrong_pred_analysis, report_path)
         
         # Print example predictions
         print(f"\n{'='*60}")
@@ -419,7 +654,10 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                 'cell_type_distribution': {
                     'target': dict(target_counter),
                     'predicted': dict(pred_counter)
-                }
+                },
+                'wrong_predictions_analysis': wrong_pred_analysis,
+                'confusion_matrix': confusion_matrix_df.to_dict() if confusion_matrix_df is not None else None,
+                'classification_report': classification_report_dict
             }
             
             with open(save_results, 'w') as f:
@@ -436,5 +674,8 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         'cell_type_f1': cell_type_metrics['f1'],
         'cell_type_precision': cell_type_metrics['precision'],
         'cell_type_recall': cell_type_metrics['recall'],
-        'total_samples': total_bleu_samples if use_ddp and world_size > 1 else len(bleu_scores)
+        'total_samples': total_bleu_samples if use_ddp and world_size > 1 else len(bleu_scores),
+        'wrong_predictions_analysis': wrong_pred_analysis,
+        'confusion_matrix': confusion_matrix_df,
+        'classification_report': classification_report_dict
     }
