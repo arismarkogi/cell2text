@@ -69,7 +69,6 @@ def create_model_args(args):
         
         # Training settings
         "lora_rank": args.lora_rank,
-        "fix_modality_adapter": args.fix_modality_adapter,
     }
 
     
