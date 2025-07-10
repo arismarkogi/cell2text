@@ -4,6 +4,8 @@ import numpy as np
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 from bert_score import BERTScorer
 from tqdm import tqdm
+import evaluate
+from transformers import AutoTokenizer  
 from cell2text_model.model import Cell2TextModel
 from torch.utils.data import DataLoader
 from transformers import PreTrainedTokenizer
@@ -19,6 +21,66 @@ import os
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from cell2text_model.model import Cell2TextModel
+
+def compute_biomedical_bert_score(predictions, references, model_name="microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext"):
+    """
+    Compute BERT score using the biomedical BERT model with the same approach as compute_bert_score
+    
+    Args:
+        predictions: List of predicted texts
+        references: List of reference texts  
+        model_name: Name of the biomedical BERT model to use
+        
+    Returns:
+        dict: Dictionary with precision, recall, and f1 scores
+    """
+    try:
+        # Load the tokenizer for the biomedical model
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        
+        # Truncate predictions to fit model's max position embeddings (usually 512)
+        # Use 495 to leave room for special tokens
+        retokenized_predictions = tokenizer(
+            predictions, padding="max_length", truncation=True, max_length=495, return_tensors="pt"
+        )["input_ids"]
+        truncated_predictions = tokenizer.batch_decode(retokenized_predictions, skip_special_tokens=True)
+        
+        # Truncate references similarly
+        retokenized_references = tokenizer(
+            references, padding="max_length", truncation=True, max_length=495, return_tensors="pt"
+        )["input_ids"]
+        truncated_references = tokenizer.batch_decode(retokenized_references, skip_special_tokens=True)
+        
+        # Load BERTScore evaluator
+        bert_scorer = evaluate.load("bertscore")
+        
+        # Compute BERTScore with the biomedical model
+        results = bert_scorer.compute(
+            predictions=truncated_predictions,
+            references=truncated_references,
+            model_type=model_name,
+            lang="en"
+        )
+        
+        # Calculate averages
+        avg_precision = sum(results["precision"]) / len(results["precision"])
+        avg_recall = sum(results["recall"]) / len(results["recall"])
+        avg_f1 = sum(results["f1"]) / len(results["f1"])
+        
+        return {
+            "precision": avg_precision,
+            "recall": avg_recall,
+            "f1": avg_f1,
+            "individual_scores": {
+                "precision": results["precision"],
+                "recall": results["recall"],
+                "f1": results["f1"]
+            }
+        }
+        
+    except Exception as e:
+        print(f"Error computing BERTScore with {model_name}: {e}")
+        return None
 
 
 def reduce_distributed_metrics(values_list, world_size, rank):
@@ -301,23 +363,6 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         is_main_process = True
         print("Starting evaluation without DDP")
     
-    # Initialize BERTScore scorer
-    bert_scorer = None
-    if use_bertscore:
-        try:
-            if is_main_process:
-                print(f"Initializing BERTScore with model: {bertscore_model}")
-            bert_scorer = BERTScorer(
-                model_type=bertscore_model,
-                lang="en",
-                rescale_with_baseline=True,
-                device=device
-            )
-        except Exception as e:
-            if is_main_process:
-                print(f"Warning: Could not initialize BERTScore - {e}")
-                print("Continuing without BERTScore evaluation")
-            use_bertscore = False
     
     # Get the underlying model (unwrap DDP if necessary)
     if hasattr(model, 'module'):
@@ -456,27 +501,36 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                     }
                     examples.append(example)
     
-    # Compute BERTScore in batches for efficiency
-    if use_bertscore and bert_scorer is not None and batch_predictions:
+    # Compute BERTScore
+    if use_bertscore and batch_predictions:
         try:
             if is_main_process:
-                print(f"Computing BERTScore for {len(batch_predictions)} samples...")
+                print(f"Computing BERTScore for {len(batch_predictions)} samples using {bertscore_model}...")
             
-            # Compute BERTScore
-            P, R, F1 = bert_scorer.score(batch_predictions, batch_targets)
+            # Use the new biomedical BERTScore function
+            bert_results = compute_biomedical_bert_score(
+                batch_predictions, 
+                batch_targets, 
+                model_name=bertscore_model
+            )
             
-            # Convert to lists and store
-            bert_scores_precision.extend(P.tolist())
-            bert_scores_recall.extend(R.tolist())
-            bert_scores_f1.extend(F1.tolist())
-            
-            # Add BERTScore to examples
-            if is_main_process:
-                for i, example in enumerate(examples):
-                    if i < len(bert_scores_f1):
-                        example['bert_precision'] = bert_scores_precision[i]
-                        example['bert_recall'] = bert_scores_recall[i]
-                        example['bert_f1'] = bert_scores_f1[i]
+            if bert_results is not None:
+                # Extract individual scores for compatibility
+                bert_scores_precision = bert_results['individual_scores']['precision']
+                bert_scores_recall = bert_results['individual_scores']['recall']
+                bert_scores_f1 = bert_results['individual_scores']['f1']
+                
+                # Add BERTScore to examples
+                if is_main_process:
+                    for i, example in enumerate(examples):
+                        if i < len(bert_scores_f1):
+                            example['bert_precision'] = bert_scores_precision[i]
+                            example['bert_recall'] = bert_scores_recall[i]
+                            example['bert_f1'] = bert_scores_f1[i]
+            else:
+                if is_main_process:
+                    print("Warning: BERTScore computation failed")
+                use_bertscore = False
                     
         except Exception as e:
             if is_main_process:
@@ -493,7 +547,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         # Reduce BLEU scores - get global average and total count
         avg_bleu, total_bleu_samples = reduce_distributed_metrics(bleu_scores, world_size, rank)
         
-        # Reduce BERTScore metrics if available
+       # Reduce BERTScore metrics if available
         if use_bertscore and bert_scores_f1:
             avg_bert_precision, total_bert_samples = reduce_distributed_metrics(bert_scores_precision, world_size, rank)
             avg_bert_recall, _ = reduce_distributed_metrics(bert_scores_recall, world_size, rank)
