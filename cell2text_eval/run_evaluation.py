@@ -287,7 +287,7 @@ def main():
     parser.add_argument("--use_bertscore", type=bool, default=True,
                         help="Whether to compute BERTScore")
     parser.add_argument("--bertscore_model", type=str, 
-                        default="microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext",
+                        default="microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext",
                         help="Model to use for BERTScore computation")
     
     args = parser.parse_args()
