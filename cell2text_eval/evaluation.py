@@ -2,6 +2,7 @@ import torch
 import torch.distributed as dist
 import numpy as np
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+from bert_score import BERTScorer
 from tqdm import tqdm
 from cell2text_model.model import Cell2TextModel
 from torch.utils.data import DataLoader
@@ -14,8 +15,6 @@ import os
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from cell2text_model.model import Cell2TextModel
-
-
 
 
 def reduce_distributed_metrics(values_list, world_size, rank):
@@ -79,9 +78,11 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                            device: str,
                            print_examples: int = 10,
                            save_results: str = None,
-                           use_ddp: bool = False):
+                           use_ddp: bool = False,
+                           use_bertscore: bool = True,
+                           bertscore_model: str = "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext"):
     """
-    Enhanced evaluation function for DDP training
+    Enhanced evaluation function for DDP training with BERTScore support
     """
     
     # Check if we're in a distributed setting
@@ -96,12 +97,33 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         is_main_process = True
         print("Starting evaluation without DDP")
     
+    # Initialize BERTScore scorer
+    bert_scorer = None
+    if use_bertscore:
+        try:
+            if is_main_process:
+                print(f"Initializing BERTScore with model: {bertscore_model}")
+            bert_scorer = BERTScorer(
+                model_type=bertscore_model,
+                lang="en",
+                rescale_with_baseline=True,
+                device=device
+            )
+        except Exception as e:
+            if is_main_process:
+                print(f"Warning: Could not initialize BERTScore - {e}")
+                print("Continuing without BERTScore evaluation")
+            use_bertscore = False
+    
     # Get the underlying model (unwrap DDP if necessary)
     if hasattr(model, 'module'):
         model = model.module
     
     model.eval()
     bleu_scores = []
+    bert_scores_precision = []
+    bert_scores_recall = []
+    bert_scores_f1 = []
     val_losses = []
     smooth = SmoothingFunction().method4
     
@@ -112,6 +134,10 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     
     # Store examples for printing/saving
     examples = []
+    
+    # Store predictions and targets for batch BERTScore computation
+    batch_predictions = []
+    batch_targets = []
     
     # Create progress bar only on main process
     if is_main_process:
@@ -195,6 +221,11 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                 )
                 bleu_scores.append(bleu)
                 
+                # Store for batch BERTScore computation
+                if use_bertscore:
+                    batch_predictions.append(decoded_pred)
+                    batch_targets.append(target)
+                
                 # Extract cell types
                 pred_cell_type = cell_extractor.extract_cell_type(decoded_pred)
                 target_cell_type = cell_extractor.extract_cell_type(target)
@@ -221,17 +252,51 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                     }
                     examples.append(example)
     
+    # Compute BERTScore in batches for efficiency
+    if use_bertscore and bert_scorer is not None and batch_predictions:
+        try:
+            if is_main_process:
+                print(f"Computing BERTScore for {len(batch_predictions)} samples...")
+            
+            # Compute BERTScore
+            P, R, F1 = bert_scorer.score(batch_predictions, batch_targets)
+            
+            # Convert to lists and store
+            bert_scores_precision.extend(P.tolist())
+            bert_scores_recall.extend(R.tolist())
+            bert_scores_f1.extend(F1.tolist())
+            
+            # Add BERTScore to examples
+            if is_main_process:
+                for i, example in enumerate(examples):
+                    if i < len(bert_scores_f1):
+                        example['bert_precision'] = bert_scores_precision[i]
+                        example['bert_recall'] = bert_scores_recall[i]
+                        example['bert_f1'] = bert_scores_f1[i]
+                    
+        except Exception as e:
+            if is_main_process:
+                print(f"Warning: BERTScore computation failed - {e}")
+            use_bertscore = False
+    
     # Reduce metrics from all processes if using DDP
     global_matches = None
     global_total = None
 
-
     print(f"[Rank {rank if use_ddp else 0}] Finished forward passes, starting metric reduction")
-
     
     if use_ddp and world_size > 1:
         # Reduce BLEU scores - get global average and total count
         avg_bleu, total_bleu_samples = reduce_distributed_metrics(bleu_scores, world_size, rank)
+        
+        # Reduce BERTScore metrics if available
+        if use_bertscore and bert_scores_f1:
+            avg_bert_precision, total_bert_samples = reduce_distributed_metrics(bert_scores_precision, world_size, rank)
+            avg_bert_recall, _ = reduce_distributed_metrics(bert_scores_recall, world_size, rank)
+            avg_bert_f1, _ = reduce_distributed_metrics(bert_scores_f1, world_size, rank)
+        else:
+            avg_bert_precision = avg_bert_recall = avg_bert_f1 = None
+            total_bert_samples = 0
         
         # Reduce validation losses
         if val_losses:
@@ -250,12 +315,24 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         # Print sample counts for debugging
         if is_main_process:
             print(f"Total BLEU samples across all processes: {total_bleu_samples}")
+            print(f"Total BERTScore samples across all processes: {total_bert_samples}")
             print(f"Total cell type samples across all processes: {global_total}")
     else:
         # Single process - calculate normally
         avg_bleu = np.mean(bleu_scores) if bleu_scores else 0.0
         avg_loss = np.mean(val_losses) if val_losses else None
         total_bleu_samples = len(bleu_scores)
+        
+        # BERTScore averages
+        if use_bertscore and bert_scores_f1:
+            avg_bert_precision = np.mean(bert_scores_precision)
+            avg_bert_recall = np.mean(bert_scores_recall)
+            avg_bert_f1 = np.mean(bert_scores_f1)
+            total_bert_samples = len(bert_scores_f1)
+        else:
+            avg_bert_precision = avg_bert_recall = avg_bert_f1 = None
+            total_bert_samples = 0
+        
         global_matches = sum(1 for p, t in zip(predicted_cell_types, target_cell_types) if p == t)
         global_total = len(predicted_cell_types)
     
@@ -271,28 +348,19 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         print(f"{'='*60}")
         print(f"BLEU Score: {avg_bleu:.4f}")
         print(f"Total samples evaluated: {total_bleu_samples if use_ddp and world_size > 1 else len(bleu_scores)}")
+        
+        if use_bertscore and avg_bert_f1 is not None:
+            print(f"\nBERTScore Results:")
+            print(f"  Precision: {avg_bert_precision:.4f}")
+            print(f"  Recall: {avg_bert_recall:.4f}")
+            print(f"  F1: {avg_bert_f1:.4f}")
+            print(f"  Total BERTScore samples: {total_bert_samples}")
+        
         if avg_loss is not None:
-            print(f"Validation Loss: {avg_loss:.4f}")
+            print(f"\nValidation Loss: {avg_loss:.4f}")
         else:
-            print("Validation Loss: N/A (could not calculate)")
-        print(f"\nCell Type Extraction Metrics:")
-        print(f"  Accuracy: {cell_type_metrics['accuracy']:.4f}")
-        print(f"  F1 Score: {cell_type_metrics['f1']:.4f}")
-        print(f"  Precision: {cell_type_metrics['precision']:.4f}")
-        print(f"  Recall: {cell_type_metrics['recall']:.4f}")
-        print(f"  Total Samples: {cell_type_metrics['total_samples']}")
-    
-    # Print results only on main process
-    if is_main_process:
-        # Print overall results
-        print(f"\n{'='*60}")
-        print(f"VALIDATION RESULTS")
-        print(f"{'='*60}")
-        print(f"BLEU Score: {avg_bleu:.4f}")
-        if avg_loss is not None:
-            print(f"Validation Loss: {avg_loss:.4f}")
-        else:
-            print("Validation Loss: N/A (could not calculate)")
+            print("\nValidation Loss: N/A (could not calculate)")
+        
         print(f"\nCell Type Extraction Metrics:")
         print(f"  Accuracy: {cell_type_metrics['accuracy']:.4f}")
         print(f"  F1 Score: {cell_type_metrics['f1']:.4f}")
@@ -310,6 +378,10 @@ def evaluate_cell2text_model(model: Cell2TextModel,
             print(f"TARGET: {example['target']}")
             print(f"GENERATED: {example['generated']}")
             print(f"BLEU: {example['bleu_score']:.4f}")
+            
+            if use_bertscore and 'bert_f1' in example:
+                print(f"BERTScore - P: {example['bert_precision']:.4f}, R: {example['bert_recall']:.4f}, F1: {example['bert_f1']:.4f}")
+            
             print(f"Target Cell Type: '{example['target_cell_type']}'")
             print(f"Predicted Cell Type: '{example['predicted_cell_type']}'")
             print(f"Cell Type Match: {'✓' if example['cell_type_match'] else '✗'}")
@@ -337,6 +409,9 @@ def evaluate_cell2text_model(model: Cell2TextModel,
             results = {
                 'overall_metrics': {
                     'bleu_score': avg_bleu,
+                    'bert_score_precision': avg_bert_precision,
+                    'bert_score_recall': avg_bert_recall,
+                    'bert_score_f1': avg_bert_f1,
                     'validation_loss': avg_loss,
                     'cell_type_metrics': cell_type_metrics
                 },
@@ -353,6 +428,9 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     
     return {
         'bleu': avg_bleu,
+        'bert_score_precision': avg_bert_precision,
+        'bert_score_recall': avg_bert_recall,
+        'bert_score_f1': avg_bert_f1,
         'validation_loss': avg_loss,
         'cell_type_accuracy': cell_type_metrics['accuracy'],
         'cell_type_f1': cell_type_metrics['f1'],

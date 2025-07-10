@@ -97,11 +97,9 @@ def run_evaluation(rank, world_size, args):
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     
-    
     # Create model arguments
     model_args = create_model_args(args)
     
-
     # Load model using the proper load_model function
     if rank == 0:
         print(f"Loading model from: {args.checkpoint_path}")
@@ -109,7 +107,6 @@ def run_evaluation(rank, world_size, args):
             print(f"Loading LoRA adapter from: {args.adapter_checkpoint_dir}")
     
     model = load_model(model_args)
-    # Debug the adapter
     model.to(rank)
     
     # Wrap model with DDP
@@ -146,7 +143,7 @@ def run_evaluation(rank, world_size, args):
         print(f"Number of test batches: {len(test_loader)}")
         print("Starting evaluation...")
     
-    # Run evaluation
+    # Run evaluation with BERTScore
     results = evaluate_cell2text_model(
         model=model,
         val_loader=test_loader,
@@ -154,7 +151,9 @@ def run_evaluation(rank, world_size, args):
         device=rank,
         print_examples=args.print_examples if rank == 0 else 0,
         save_results=args.save_results if rank == 0 else None,
-        use_ddp=True
+        use_ddp=True,
+        use_bertscore=args.use_bertscore,
+        bertscore_model=args.bertscore_model
     )
     
     # Only print results on rank 0
@@ -163,8 +162,15 @@ def run_evaluation(rank, world_size, args):
         print("FINAL EVALUATION RESULTS")
         print("="*60)
         print(f"BLEU Score: {results['bleu']:.4f}")
+        
+        if results['bert_score_f1'] is not None:
+            print(f"BERTScore - Precision: {results['bert_score_precision']:.4f}")
+            print(f"BERTScore - Recall: {results['bert_score_recall']:.4f}")
+            print(f"BERTScore - F1: {results['bert_score_f1']:.4f}")
+        
         if results['validation_loss'] is not None:
             print(f"Validation Loss: {results['validation_loss']:.4f}")
+        
         print(f"Cell Type Accuracy: {results['cell_type_accuracy']:.4f}")
         print(f"Cell Type F1 Score: {results['cell_type_f1']:.4f}")
         print(f"Cell Type Precision: {results['cell_type_precision']:.4f}")
@@ -277,6 +283,27 @@ def main():
                         help="System message for the model")
     parser.add_argument("--placeholder_token", type=str, default="<|reserved_special_token_1|>",
                         help="Placeholder token for expression embeddings")
+    
+    parser.add_argument("--use_bertscore", type=bool, default=True,
+                        help="Whether to compute BERTScore")
+    parser.add_argument("--bertscore_model", type=str, 
+                        default="microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext",
+                        help="Model to use for BERTScore computation")
+    
+    args = parser.parse_args()
+    
+    # Check GPU availability
+    world_size = torch.cuda.device_count()
+    if world_size < 2:
+        print(f"Warning: Only {world_size} GPU(s) available. DDP requires at least 2 GPUs.")
+        print("Running on single GPU...")
+        world_size = 1
+    
+    print(f"Using {world_size} GPUs for evaluation")
+    
+    # Spawn processes for DDP
+    mp.spawn(run_evaluation, args=(world_size, args), nprocs=world_size, join=True)
+
     
     args = parser.parse_args()
     

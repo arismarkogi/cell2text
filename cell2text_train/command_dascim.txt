@@ -13,7 +13,7 @@ python3 /home/arism/cell2text/cell2text_train/train_ddp.py \
     --mlp_hidden_size 2048 \
     --mode full \
     --num_beams 1 \
-    --experiment_name foo_full_1epoch_batchsize4_gradacc8_mlp_hiddendim2048_topk256_f\
+    --experiment_name full_1epoch_batchsize4_gradacc8_mlp_hiddendim2048_topk256\
     --num_latents 128 \
     --num_heads 2 \
     --ff_mult 1.5 \
