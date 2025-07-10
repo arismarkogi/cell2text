@@ -19,28 +19,32 @@ from cell2text_model.model import Cell2TextModel
 
 
 def reduce_distributed_metrics(values_list, world_size, rank):
-    """Reduce metrics from all DDP processes using all_reduce"""
+    """Reduce metrics from all DDP processes using all_reduce - returns global average and count"""
     if world_size <= 1:
-        return values_list
+        return np.mean(values_list) if values_list else 0.0, len(values_list)
     
     if not values_list:
-        return []
+        return 0.0, 0
     
-    # For averaging metrics, we need sum and count
-    local_sum = torch.tensor([sum(values_list)], dtype=torch.float32, device=torch.cuda.current_device() if torch.cuda.is_available() else torch.device('cpu'))
-    local_count = torch.tensor([len(values_list)], dtype=torch.float32, device=local_sum.device)
+    # Calculate local sum and count
+    local_sum = sum(values_list)
+    local_count = len(values_list)
+    
+    # Convert to tensors
+    device = torch.cuda.current_device() if torch.cuda.is_available() else torch.device('cpu')
+    sum_tensor = torch.tensor([local_sum], dtype=torch.float32, device=device)
+    count_tensor = torch.tensor([local_count], dtype=torch.float32, device=device)
     
     # All-reduce sum and count
-    dist.all_reduce(local_sum, op=dist.ReduceOp.SUM)
-    dist.all_reduce(local_count, op=dist.ReduceOp.SUM)
+    dist.all_reduce(sum_tensor, op=dist.ReduceOp.SUM)
+    dist.all_reduce(count_tensor, op=dist.ReduceOp.SUM)
     
     # Calculate global average
-    if local_count.item() > 0:
-        global_avg = local_sum.item() / local_count.item()
-        # Return a list with the global average repeated for compatibility
-        return [global_avg] * int(local_count.item())
-    else:
-        return []
+    global_sum = sum_tensor.item()
+    global_count = int(count_tensor.item())
+    global_avg = global_sum / global_count if global_count > 0 else 0.0
+    
+    return global_avg, global_count
 
 
 def collect_cell_type_matches(predicted_types, target_types, world_size, rank):
@@ -78,34 +82,19 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                            use_ddp: bool = False):
     """
     Enhanced evaluation function for DDP training
-    
-    Args:
-        model: The Cell2TextModel to evaluate
-        val_loader: DataLoader for validation data
-        tokenizer: Tokenizer for decoding text
-        device: Device to run evaluation on
-        print_examples: Number of example predictions to print (default: 10)
-        save_results: Optional path to save detailed results as JSON
-        use_ddp: Whether we're using DDP (affects printing and gathering)
     """
     
-
-    if use_ddp and dist.is_initialized():
-        rank = dist.get_rank()
-        world_size = dist.get_world_size()
-        print(f"[Rank {rank}] Starting evaluation with world_size={world_size}")
-    else:
-        print("Starting evaluation without DDP")
-
     # Check if we're in a distributed setting
     if use_ddp and dist.is_initialized():
         world_size = dist.get_world_size()
         rank = dist.get_rank()
         is_main_process = rank == 0
+        print(f"[Rank {rank}] Starting evaluation with world_size={world_size}")
     else:
         world_size = 1
         rank = 0
         is_main_process = True
+        print("Starting evaluation without DDP")
     
     # Get the underlying model (unwrap DDP if necessary)
     if hasattr(model, 'module'):
@@ -124,7 +113,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     # Store examples for printing/saving
     examples = []
     
-    # Create progress bar only on main 
+    # Create progress bar only on main process
     if is_main_process:
         val_progress_bar = tqdm(val_loader, desc="[Validation]")
     else:
@@ -241,35 +230,57 @@ def evaluate_cell2text_model(model: Cell2TextModel,
 
     
     if use_ddp and world_size > 1:
-        print(f"[Rank {rank}] About to reduce BLEU scores: {len(bleu_scores)} scores")
-        # Reduce BLEU scores (get average)
-        if bleu_scores:
-            all_bleu_scores = reduce_distributed_metrics(bleu_scores, world_size, rank)
-            avg_bleu = np.mean(all_bleu_scores) if all_bleu_scores else 0.0
-        else:
-            avg_bleu = 0.0
+        # Reduce BLEU scores - get global average and total count
+        avg_bleu, total_bleu_samples = reduce_distributed_metrics(bleu_scores, world_size, rank)
         
-        # Reduce validation losses (get average)
+        # Reduce validation losses
         if val_losses:
-            all_val_losses = reduce_distributed_metrics(val_losses, world_size, rank)
-            avg_loss = np.mean(all_val_losses) if all_val_losses else None
+            avg_loss, total_loss_samples = reduce_distributed_metrics(val_losses, world_size, rank)
         else:
-            avg_loss = None
+            avg_loss, total_loss_samples = None, 0
         
-        # For cell types, we'll use a simpler approach - just count matches
+        # For cell types, use the existing function but get the counts
         if predicted_cell_types and target_cell_types:
             _, _, global_matches, global_total = collect_cell_type_matches(
                 predicted_cell_types, target_cell_types, world_size, rank
             )
+        else:
+            global_matches, global_total = 0, 0
+            
+        # Print sample counts for debugging
+        if is_main_process:
+            print(f"Total BLEU samples across all processes: {total_bleu_samples}")
+            print(f"Total cell type samples across all processes: {global_total}")
     else:
         # Single process - calculate normally
         avg_bleu = np.mean(bleu_scores) if bleu_scores else 0.0
         avg_loss = np.mean(val_losses) if val_losses else None
+        total_bleu_samples = len(bleu_scores)
+        global_matches = sum(1 for p, t in zip(predicted_cell_types, target_cell_types) if p == t)
+        global_total = len(predicted_cell_types)
     
     # Calculate cell type metrics
     cell_type_metrics = calculate_cell_type_metrics(
         predicted_cell_types, target_cell_types, global_matches, global_total
     )
+    
+    # Print results only on main process
+    if is_main_process:
+        print(f"\n{'='*60}")
+        print(f"VALIDATION RESULTS")
+        print(f"{'='*60}")
+        print(f"BLEU Score: {avg_bleu:.4f}")
+        print(f"Total samples evaluated: {total_bleu_samples if use_ddp and world_size > 1 else len(bleu_scores)}")
+        if avg_loss is not None:
+            print(f"Validation Loss: {avg_loss:.4f}")
+        else:
+            print("Validation Loss: N/A (could not calculate)")
+        print(f"\nCell Type Extraction Metrics:")
+        print(f"  Accuracy: {cell_type_metrics['accuracy']:.4f}")
+        print(f"  F1 Score: {cell_type_metrics['f1']:.4f}")
+        print(f"  Precision: {cell_type_metrics['precision']:.4f}")
+        print(f"  Recall: {cell_type_metrics['recall']:.4f}")
+        print(f"  Total Samples: {cell_type_metrics['total_samples']}")
     
     # Print results only on main process
     if is_main_process:
@@ -346,5 +357,6 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         'cell_type_accuracy': cell_type_metrics['accuracy'],
         'cell_type_f1': cell_type_metrics['f1'],
         'cell_type_precision': cell_type_metrics['precision'],
-        'cell_type_recall': cell_type_metrics['recall']
+        'cell_type_recall': cell_type_metrics['recall'],
+        'total_samples': total_bleu_samples if use_ddp and world_size > 1 else len(bleu_scores)
     }
