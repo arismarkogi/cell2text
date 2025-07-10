@@ -74,15 +74,14 @@ def create_model_args(args):
 
     
     # Add Perceiver-specific settings if using perceiver projector
-    if args.projector == "perceiver":
-        model_args.update({
+    model_args.update({
             "num_latents": args.num_latents,
             "perceiver_cross_attn_layers": args.perceiver_cross_attn_layers,
             "perceiver_num_heads": args.perceiver_num_heads,
             "ff_mult": args.ff_mult,
             "perceiver_dropout": args.perceiver_dropout,
             "use_position_encoding": args.use_position_encoding,
-        })
+    })
     
     return model_args
 
@@ -252,8 +251,6 @@ def main():
     # Training/Model arguments
     parser.add_argument("--lora_rank", type=int, default=16,
                         help="LoRA rank")
-    parser.add_argument("--fix_modality_adapter", type=bool, default=False,
-                        help="Whether to freeze the projector/adapter")
     
     # Perceiver arguments (only used if projector == "perceiver")
     parser.add_argument("--num_latents", type=int, default=128,

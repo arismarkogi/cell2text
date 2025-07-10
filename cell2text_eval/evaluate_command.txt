@@ -1,16 +1,14 @@
 python3 /home/arism/cell2text/cell2text_eval/run_evaluation.py \
-    --checkpoint_path /home/arism/deepspeed_training/full_1epoch_batchsize4_gradacc8_perceiver_numlatents_ffmult1.5_numheads2_selfattn4/full_1epoch_batchsize4_gradacc8_perceiver_numlatents_ffmult1.5_numheads2_selfattn4_best_model/pytorch_model.bin \
+    --checkpoint_path /home/arism/deepspeed_training/full_1epoch_batchsize4_gradacc8_mlp_hiddendim2048_topk256/full_1epoch_batchsize4_gradacc8_mlp_hiddendim2048_topk256_best_model/pytorch_model.bin \
     --test_data_path /home/arism/datasets/test \
     --tokenizer_path meta-llama/Llama-3.2-3B-Instruct \
     --geneformer_path /home/arism/cell2text/Geneformer \
     --llama_path  meta-llama/Llama-3.2-3B-Instruct \
-    --adapter_checkpoint_dir /home/arism/deepspeed_training/full_1epoch_batchsize4_gradacc8_perceiver_numlatents_ffmult1.5_numheads2_selfattn4/full_1epoch_batchsize4_gradacc8_perceiver_numlatents_ffmult1.5_numheads2_selfattn4_best_model/adapter \
+    --adapter_checkpoint_dir /home/arism/deepspeed_training/full_1epoch_batchsize4_gradacc8_mlp_hiddendim2048_topk256/full_1epoch_batchsize4_gradacc8_mlp_hiddendim2048_topk256_best_model/adapter \
     --token_dictionary_path /home/arism/cell2text/Geneformer/geneformer/token_dictionary_gc104M.pkl \
-    --projector perceiver \
+    --projector mlp \
+    --top_k 256 \
     --num_latents 128 \
-    --perceiver_num_heads 2 \
-    --ff_mult 1.5  \
-    --perceiver_cross_attn_layers 1 \
-    --use_position_encoding False \
-    --save_results /home/arism/results/full_1epoch_batchsize4_gradacc8_perceiver_numlatents_ffmult1.5_numheads2_selfattn4.json \
+    --use_position_encoding True \
+    --save_results /home/arism/results/full_1epoch_batchsize4_gradacc8_mlp_hiddendim2048_topk256.json \
     --num_beams 1
