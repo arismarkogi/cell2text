@@ -10,5 +10,5 @@ python3 /home/arism/cell2text/cell2text_eval/run_evaluation.py \
     --top_k 256 \
     --num_latents 128 \
     --use_position_encoding True \
-    --save_results /home/arism/results/full_1epoch_batchsize4_gradacc8_mlp_hiddendim2048_topk256.json \
+    --save_results /home/arism/results/full_1epoch_batchsize4_gradacc8_mlp_hiddendim2048_topk256_foo.json \
     --num_beams 1

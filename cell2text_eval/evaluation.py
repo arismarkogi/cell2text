@@ -25,41 +25,53 @@ from cell2text_model.model import Cell2TextModel
 def compute_biomedical_bert_score(predictions, references, model_name="microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext"):
     """
     Compute BERT score using the biomedical BERT model with the same approach as compute_bert_score
-    
     Args:
         predictions: List of predicted texts
-        references: List of reference texts  
+        references: List of reference texts
         model_name: Name of the biomedical BERT model to use
-        
     Returns:
         dict: Dictionary with precision, recall, and f1 scores
     """
     try:
         # Load the tokenizer for the biomedical model
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
         
         # Truncate predictions to fit model's max position embeddings (usually 512)
         # Use 495 to leave room for special tokens
         retokenized_predictions = tokenizer(
-            predictions, padding="max_length", truncation=True, max_length=495, return_tensors="pt"
+            predictions, 
+            padding="max_length", 
+            truncation=True, 
+            max_length=495, 
+            return_tensors="pt"
         )["input_ids"]
         truncated_predictions = tokenizer.batch_decode(retokenized_predictions, skip_special_tokens=True)
         
         # Truncate references similarly
         retokenized_references = tokenizer(
-            references, padding="max_length", truncation=True, max_length=495, return_tensors="pt"
+            references, 
+            padding="max_length", 
+            truncation=True, 
+            max_length=495, 
+            return_tensors="pt"
         )["input_ids"]
         truncated_references = tokenizer.batch_decode(retokenized_references, skip_special_tokens=True)
         
-        # Load BERTScore evaluator
-        bert_scorer = evaluate.load("bertscore")
+        # Load BERTScore evaluator with proper error handling
+        try:
+            bert_scorer = evaluate.load("bertscore")
+        except Exception as load_error:
+            print(f"Error loading BERTScore evaluator: {load_error}")
+            # Fallback: try loading with specific version or configuration
+            bert_scorer = evaluate.load("bertscore", module_type="measurement")
         
         # Compute BERTScore with the biomedical model
         results = bert_scorer.compute(
             predictions=truncated_predictions,
             references=truncated_references,
             model_type=model_name,
-            lang="en"
+            lang="en",
+            verbose=False  # Reduce verbosity to avoid token-related warnings
         )
         
         # Calculate averages
@@ -80,6 +92,7 @@ def compute_biomedical_bert_score(predictions, references, model_name="microsoft
         
     except Exception as e:
         print(f"Error computing BERTScore with {model_name}: {e}")
+        print(f"Error type: {type(e).__name__}")
         return None
 
 
