@@ -22,7 +22,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from cell2text_model.model import Cell2TextModel
 
-def compute_biomedical_bert_score(predictions, references, model_name="microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext"):
+def compute_biomedical_bert_score(predictions, references, model_name="dmis-lab/biobert-v1.1"):
     """
     Compute BERT score using the biomedical BERT model with the same approach as compute_bert_score
     Args:
@@ -356,7 +356,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                            save_results: str = None,
                            use_ddp: bool = False,
                            use_bertscore: bool = True,
-                           bertscore_model: str = "microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext",
+                           bertscore_model: str = "dmis-lab/biobert-v1.1",
                            create_confusion_matrix_plot: bool = True,
                            confusion_matrix_path: str = None,
                            wrong_predictions_report_path: str = None):
