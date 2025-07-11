@@ -36,9 +36,9 @@ def convert_json_compat(obj):
     else:
         return obj
 
-def compute_biomedical_bert_score(predictions, references, model_name="dmis-lab/biobert-v1.1"):
+def compute_biomedical_bert_score(predictions, references, model_name="dmis-lab/biobert-large-cased-v1.1"):
     """
-    Compute BERT score using the biomedical BERT model with the same approach as compute_bert_score
+    Compute BERT score using the biomedical BERT model (biobert-large only)
     Args:
         predictions: List of predicted texts
         references: List of reference texts
@@ -47,7 +47,7 @@ def compute_biomedical_bert_score(predictions, references, model_name="dmis-lab/
         dict: Dictionary with precision, recall, and f1 scores
     """
     # Load the tokenizer for the biomedical model
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
         
     # Truncate predictions to fit model's max position embeddings (usually 512)
     # Use 495 to leave room for special tokens
@@ -70,7 +70,7 @@ def compute_biomedical_bert_score(predictions, references, model_name="dmis-lab/
     )["input_ids"]
     truncated_references = tokenizer.batch_decode(retokenized_references, skip_special_tokens=True)
         
-    # Load BERTScore evaluator with proper error handling
+    # Load BERTScore evaluator
     bert_scorer = evaluate.load("bertscore")
        
     # Compute BERTScore with the biomedical model
@@ -78,6 +78,7 @@ def compute_biomedical_bert_score(predictions, references, model_name="dmis-lab/
         predictions=truncated_predictions,
         references=truncated_references,
         model_type=model_name,
+        num_layers=24,
         lang="en",
         verbose=False  # Reduce verbosity to avoid token-related warnings
     )
@@ -714,28 +715,28 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         if save_results:
             results = {
                 'overall_metrics': {
-                    'bleu_score': avg_bleu,
-                    'bert_score_precision': avg_bert_precision,
-                    'bert_score_recall': avg_bert_recall,
-                    'bert_score_f1': avg_bert_f1,
-                    'validation_loss': avg_loss,
-                    'cell_type_metrics': cell_type_metrics
+                    'bleu_score': convert_json_compat(avg_bleu),
+                    'bert_score_precision': convert_json_compat(avg_bert_precision),
+                    'bert_score_recall': convert_json_compat(avg_bert_recall),
+                    'bert_score_f1': convert_json_compat(avg_bert_f1),
+                    'validation_loss': convert_json_compat(avg_loss),
+                    'cell_type_metrics': convert_json_compat(cell_type_metrics)
                 },
-                'examples': examples,
+                'examples': convert_json_compat(examples),
                 'cell_type_distribution': {
-                    'target': dict(target_counter),
-                    'predicted': dict(pred_counter)
+                    'target': convert_json_compat(dict(target_counter)),
+                    'predicted': convert_json_compat(dict(pred_counter))
                 },
-                'wrong_predictions_analysis': wrong_pred_analysis,
-                'confusion_matrix': confusion_matrix_df.to_dict() if confusion_matrix_df is not None else None,
-                'classification_report': classification_report_dict
+                'wrong_predictions_analysis': convert_json_compat(wrong_pred_analysis),
+                'confusion_matrix': convert_json_compat(confusion_matrix_df.to_dict()) if confusion_matrix_df is not None else None,
+                'classification_report': convert_json_compat(classification_report_dict)
             }
             
             with open(save_results, 'w') as f:
                 json.dump(results, f, indent=2)
-            print(f"\nDetailed results saved to: {save_results}")
+        print(f"\nDetailed results saved to: {save_results}")
     
-    return {
+    return convert_json_compat({
         'bleu': avg_bleu,
         'bert_score_precision': avg_bert_precision,
         'bert_score_recall': avg_bert_recall,
@@ -749,4 +750,4 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         'wrong_predictions_analysis': wrong_pred_analysis,
         'confusion_matrix': confusion_matrix_df,
         'classification_report': classification_report_dict
-    }
+    })
