@@ -22,6 +22,20 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from cell2text_model.model import Cell2TextModel
 
+def convert_json_compat(obj):
+    if isinstance(obj, dict):
+        return {k: convert_json_compat(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_json_compat(v) for v in obj]
+    elif isinstance(obj, (np.float32, np.float64, np.floating)):
+        return float(obj)
+    elif isinstance(obj, (np.int32, np.int64, np.integer)):
+        return int(obj)
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    else:
+        return obj
+
 def compute_biomedical_bert_score(predictions, references, model_name="dmis-lab/biobert-v1.1"):
     """
     Compute BERT score using the biomedical BERT model with the same approach as compute_bert_score
@@ -32,69 +46,59 @@ def compute_biomedical_bert_score(predictions, references, model_name="dmis-lab/
     Returns:
         dict: Dictionary with precision, recall, and f1 scores
     """
-    try:
-        # Load the tokenizer for the biomedical model
-        tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    # Load the tokenizer for the biomedical model
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
         
-        # Truncate predictions to fit model's max position embeddings (usually 512)
-        # Use 495 to leave room for special tokens
-        retokenized_predictions = tokenizer(
-            predictions, 
-            padding="max_length", 
-            truncation=True, 
-            max_length=495, 
-            return_tensors="pt"
-        )["input_ids"]
-        truncated_predictions = tokenizer.batch_decode(retokenized_predictions, skip_special_tokens=True)
+    # Truncate predictions to fit model's max position embeddings (usually 512)
+    # Use 495 to leave room for special tokens
+    retokenized_predictions = tokenizer(
+        predictions, 
+        padding="max_length", 
+        truncation=True, 
+        max_length=495, 
+        return_tensors="pt"
+    )["input_ids"]
+    truncated_predictions = tokenizer.batch_decode(retokenized_predictions, skip_special_tokens=True)
         
-        # Truncate references similarly
-        retokenized_references = tokenizer(
-            references, 
-            padding="max_length", 
-            truncation=True, 
-            max_length=495, 
-            return_tensors="pt"
-        )["input_ids"]
-        truncated_references = tokenizer.batch_decode(retokenized_references, skip_special_tokens=True)
+    # Truncate references similarly
+    retokenized_references = tokenizer(
+        references, 
+        padding="max_length", 
+        truncation=True, 
+        max_length=495, 
+        return_tensors="pt"
+    )["input_ids"]
+    truncated_references = tokenizer.batch_decode(retokenized_references, skip_special_tokens=True)
         
-        # Load BERTScore evaluator with proper error handling
-        try:
-            bert_scorer = evaluate.load("bertscore")
-        except Exception as load_error:
-            print(f"Error loading BERTScore evaluator: {load_error}")
-            # Fallback: try loading with specific version or configuration
-            bert_scorer = evaluate.load("bertscore", module_type="measurement")
+    # Load BERTScore evaluator with proper error handling
+    bert_scorer = evaluate.load("bertscore")
+       
+    # Compute BERTScore with the biomedical model
+    results = bert_scorer.compute(
+        predictions=truncated_predictions,
+        references=truncated_references,
+        model_type=model_name,
+        lang="en",
+        verbose=False  # Reduce verbosity to avoid token-related warnings
+    )
         
-        # Compute BERTScore with the biomedical model
-        results = bert_scorer.compute(
-            predictions=truncated_predictions,
-            references=truncated_references,
-            model_type=model_name,
-            lang="en",
-            verbose=False  # Reduce verbosity to avoid token-related warnings
-        )
-        
-        # Calculate averages
-        avg_precision = sum(results["precision"]) / len(results["precision"])
-        avg_recall = sum(results["recall"]) / len(results["recall"])
-        avg_f1 = sum(results["f1"]) / len(results["f1"])
-        
-        return {
-            "precision": avg_precision,
-            "recall": avg_recall,
-            "f1": avg_f1,
-            "individual_scores": {
-                "precision": results["precision"],
-                "recall": results["recall"],
-                "f1": results["f1"]
-            }
+    # Calculate averages
+    avg_precision = sum(results["precision"]) / len(results["precision"])
+    avg_recall = sum(results["recall"]) / len(results["recall"])
+    avg_f1 = sum(results["f1"]) / len(results["f1"])
+      
+    return {
+       "precision": avg_precision,
+       "recall": avg_recall,
+       "f1": avg_f1,
+       "individual_scores": {
+           "precision": results["precision"],
+           "recall": results["recall"],
+            "f1": results["f1"]
         }
+    }
         
-    except Exception as e:
-        print(f"Error computing BERTScore with {model_name}: {e}")
-        print(f"Error type: {type(e).__name__}")
-        return None
-
+   
 
 def reduce_distributed_metrics(values_list, world_size, rank):
     """Reduce metrics from all DDP processes using all_reduce - returns global average and count"""
