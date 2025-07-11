@@ -47,7 +47,8 @@ def compute_biomedical_bert_score(predictions, references):
         dict: Dictionary with precision, recall, and f1 scores
     """
 
-    model_name = "dmis-lab/biobert-large-cased-v1.1"
+    #model_name = "dmis-lab/biobert-large-cased-v1.1"
+    model_name = "microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract"
     # Load the tokenizer for the biomedical model
     tokenizer = AutoTokenizer.from_pretrained(model_name)
         
@@ -80,7 +81,7 @@ def compute_biomedical_bert_score(predictions, references):
         predictions=truncated_predictions,
         references=truncated_references,
         model_type=model_name,
-        num_layers=12,
+        num_layers=12, # chnage to 24 for biobert
         lang="en",
         verbose=False  # Reduce verbosity to avoid token-related warnings
     )
