@@ -734,7 +734,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
             
             with open(save_results, 'w') as f:
                 json.dump(results, f, indent=2)
-        print(f"\nDetailed results saved to: {save_results}")
+            print(f"\nDetailed results saved to: {save_results}")
     
     return convert_json_compat({
         'bleu': avg_bleu,
@@ -748,6 +748,6 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         'cell_type_recall': cell_type_metrics['recall'],
         'total_samples': total_bleu_samples if use_ddp and world_size > 1 else len(bleu_scores),
         'wrong_predictions_analysis': wrong_pred_analysis,
-        'confusion_matrix': confusion_matrix_df,
+        'confusion_matrix': confusion_matrix_df.to_dict() if confusion_matrix_df is not None else None,
         'classification_report': classification_report_dict
     })
