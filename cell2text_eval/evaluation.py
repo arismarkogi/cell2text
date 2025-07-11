@@ -78,7 +78,7 @@ def compute_biomedical_bert_score(predictions, references, model_name="dmis-lab/
         predictions=truncated_predictions,
         references=truncated_references,
         model_type=model_name,
-        num_layers=24,
+        num_layers=12,
         lang="en",
         verbose=False  # Reduce verbosity to avoid token-related warnings
     )
