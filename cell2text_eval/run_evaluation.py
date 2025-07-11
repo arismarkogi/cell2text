@@ -152,8 +152,7 @@ def run_evaluation(rank, world_size, args):
         print_examples=args.print_examples if rank == 0 else 0,
         save_results=args.save_results if rank == 0 else None,
         use_ddp=True,
-        use_bertscore=args.use_bertscore,
-        bertscore_model=args.bertscore_model
+        use_bertscore=args.use_bertscore
     )
     
     # Only print results on rank 0
@@ -286,9 +285,7 @@ def main():
     
     parser.add_argument("--use_bertscore", type=bool, default=True,
                         help="Whether to compute BERTScore")
-    parser.add_argument("--bertscore_model", type=str, 
-                        default="dmis-lab/biobert-v1.1",
-                        help="Model to use for BERTScore computation")
+    
     
     args = parser.parse_args()
     

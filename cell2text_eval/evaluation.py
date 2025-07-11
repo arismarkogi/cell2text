@@ -36,7 +36,7 @@ def convert_json_compat(obj):
     else:
         return obj
 
-def compute_biomedical_bert_score(predictions, references, model_name="dmis-lab/biobert-large-cased-v1.1"):
+def compute_biomedical_bert_score(predictions, references):
     """
     Compute BERT score using the biomedical BERT model (biobert-large only)
     Args:
@@ -46,6 +46,8 @@ def compute_biomedical_bert_score(predictions, references, model_name="dmis-lab/
     Returns:
         dict: Dictionary with precision, recall, and f1 scores
     """
+
+    model_name = "dmis-lab/biobert-large-cased-v1.1"
     # Load the tokenizer for the biomedical model
     tokenizer = AutoTokenizer.from_pretrained(model_name)
         
@@ -361,7 +363,6 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                            save_results: str = None,
                            use_ddp: bool = False,
                            use_bertscore: bool = True,
-                           bertscore_model: str = "dmis-lab/biobert-v1.1",
                            create_confusion_matrix_plot: bool = True,
                            confusion_matrix_path: str = None,
                            wrong_predictions_report_path: str = None):
@@ -523,13 +524,12 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     if use_bertscore and batch_predictions:
         try:
             if is_main_process:
-                print(f"Computing BERTScore for {len(batch_predictions)} samples using {bertscore_model}...")
+                print(f"Computing BERTScore for {len(batch_predictions)} ...")
             
             # Use the new biomedical BERTScore function
             bert_results = compute_biomedical_bert_score(
                 batch_predictions, 
                 batch_targets, 
-                model_name=bertscore_model
             )
             
             if bert_results is not None:
