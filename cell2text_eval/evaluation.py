@@ -80,7 +80,7 @@ def compute_biomedical_bert_score(predictions, references):
         predictions=truncated_predictions,
         references=truncated_references,
         model_type=model_name,
-        num_layers=12, # chnage to 24 for biobert
+        num_layers=24, # chnage to 24 for biobert
         lang="en",
         verbose=False  # Reduce verbosity to avoid token-related warnings
     )
@@ -242,9 +242,9 @@ def create_confusion_matrix(predicted_types, target_types, save_path=None, top_k
         
         for pred, target in zip(predicted_types, target_types):
             mapped_pred = pred if pred in top_types else "Other"
-            mapped_target = target if target in top_types else "Other"
+            mapped_targ = target if target in top_types else "Other"  # Fixed variable name
             mapped_predicted.append(mapped_pred)
-            mapped_target.append(mapped_target)
+            mapped_target.append(mapped_targ)  # Fixed: append the string value, not the list
         
         labels = top_types + ["Other"]
     else:
@@ -291,7 +291,6 @@ def create_confusion_matrix(predicted_types, target_types, save_path=None, top_k
                                  target_names=labels, output_dict=True)
     
     return cm_df, report
-
 
 def save_wrong_predictions_report(wrong_pred_analysis, save_path):
     """
