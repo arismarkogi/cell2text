@@ -7,15 +7,17 @@ python3 /home/arism/cell2text/cell2text_train/train_ddp.py \
     --batch_size_per_device 4 \
     --gradient_accumulation_steps 8 \
     --top_k 256 \
-    --epochs 1 \
+    --epochs 12 \
     --decoder_hidden_size 3072 \
     --projector mlp \
     --mlp_hidden_size 2048 \
     --mode full \
     --num_beams 1 \
-    --experiment_name full_1epoch_batchsize4_gradacc8_mlp_hiddendim2048_topk256\
+    --experiment_name full_1epoch_batchsize4_gradacc8_mlp_hiddendim2048_topk256_curriculum\
     --num_latents 128 \
     --num_heads 2 \
     --ff_mult 1.5 \
     --eval_steps 2000 \
-    --zero_stage 1
+    --zero_stage 1 \
+    --do_curriculum True
+

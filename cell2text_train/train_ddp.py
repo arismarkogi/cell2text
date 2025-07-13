@@ -400,46 +400,58 @@ class Cell2TextDDPTrainer:
         """Update curriculum step based on current epoch with proper distributed handling"""
         if not self.args.do_curriculum:
             return False
+
+        # Define the curriculum bins
+        curriculum_bins = {
+            1: [0, 1, 2],
+            2: [3, 4],
+            3: [5, 6, 7],
+            4: [8, 9, 10, 11]
+        }
         
-        # Calculate current curriculum depth
-        step = current_epoch // self.args.curriculum_step_epochs
-        current_depth = min(
-            self.args.curriculum_start_depth + step,
-            self.args.curriculum_max_depth
-        )
+        # Determine the current stage of the curriculum
+        # This can be based on epochs, or even better, on performance metrics
+        stage = (current_epoch // self.args.curriculum_step_epochs) + 1
         
+        if stage > len(curriculum_bins):
+            current_depths = curriculum_bins[len(curriculum_bins)]
+        else:
+            current_depths = []
+            for i in range(1, stage + 1):
+                current_depths.extend(curriculum_bins[i])
+
         # Check if we need to update
-        if hasattr(self, '_current_curriculum_depth') and self._current_curriculum_depth == current_depth:
+        if hasattr(self, '_current_curriculum_depths') and self._current_curriculum_depths == current_depths:
             return False
-        
+
         # Synchronize all processes before updating
         if self.world_size > 1:
             dist.barrier()
+
+        self._current_curriculum_depths = current_depths
         
-        self._current_curriculum_depth = current_depth
-        
-        # Update dataset (only if it's a curriculum dataset and not in sanity mode)
-        if (isinstance(self.train_dataset, CurriculumCell2TextDataset) and 
-            self.args.mode != "sanity"):
+        # Update dataset
+        if (isinstance(self.train_dataset, CurriculumCell2TextDataset) and
+                self.args.mode != "sanity"):
             
             if self.is_main_process:
-                print(f"Updating curriculum to depth <= {current_depth}")
+                print(f"Updating curriculum to include depths: {current_depths}")
             
-            # Update the dataset
-            self.train_dataset.update_curriculum_step(current_depth)
+            # Update the dataset with the new set of depths
+            self.train_dataset.update_curriculum(current_depths)
             
-            # Recreate the dataloader with new dataset
+            # Recreate the dataloader
             self._create_train_dataloader()
             
             # Synchronize again after recreation
             if self.world_size > 1:
                 dist.barrier()
-            
+                
             if self.is_main_process:
-                print(f"Curriculum updated: now using {len(self.train_dataset)} samples with depth <= {current_depth}")
-            
+                print(f"Curriculum updated: now using {len(self.train_dataset)} samples with depths in {current_depths}")
+                
             return True
-        
+            
         return False
 
     def validate(self):
@@ -761,13 +773,13 @@ class Cell2TextDDPTrainer:
                         'learning_rate': self.lr_scheduler.get_last_lr()[0] if self.lr_scheduler else self.args.decoder_lr
                     }
                     if self.args.do_curriculum:
-                        training_step_info['curriculum_depth'] = self._current_curriculum_depth
+                        training_step_info['curriculum_depths'] = self._current_curriculum_depths
                     training_history.append(training_step_info)
                 
                 # Update progress bar
                 if progress_bar:
                     progress_bar.update(1)
-                    curriculum_info = f" | Depth≤{self._current_curriculum_depth}" if self.args.do_curriculum else ""
+                    curriculum_info = f" | Depths: {self._current_curriculum_depths}" if self.args.do_curriculum else ""
                     progress_bar.set_description(
                         f"🚀 DDP Training | Epoch: {epoch+1}/{self.args.epochs} | "
                         f"Step: {step+1}/{len(self.train_loader)} | Loss: {loss:.4f}{curriculum_info}"

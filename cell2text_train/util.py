@@ -160,7 +160,7 @@ def create_argument_parser():
     parser.add_argument("--save_model", type=bool, default=True,
                         help="Save model checkpoints")
 
-    parser.add_argument('--do_curriculum', type = bool, default=True, help='Enable curriculum learning based on CL ontology depth')
+    parser.add_argument('--do_curriculum', type=bool, default=True, help='Enable curriculum learning based on CL ontology depth')
     parser.add_argument('--curriculum_start_depth', type=int, default=0, help='Starting depth for curriculum learning')
     parser.add_argument('--curriculum_max_depth', type=int, default=11, help='Maximum depth for curriculum learning')
     parser.add_argument('--curriculum_step_epochs', type=int, default=1, help='Number of epochs per curriculum step')
