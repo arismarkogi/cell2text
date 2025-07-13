@@ -9,6 +9,8 @@ from torch.utils.data import Dataset
 import sys
 import pickle
 from datasets import load_from_disk
+import random
+
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -175,3 +177,57 @@ class Cell2TextDataset(Dataset):
                 raise ValueError(f"Invalid mode: {mode}")
 
         return collate
+
+class CurriculumCell2TextDataset(Cell2TextDataset):
+    def __init__(self, data_path, tokenizer, geneformer_tokenizer=None, 
+                 system_message="You are a scientific assistant specialized in analyzing single-cell gene expression data. Given the gene expression profile, describe the cell type and its characteristics clearly and concisely in professional language.",
+                 placeholder_token='<|reserved_special_token_1|>', top_k=None, projector="mlp", num_latents=None,
+                 max_depth=None):
+        """
+        Curriculum learning dataset that filters by CL ontology depth
+        Args:
+            max_depth: Maximum CL depth to include in current curriculum step
+        """
+        super().__init__(data_path, tokenizer, geneformer_tokenizer, system_message, placeholder_token, top_k, projector, num_latents)
+        self.max_depth = max_depth
+        self.full_data = self.data
+        
+        if max_depth is not None:
+            self._filter_by_depth()
+    
+    def _filter_by_depth(self):
+        """Filter dataset to only include samples with cl_length <= max_depth"""
+        filtered_indices = []
+        for idx in range(len(self.full_data)):
+            if self.full_data[idx].get('cl_length', float('inf')) <= self.max_depth:
+                filtered_indices.append(idx)
+        
+        # Create filtered dataset
+        self.data = self.full_data.select(filtered_indices)
+        print(f"Curriculum step: Using {len(self.data)} samples with depth <= {self.max_depth}")
+    
+    def update_curriculum_step(self, new_max_depth):
+        """Update the curriculum step to include more complex samples"""
+        self.max_depth = new_max_depth
+        self._filter_by_depth()
+
+class SanityDataset(Dataset):
+    """Wrapper to create a small subset of data for sanity check"""
+    
+    def __init__(self, full_dataset, num_samples=8, seed=42):
+        self.full_dataset = full_dataset
+        self.num_samples = min(num_samples, len(full_dataset))
+        
+        # Set seed for reproducibility
+        random.seed(seed)
+        np.random.seed(seed)
+        
+        # Select random indices
+        self.indices = random.sample(range(len(full_dataset)), self.num_samples)
+        print(f"Selected {self.num_samples} samples for sanity check: {self.indices}")
+        
+    def __len__(self):
+        return self.num_samples
+    
+    def __getitem__(self, idx):
+        return self.full_dataset[self.indices[idx]]

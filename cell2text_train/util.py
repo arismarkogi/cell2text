@@ -3,7 +3,6 @@ from  tqdm import tqdm
 import sys
 import numpy as np
 import json
-import random
 import os
 from torch.utils.data import Dataset
 
@@ -160,6 +159,11 @@ def create_argument_parser():
                         help="Number of steps without improvement before early stopping (0 to disable)")
     parser.add_argument("--save_model", type=bool, default=True,
                         help="Save model checkpoints")
+
+    parser.add_argument('--do_curriculum', type = bool, default=True, help='Enable curriculum learning based on CL ontology depth')
+    parser.add_argument('--curriculum_start_depth', type=int, default=0, help='Starting depth for curriculum learning')
+    parser.add_argument('--curriculum_max_depth', type=int, default=11, help='Maximum depth for curriculum learning')
+    parser.add_argument('--curriculum_step_epochs', type=int, default=1, help='Number of epochs per curriculum step')
     
     return parser
 
@@ -244,30 +248,28 @@ def convert_json_compat(obj):
     else:
         return obj
     
-
-class SanityDataset(Dataset):
-    """Wrapper to create a small subset of data for sanity check"""
+def save_simple_training_history(trainer, training_history, validation_history):
+    """Simple training history saving function"""
+    if not trainer.is_main_process:
+        return
     
-    def __init__(self, full_dataset, num_samples=8, seed=42):
-        self.full_dataset = full_dataset
-        self.num_samples = min(num_samples, len(full_dataset))
-        
-        # Set seed for reproducibility
-        random.seed(seed)
-        np.random.seed(seed)
-        
-        # Select random indices
-        self.indices = random.sample(range(len(full_dataset)), self.num_samples)
-        print(f"Selected {self.num_samples} samples for sanity check: {self.indices}")
-        
-    def __len__(self):
-        return self.num_samples
+    # Save training history
+    training_history_path = os.path.join(trainer.args.output_dir, "training_history.json")
+    with open(training_history_path, 'w') as f:
+        json.dump(convert_json_compat(training_history), f, indent=2)
     
-    def __getitem__(self, idx):
-        return self.full_dataset[self.indices[idx]]
+    # Save validation history if available
+    if validation_history:
+        validation_history_path = os.path.join(trainer.args.output_dir, "validation_history.json")
+        with open(validation_history_path, 'w') as f:
+            json.dump(convert_json_compat(validation_history), f, indent=2)
+    
+    print(f"Training history saved to: {training_history_path}")
+    if validation_history:
+        print(f"Validation history saved to: {validation_history_path}")
     
 
-
+    
 def save_training_history(model, training_history, validation_history):
         """Save training and validation history to files with enhanced metrics tracking"""
         if  model.is_main_process:
