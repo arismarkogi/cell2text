@@ -828,7 +828,7 @@ class Cell2TextDDPTrainer:
                     self.model.train()  # Switch back to training mode
                 
                 if self.world_size > 1:
-                dist.barrier()
+                    dist.barrier()
         
             # End of epoch summary
             epoch_loss = np.mean(epoch_losses)

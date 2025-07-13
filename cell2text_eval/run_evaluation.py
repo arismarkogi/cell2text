@@ -301,24 +301,5 @@ def main():
     # Spawn processes for DDP
     mp.spawn(run_evaluation, args=(world_size, args), nprocs=world_size, join=True)
 
-    
-    args = parser.parse_args()
-    
-    # Check GPU availability
-    world_size = torch.cuda.device_count()
-    if world_size < 2:
-        print(f"Warning: Only {world_size} GPU(s) available. DDP requires at least 2 GPUs.")
-        print("Running on single GPU...")
-        world_size = 1
-    
-    print(f"Using {world_size} GPUs for evaluation")
-    
-    #THIS IS NOT OK NEEDS MORE DEBUGGING
-    #args.use_position_encoding = False
-
-    
-    # Spawn processes for DDP
-    mp.spawn(run_evaluation, args=(world_size, args), nprocs=world_size, join=True)
-
 if __name__ == "__main__":
     main()
