@@ -628,7 +628,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     if is_main_process and predicted_cell_types and target_cell_types and create_confusion_matrix_plot:
         cm_path = confusion_matrix_path or (save_results.replace('.json', '_confusion_matrix.png') if save_results else 'confusion_matrix.png')
         confusion_matrix_df, classification_report_dict = create_confusion_matrix(
-            predicted_cell_types, target_cell_types, save_path=cm_path
+            predicted_cell_types, target_cell_types, save_path=None
         )
     
     # Print results only on main process
