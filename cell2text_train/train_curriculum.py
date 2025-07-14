@@ -36,7 +36,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from cell2text_model.model import Cell2TextModel
 from cell2text_model.configuration import Cell2TextConfig
-from cell2text_dataset.dataset import Cell2TextDataset, SanityDataset
+from cell2text_dataset.dataset import Cell2TextDataset, SanityDataset, CurriculumCell2TextDataset
 
 
 class Cell2TextDDPTrainer:
@@ -105,84 +105,49 @@ class Cell2TextDDPTrainer:
             top_k = self.args.top_k
         else:  # perceiver
             top_k = None
-            
-        full_train_dataset = Cell2TextDataset(self.args.train_data_path,
-                                               self.tokenizer, top_k=top_k, 
-                                               projector=self.args.projector, 
-                                               num_latents=self.args.num_latents)
         
+        # Choose dataset class and setup parameters
+        dataset_kwargs = {
+            'data_path': self.args.train_data_path,
+            'tokenizer': self.tokenizer,
+            'top_k': top_k,
+            'projector': self.args.projector,
+            'num_latents': self.args.num_latents
+        }
+        
+        # Create dataset (curriculum or regular)
+        if self.args.do_curriculum:
+            dataset_kwargs['max_depth'] = self.args.curriculum_start_depth
+            self.train_dataset = CurriculumCell2TextDataset(**dataset_kwargs)
+            self._current_curriculum_depth = self.args.curriculum_start_depth
+        else:
+            self.train_dataset = Cell2TextDataset(**dataset_kwargs)
+        
+        # Create initial data loader
+        self._create_train_dataloader()
+        
+        # Handle sanity mode
         if self.args.mode == "sanity":
-            # Create small subset for sanity check
-            sanity_dataset = SanityDataset(full_train_dataset, num_samples=self.args.num_samples, seed=self.args.seed)
+            sanity_dataset = SanityDataset(self.train_dataset, num_samples=self.args.num_samples, seed=self.args.seed)
+            self.train_dataset = sanity_dataset
+            self._create_train_dataloader()
             
-            # Create samplers for DDP
-            if self.world_size > 1:
-                train_sampler = DistributedSampler(sanity_dataset, num_replicas=self.world_size, rank=self.rank)
-                val_sampler = DistributedSampler(sanity_dataset, num_replicas=self.world_size, rank=self.rank, shuffle=False)
-            else:
-                train_sampler = None
-                val_sampler = None
-            
-            self.train_loader = DataLoader(
-                sanity_dataset, 
-                batch_size=self.args.batch_size_per_device, 
-                shuffle=(train_sampler is None),
-                sampler=train_sampler,
-                num_workers=0,
-                collate_fn=full_train_dataset.collate_fn(mode="train")
-            )
-            
-            self.val_loader = DataLoader(
-                sanity_dataset, 
-                batch_size=self.args.batch_size_per_device, 
-                shuffle=False,
-                sampler=val_sampler,
-                num_workers=0,
-                collate_fn=full_train_dataset.collate_fn(mode="train")
-            )
+            # Create validation loader (same as training for sanity)
+            self._create_val_dataloader(sanity_dataset)
             
             if self.is_main_process:
                 print(f"Sanity dataset loaded. Size: {len(sanity_dataset)}")
         else:
             # Full training mode
-            if self.world_size > 1:
-                train_sampler = DistributedSampler(full_train_dataset, num_replicas=self.world_size, rank=self.rank)
-            else:
-                train_sampler = None
-                
-            self.train_loader = DataLoader(
-                full_train_dataset, 
-                batch_size=self.args.batch_size_per_device, 
-                shuffle=(train_sampler is None),
-                sampler=train_sampler,
-                num_workers=0,
-                collate_fn=full_train_dataset.collate_fn(mode="train")
-            )
-            
             if self.is_main_process:
-                print(f"Full training dataset loaded. Size: {len(full_train_dataset)}")
+                print(f"Full training dataset loaded. Size: {len(self.train_dataset)}")
             
             # Load validation dataset if provided
             if self.args.val_data_path:
-                val_dataset = Cell2TextDataset(self.args.val_data_path, 
-                                               self.tokenizer,
-                                                 top_k=top_k, 
-                                                 projector=self.args.projector, 
-                                                 num_latents=self.args.num_latents)
-                
-                if self.world_size > 1:
-                    val_sampler = DistributedSampler(val_dataset, num_replicas=self.world_size, rank=self.rank, shuffle=False)
-                else:
-                    val_sampler = None
-                
-                self.val_loader = DataLoader(
-                    val_dataset,
-                    batch_size=self.args.batch_size_per_device, 
-                    shuffle=False,
-                    sampler=val_sampler,
-                    num_workers=0,
-                    collate_fn=val_dataset.collate_fn(mode="train")
-                )
+                val_dataset = Cell2TextDataset(self.args.val_data_path, self.tokenizer,
+                                            top_k=top_k, projector=self.args.projector, 
+                                            num_latents=self.args.num_latents)
+                self._create_val_dataloader(val_dataset)
                 
                 if self.is_main_process:
                     print(f"Validation dataset loaded. Size: {len(val_dataset)}")
@@ -190,6 +155,48 @@ class Cell2TextDDPTrainer:
                 if self.is_main_process:
                     print("No validation dataset provided.")
                 self.val_loader = None
+
+    def _create_train_dataloader(self):
+        """Create training dataloader with proper distributed sampler"""
+        if self.world_size > 1:
+            train_sampler = DistributedSampler(
+                self.train_dataset, 
+                num_replicas=self.world_size, 
+                rank=self.rank,
+                shuffle=True
+            )
+        else:
+            train_sampler = None
+        
+        self.train_loader = DataLoader(
+            self.train_dataset,
+            batch_size=self.args.batch_size_per_device,
+            shuffle=(train_sampler is None),
+            sampler=train_sampler,
+            num_workers=0,
+            collate_fn=self.train_dataset.collate_fn(mode="train")
+        )
+
+    def _create_val_dataloader(self, val_dataset):
+        """Create validation dataloader with proper distributed sampler"""
+        if self.world_size > 1:
+            val_sampler = DistributedSampler(
+                val_dataset, 
+                num_replicas=self.world_size, 
+                rank=self.rank, 
+                shuffle=False
+            )
+        else:
+            val_sampler = None
+        
+        self.val_loader = DataLoader(
+            val_dataset,
+            batch_size=self.args.batch_size_per_device,
+            shuffle=False,
+            sampler=val_sampler,
+            num_workers=0,
+            collate_fn=val_dataset.collate_fn(mode="train")
+        )
         
     def initialize_model(self):
         """Initialize the Cell2Text model with configuration"""
@@ -388,6 +395,64 @@ class Cell2TextDDPTrainer:
 
         self.global_step += 1
         return loss.item() * self.args.gradient_accumulation_steps
+
+    def update_curriculum_step(self, current_epoch):
+        """Update curriculum step based on current epoch with proper distributed handling"""
+        if not self.args.do_curriculum:
+            return False
+
+        # Define the curriculum bins
+        curriculum_bins = {
+            1: [0, 1, 2],
+            2: [3, 4],
+            3: [5, 6, 7],
+            4: [8, 9, 10, 11]
+        }
+        
+        # Determine the current stage of the curriculum
+        # This can be based on epochs, or even better, on performance metrics
+        stage = (current_epoch // self.args.curriculum_step_epochs) + 1
+        
+        if stage > len(curriculum_bins):
+            current_depths = curriculum_bins[len(curriculum_bins)]
+        else:
+            current_depths = []
+            for i in range(1, stage + 1):
+                current_depths.extend(curriculum_bins[i])
+
+        # Check if we need to update
+        if hasattr(self, '_current_curriculum_depths') and self._current_curriculum_depths == current_depths:
+            return False
+
+        # Synchronize all processes before updating
+        if self.world_size > 1:
+            dist.barrier()
+
+        self._current_curriculum_depths = current_depths
+        
+        # Update dataset
+        if (isinstance(self.train_dataset, CurriculumCell2TextDataset) and
+                self.args.mode != "sanity"):
+            
+            if self.is_main_process:
+                print(f"Updating curriculum to include depths: {current_depths}")
+            
+            # Update the dataset with the new set of depths
+            self.train_dataset.update_curriculum(current_depths)
+            
+            # Recreate the dataloader
+            self._create_train_dataloader()
+            
+            # Synchronize again after recreation
+            if self.world_size > 1:
+                dist.barrier()
+                
+            if self.is_main_process:
+                print(f"Curriculum updated: now using {len(self.train_dataset)} samples with depths in {current_depths}")
+                
+            return True
+            
+        return False
 
     def validate(self):
         """Simplified validation - just compute loss"""
@@ -645,7 +710,7 @@ class Cell2TextDDPTrainer:
         return final_loss <= self.args.target_loss
     
     def full_train(self):
-        """Full training loop with DDP"""
+        """Full training loop with DDP and curriculum learning"""
         if self.is_main_process:
             print("="*60)
             print("STARTING DDP FULL TRAINING")
@@ -658,6 +723,9 @@ class Cell2TextDDPTrainer:
             print(f"Gradient accumulation steps: {self.args.gradient_accumulation_steps}")
             print(f"Projector type: {self.args.projector}")
             print(f"Validation every: {self.args.eval_steps} steps")
+            if self.args.do_curriculum:
+                print(f"Curriculum learning: depth {self.args.curriculum_start_depth} to {self.args.curriculum_max_depth}")
+                print(f"Curriculum step every: {self.args.curriculum_step_epochs} epochs")
             print("="*60)
         
         self.model.train()
@@ -673,7 +741,18 @@ class Cell2TextDDPTrainer:
         steps_since_improvement = 0
         
         for epoch in range(self.args.epochs):
-            # Set epoch for distributed sampler
+            # Update curriculum step
+            curriculum_updated = self.update_curriculum_step(epoch)
+            
+            # If curriculum was updated, we need to update total steps for progress bar
+            if curriculum_updated and progress_bar:
+                # Recalculate total steps with new dataset size
+                remaining_epochs = self.args.epochs - epoch
+                completed_steps = self.global_step
+                remaining_steps = remaining_epochs * len(self.train_loader)
+                progress_bar.total = completed_steps + remaining_steps
+            
+            # Set epoch for distributed sampler (important for shuffling)
             if hasattr(self.train_loader.sampler, 'set_epoch'):
                 self.train_loader.sampler.set_epoch(epoch)
             
@@ -693,14 +772,17 @@ class Cell2TextDDPTrainer:
                         'loss': loss,
                         'learning_rate': self.lr_scheduler.get_last_lr()[0] if self.lr_scheduler else self.args.decoder_lr
                     }
+                    if self.args.do_curriculum:
+                        training_step_info['curriculum_depths'] = self._current_curriculum_depths
                     training_history.append(training_step_info)
                 
                 # Update progress bar
                 if progress_bar:
                     progress_bar.update(1)
+                    curriculum_info = f" | Depths: {self._current_curriculum_depths}" if self.args.do_curriculum else ""
                     progress_bar.set_description(
                         f"🚀 DDP Training | Epoch: {epoch+1}/{self.args.epochs} | "
-                        f"Step: {step+1}/{len(self.train_loader)} | Loss: {loss:.4f}"
+                        f"Step: {step+1}/{len(self.train_loader)} | Loss: {loss:.4f}{curriculum_info}"
                     )
                 
                 # Validation 
@@ -759,11 +841,13 @@ class Cell2TextDDPTrainer:
                 
                 if self.world_size > 1:
                     dist.barrier()
-                    
+        
             # End of epoch summary
             epoch_loss = np.mean(epoch_losses)
             if self.is_main_process:
-                print(f"\nEpoch {epoch+1} completed. Average loss: {epoch_loss:.4f}")
+                curriculum_info = f" | Curriculum depth: {self._current_curriculum_depth}" if self.args.do_curriculum else ""
+                print(f"\nEpoch {epoch+1} completed. Average loss: {epoch_loss:.4f}{curriculum_info}")
+    
         
         if progress_bar is not None:
             progress_bar.close()
