@@ -144,16 +144,18 @@ class Cell2TextDDPTrainer:
             if self.is_main_process:
                 print(f"Sanity dataset loaded. Size: {len(sanity_dataset)}")
         else:
-            # Full training mode
             if self.world_size > 1:
                 train_sampler = DistributedSampler(full_train_dataset, num_replicas=self.world_size, rank=self.rank)
                 if self.is_main_process:
                     print(f"[Rank {self.rank}] Train sampler total size: {train_sampler.total_size}")
-                    print(f"[Rank {self.rank}] First 10 train indices: {train_sampler.indices[:10]}")
-                    # Assuming full_train_dataset.data is a Hugging Face Dataset or list of dicts
-                    sampled_indices = train_sampler.indices[:10]
-                    sampled_cl_depths = [full_train_dataset.data[i]['cl_depth'] for i in sampled_indices]
-
+                    
+                    # Method 1: Get indices by creating an iterator and taking first 10
+                    train_iter = iter(train_sampler)
+                    first_10_indices = [next(train_iter) for _ in range(min(10, len(train_sampler)))]
+                    print(f"[Rank {self.rank}] First 10 train indices: {first_10_indices}")
+                    
+                    # Get cl_depth for these indices
+                    sampled_cl_depths = [full_train_dataset.data[i]['cl_depth'] for i in first_10_indices]
                     print(f"[Rank {self.rank}] cl_depth for first 10 train indices: {sampled_cl_depths}")
             else:
                 train_sampler = None
