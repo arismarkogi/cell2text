@@ -19,7 +19,7 @@ class Cell2TextDataset(Dataset):
     def __init__(self, data_path, tokenizer, geneformer_tokenizer=None, 
                  system_message="You are a scientific assistant specialized in analyzing single-cell gene expression data. Given the gene expression profile, describe the cell type and its characteristics clearly and concisely in professional language.",
                  placeholder_token='<|reserved_special_token_1|>', top_k=None, projector="mlp", num_latents=None,
-                 sort_by_depth=True):
+                 sort_by_depth=False):
         """
         Dataset for cell expression data
         Args:
@@ -41,11 +41,11 @@ class Cell2TextDataset(Dataset):
         self.num_latents = num_latents
         
         # Sort by cl_depth if requested
-        #if sort_by_depth:
-        if 'cl_depth' in self.data.column_names:
-                self.data = self.data.sort('cl_depth')
-                print(f"Dataset sorted by cl_depth in ascending order")
-        else:
+        if sort_by_depth:
+            if 'cl_depth' in self.data.column_names:
+                    self.data = self.data.sort('cl_depth')
+                    print(f"Dataset sorted by cl_depth in ascending order")
+            else:
                 print("Warning: cl_depth column not found, skipping sort")
         
     def __len__(self):

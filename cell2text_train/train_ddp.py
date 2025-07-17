@@ -107,10 +107,10 @@ class Cell2TextDDPTrainer:
             top_k = None
             
         full_train_dataset = Cell2TextDataset(self.args.train_data_path,
-                                               self.tokenizer, top_k=top_k, 
-                                               projector=self.args.projector, 
-                                               num_latents=self.args.num_latents,
-                                               sort_by_depth=self.args.sort_by_depth)
+                                            self.tokenizer, top_k=top_k, 
+                                            projector=self.args.projector, 
+                                            num_latents=self.args.num_latents,
+                                            sort_by_depth=self.args.sort_by_depth)
         
         if self.args.mode == "sanity":
             # Create small subset for sanity check
@@ -145,11 +145,31 @@ class Cell2TextDDPTrainer:
                 print(f"Sanity dataset loaded. Size: {len(sanity_dataset)}")
         else:
             if self.world_size > 1:
-                train_sampler = DistributedSampler(full_train_dataset, num_replicas=self.world_size, rank=self.rank)
+                # Create a custom sampler that preserves order
+                class OrderedDistributedSampler(DistributedSampler):
+                    def __init__(self, dataset, num_replicas=None, rank=None, shuffle=False):
+                        super().__init__(dataset, num_replicas, rank, shuffle=False)
+                        
+                    def __iter__(self):
+                        # Generate ordered indices
+                        indices = list(range(len(self.dataset)))
+                        
+                        # Add extra samples to make it evenly divisible
+                        indices += indices[:(self.total_size - len(indices))]
+                        assert len(indices) == self.total_size
+                        
+                        # Subsample for this rank (preserving order)
+                        indices = indices[self.rank:self.total_size:self.num_replicas]
+                        assert len(indices) == self.num_samples
+                        
+                        return iter(indices)
+                
+                train_sampler = OrderedDistributedSampler(full_train_dataset, num_replicas=self.world_size, rank=self.rank)
+                
                 if self.is_main_process:
                     print(f"[Rank {self.rank}] Train sampler total size: {train_sampler.total_size}")
                     
-                    # Method 1: Get indices by creating an iterator and taking first 10
+                    # Test the ordered sampler
                     train_iter = iter(train_sampler)
                     first_10_indices = [next(train_iter) for _ in range(min(10, len(train_sampler)))]
                     print(f"[Rank {self.rank}] First 10 train indices: {first_10_indices}")
@@ -175,13 +195,13 @@ class Cell2TextDDPTrainer:
             # Load validation dataset if provided
             if self.args.val_data_path:
                 val_dataset = Cell2TextDataset(self.args.val_data_path, 
-                                               self.tokenizer,
-                                                 top_k=top_k, 
-                                                 projector=self.args.projector, 
-                                                 num_latents=self.args.num_latents)
+                                            self.tokenizer,
+                                                top_k=top_k, 
+                                                projector=self.args.projector, 
+                                                num_latents=self.args.num_latents)
                 
                 if self.world_size > 1:
-                    val_sampler = DistributedSampler(val_dataset, num_replicas=self.world_size, rank=self.rank, shuffle=False)
+                    val_sampler = OrderedDistributedSampler(val_dataset, num_replicas=self.world_size, rank=self.rank)
                 else:
                     val_sampler = None
                 
