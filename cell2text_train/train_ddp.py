@@ -123,7 +123,12 @@ class Cell2TextDDPTrainer:
                 if self.is_main_process:
                     print(f"[Rank {self.rank}] Train sampler total size: {train_sampler.total_size}")
                     print(f"[Rank {self.rank}] First 10 train indices: {train_sampler.indices[:10]}")
-                    print(f"[Rank {self.rank}] First 10 train indices: {train_sampler["cl_depth"][:10]}")
+                    # Assuming full_train_dataset.data is a Hugging Face Dataset or list of dicts
+                    sampled_indices = train_sampler.indices[:10]
+                    sampled_cl_depths = [full_train_dataset.data[i]['cl_depth'] for i in sampled_indices]
+
+                    print(f"[Rank {self.rank}] cl_depth for first 10 train indices: {sampled_cl_depths}")
+
                 else:
                     train_sampler = None
 

@@ -13,12 +13,13 @@ CUDA_VISIBLE_DEVICES=0 python3 /home/arism/cell2text/cell2text_train/train_ddp.p
     --mlp_hidden_size 2048 \
     --mode full \
     --num_beams 1 \
-    --experiment_name full_1epoch_batchsize6_gradacc8_mlp_hiddendim2048_topk256_lora_rank32\
+    --experiment_name full_1epoch_batchsize6_gradacc8_mlp_hiddendim2048_topk256_lora_rank16_pseudocurr\
     --num_latents 128 \
     --num_heads 2 \
     --ff_mult 1.5 \
     --eval_steps 3300 \
     --zero_stage 1 \
     --do_curriculum False \
-    --lora_r_decoder 32
+    --lora_r_decoder 16 \
+    --sort_by_depth True
 
