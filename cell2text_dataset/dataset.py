@@ -41,11 +41,11 @@ class Cell2TextDataset(Dataset):
         self.num_latents = num_latents
         
         # Sort by cl_depth if requested
-        if sort_by_depth:
-            if 'cl_depth' in self.data.column_names:
+        #if sort_by_depth:
+        if 'cl_depth' in self.data.column_names:
                 self.data = self.data.sort('cl_depth')
                 print(f"Dataset sorted by cl_depth in ascending order")
-            else:
+        else:
                 print("Warning: cl_depth column not found, skipping sort")
         
     def __len__(self):
