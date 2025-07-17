@@ -1,4 +1,4 @@
-CUDA_VISIBLE_DEVICES=0 python3 /home/arism/cell2text/cell2text_train/train_ddp.py \
+python3 /home/arism/cell2text/cell2text_train/train_ddp.py \
     --token_dictionary_path /home/arism/cell2text/Geneformer/geneformer/token_dictionary_gc104M.pkl \
     --train_data_path /home/arism/datasets/train \
     --val_data_path /home/arism/datasets/validation \
@@ -19,7 +19,6 @@ CUDA_VISIBLE_DEVICES=0 python3 /home/arism/cell2text/cell2text_train/train_ddp.p
     --ff_mult 1.5 \
     --eval_steps 3300 \
     --zero_stage 1 \
-    --do_curriculum False \
     --lora_r_decoder 16 \
     --sort_by_depth True
 
