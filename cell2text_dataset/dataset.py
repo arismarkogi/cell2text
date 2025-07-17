@@ -18,7 +18,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 class Cell2TextDataset(Dataset):
     def __init__(self, data_path, tokenizer, geneformer_tokenizer=None, 
                  system_message="You are a scientific assistant specialized in analyzing single-cell gene expression data. Given the gene expression profile, describe the cell type and its characteristics clearly and concisely in professional language.",
-                 placeholder_token='<|reserved_special_token_1|>', top_k=None, projector="mlp", num_latents=None):
+                 placeholder_token='<|reserved_special_token_1|>', top_k=None, projector="mlp", num_latents=None,
+                 sort_by_depth=False):
         """
         Dataset for cell expression data
         Args:
@@ -28,6 +29,7 @@ class Cell2TextDataset(Dataset):
             system_message: System message for chat template
             placeholder_token: Token to use as placeholder for expression embeddings
             top_k: If specified, only use top k gene expression tokens
+            sort_by_depth: If True, sort data by cl_depth in ascending order
         """
         self.data = load_from_disk(data_path)
         self.tokenizer = tokenizer
@@ -37,6 +39,14 @@ class Cell2TextDataset(Dataset):
         self.projector = projector
         self.top_k = top_k
         self.num_latents = num_latents
+        
+        # Sort by cl_depth if requested
+        if sort_by_depth:
+            if 'cl_depth' in self.data.column_names:
+                self.data = self.data.sort('cl_depth')
+                print(f"Dataset sorted by cl_depth in ascending order")
+            else:
+                print("Warning: cl_depth column not found, skipping sort")
         
     def __len__(self):
         return len(self.data)
@@ -177,39 +187,6 @@ class Cell2TextDataset(Dataset):
                 raise ValueError(f"Invalid mode: {mode}")
 
         return collate
-
-class CurriculumCell2TextDataset(Cell2TextDataset):
-    def __init__(self, data_path, tokenizer, geneformer_tokenizer=None, 
-                 system_message="You are a scientific assistant specialized in analyzing single-cell gene expression data. Given the gene expression profile, describe the cell type and its characteristics clearly and concisely in professional language.",
-                 placeholder_token='<|reserved_special_token_1|>', top_k=None, projector="mlp", num_latents=None,
-                 max_depth=None):
-        """
-        Curriculum learning dataset that filters by CL ontology depth
-        Args:
-            max_depth: Maximum CL depth to include in current curriculum step
-        """
-        super().__init__(data_path, tokenizer, geneformer_tokenizer, system_message, placeholder_token, top_k, projector, num_latents)
-        self.max_depth = max_depth
-        self.full_data = self.data
-        
-        if max_depth is not None:
-            self._filter_by_depth()
-    
-    def _filter_by_depth(self):
-        """Filter dataset to only include samples with cl_length <= max_depth"""
-        filtered_indices = []
-        for idx in range(len(self.full_data)):
-            if self.full_data[idx].get('cl_length', float('inf')) <= self.max_depth:
-                filtered_indices.append(idx)
-        
-        # Create filtered dataset
-        self.data = self.full_data.select(filtered_indices)
-        print(f"Curriculum step: Using {len(self.data)} samples with depth <= {self.max_depth}")
-    
-    def update_curriculum_step(self, new_max_depth):
-        """Update the curriculum step to include more complex samples"""
-        self.max_depth = new_max_depth
-        self._filter_by_depth()
 
 class SanityDataset(Dataset):
     """Wrapper to create a small subset of data for sanity check"""

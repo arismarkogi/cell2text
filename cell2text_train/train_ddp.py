@@ -109,15 +109,24 @@ class Cell2TextDDPTrainer:
         full_train_dataset = Cell2TextDataset(self.args.train_data_path,
                                                self.tokenizer, top_k=top_k, 
                                                projector=self.args.projector, 
-                                               num_latents=self.args.num_latents)
+                                               num_latents=self.args.num_latents,
+                                               sort_by_depth=self.args.sort_by_depth)
         
         if self.args.mode == "sanity":
             # Create small subset for sanity check
             sanity_dataset = SanityDataset(full_train_dataset, num_samples=self.args.num_samples, seed=self.args.seed)
             
-            # Create samplers for DDP
             if self.world_size > 1:
-                train_sampler = DistributedSampler(sanity_dataset, num_replicas=self.world_size, rank=self.rank)
+                train_sampler = DistributedSampler(full_train_dataset, num_replicas=self.world_size, rank=self.rank, shuffle=False)
+                
+                # 👇 Log the assigned indices for this rank
+                if self.is_main_process:
+                    print(f"[Rank {self.rank}] Train sampler total size: {train_sampler.total_size}")
+                    print(f"[Rank {self.rank}] First 10 train indices: {train_sampler.indices[:10]}")
+                    print(f"[Rank {self.rank}] First 10 train indices: {train_sampler["cl_depth"][:10]}")
+                else:
+                    train_sampler = None
+
                 val_sampler = DistributedSampler(sanity_dataset, num_replicas=self.world_size, rank=self.rank, shuffle=False)
             else:
                 train_sampler = None
@@ -126,7 +135,7 @@ class Cell2TextDDPTrainer:
             self.train_loader = DataLoader(
                 sanity_dataset, 
                 batch_size=self.args.batch_size_per_device, 
-                shuffle=(train_sampler is None),
+                shuffle=False,
                 sampler=train_sampler,
                 num_workers=0,
                 collate_fn=full_train_dataset.collate_fn(mode="train")
@@ -153,7 +162,7 @@ class Cell2TextDDPTrainer:
             self.train_loader = DataLoader(
                 full_train_dataset, 
                 batch_size=self.args.batch_size_per_device, 
-                shuffle=(train_sampler is None),
+                shuffle=False,
                 sampler=train_sampler,
                 num_workers=0,
                 collate_fn=full_train_dataset.collate_fn(mode="train")

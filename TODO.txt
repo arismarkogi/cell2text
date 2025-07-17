@@ -8,7 +8,9 @@ Training only with torch distributed
 Models liek cell2sentence, Instructcell find their limitations, take their checkpoints
 PIpeline to get the h5ad downstream datasets to work for my models
 Gene-Gene interaction networks, to fuse the representation learning
-Novel Cell type classification task, probably find a way to give marker genes somehow in the input (at the prompt????)
+In the evaluation strategy for cell type classification, do what the langcell does at zero shot script
+Probably get a bigger dataset
+Find downstream tasks to evaluate the model
 
 
 
