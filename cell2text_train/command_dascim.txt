@@ -17,7 +17,7 @@ python3 /home/arism/cell2text/cell2text_train/train_ddp.py \
     --num_latents 128 \
     --num_heads 2 \
     --ff_mult 1.5 \
-    --eval_steps 3300 \
+    --eval_steps 1650 \
     --zero_stage 1 \
     --lora_r_decoder 16 \
     --sort_by_depth True

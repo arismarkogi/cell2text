@@ -159,7 +159,7 @@ def create_argument_parser():
                         help="Number of steps without improvement before early stopping (0 to disable)")
     parser.add_argument("--save_model", type=bool, default=True,
                         help="Save model checkpoints")
-    parser.add_argument('--sort_by_depth', type=bool, default=False, 
+    parser.add_argument('--sort_by_depth', type=bool, default=True, 
                     help='Sort training data by cl_depth in ascending order')
 
     return parser
