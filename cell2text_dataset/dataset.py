@@ -51,12 +51,10 @@ class Cell2TextDataset(Dataset):
             else:
                 return {'cl_depth_new': 3}
 
-        # Add the new int-based bin column
-        self.data = self.data.map(assign_depth_bin, desc="Assigning cl_depth bins")
-
         # Sort directly by the new int column
         if sort_by_depth:
-            if 'cl_depth_new' in self.data.column_names:
+            if 'cl_depth' in self.data.column_names:
+                self.data = self.data.map(assign_depth_bin, desc="Assigning cl_depth bins")
                 self.data = self.data.sort('cl_depth_new')
                 print("Dataset sorted by cl_depth_new (0=shallow, ..., 3=deep)")
             else:
