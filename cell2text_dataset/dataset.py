@@ -43,24 +43,25 @@ class Cell2TextDataset(Dataset):
         def assign_depth_bin(example):
             depth = example['cl_depth']
             if depth <= 2:
-                return {'cl_depth_new': 'shallow'}
+                return {'cl_depth_new': 0}
             elif depth <= 4:
-                return {'cl_depth_new': 'medium_shallow'}
+                return {'cl_depth_new': 1}
             elif depth <= 6:
-                return {'cl_depth_new': 'medium_deep'}
+                return {'cl_depth_new': 2}
             else:
-                return {'cl_depth_new': 'deep'}
+                return {'cl_depth_new': 3}
 
-        # Apply the binning function to create the new column
-        self.data = self.data.map(assign_depth_bin)
+        # Add the new int-based bin column
+        self.data = self.data.map(assign_depth_bin, desc="Assigning cl_depth bins")
 
-        # Sort by the new column if needed
+        # Sort directly by the new int column
         if sort_by_depth:
-            # Optional: Define custom order for sorting
-            bin_order = {'shallow': 0, 'medium_shallow': 1, 'medium_deep': 2, 'deep': 3}
-            self.data = self.data.map(lambda x: {'depth_sort_order': bin_order[x['cl_depth_new']]})
-            self.data = self.data.sort('depth_sort_order')
-            print("Dataset sorted by cl_depth_new in bin order")
+            if 'cl_depth_new' in self.data.column_names:
+                self.data = self.data.sort('cl_depth_new')
+                print("Dataset sorted by cl_depth_new (0=shallow, ..., 3=deep)")
+            else:
+                print("Warning: cl_depth_new not found, skipping sort")
+
 
 
         
