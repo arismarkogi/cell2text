@@ -40,13 +40,29 @@ class Cell2TextDataset(Dataset):
         self.top_k = top_k
         self.num_latents = num_latents
         
-        # Sort by cl_depth if requested
-        if sort_by_depth:
-            if 'cl_depth' in self.data.column_names:
-                    self.data = self.data.sort('cl_depth')
-                    print(f"Dataset sorted by cl_depth in ascending order")
+        def assign_depth_bin(example):
+            depth = example['cl_depth']
+            if depth <= 2:
+                return {'cl_depth_new': 'shallow'}
+            elif depth <= 4:
+                return {'cl_depth_new': 'medium_shallow'}
+            elif depth <= 6:
+                return {'cl_depth_new': 'medium_deep'}
             else:
-                print("Warning: cl_depth column not found, skipping sort")
+                return {'cl_depth_new': 'deep'}
+
+        # Apply the binning function to create the new column
+        self.data = self.data.map(assign_depth_bin)
+
+        # Sort by the new column if needed
+        if sort_by_depth:
+            # Optional: Define custom order for sorting
+            bin_order = {'shallow': 0, 'medium_shallow': 1, 'medium_deep': 2, 'deep': 3}
+            self.data = self.data.map(lambda x: {'depth_sort_order': bin_order[x['cl_depth_new']]})
+            self.data = self.data.sort('depth_sort_order')
+            print("Dataset sorted by cl_depth_new in bin order")
+
+
         
     def __len__(self):
         return len(self.data)
