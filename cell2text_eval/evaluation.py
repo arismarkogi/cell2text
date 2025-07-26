@@ -364,7 +364,8 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                            use_bertscore: bool = True,
                            create_confusion_matrix_plot: bool = True,
                            confusion_matrix_path: str = None,
-                           wrong_predictions_report_path: str = None):
+                           wrong_predictions_report_path: str = None,
+                           similarity_file_path: str ="/home/arism/datasets/cell_type_similarities.pkl"):
     """
     Enhanced evaluation function for DDP training with BERTScore support, confusion matrix, and wrong predictions analysis
     """
@@ -395,7 +396,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     smooth = SmoothingFunction().method4
     
     # For cell type evaluation
-    cell_extractor = CellTypeExtractor()
+    cell_extractor = CellTypeExtractor(similarity_file_path)
     predicted_cell_types = []
     target_cell_types = []
     
@@ -613,7 +614,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     
     # Calculate cell type metrics
     cell_type_metrics = calculate_cell_type_metrics(
-        predicted_cell_types, target_cell_types, "home/arism/datasets/cell_type_similarities.pkl" ,global_matches, global_total
+        predicted_cell_types, target_cell_types, similarity_file_path ,global_matches, global_total
     )
     
     # Analyze wrong predictions (only on main process)
@@ -656,7 +657,10 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         print(f"  Precision: {cell_type_metrics['precision']:.4f}")
         print(f"  Recall: {cell_type_metrics['recall']:.4f}")
         print(f"  Total Samples: {cell_type_metrics['total_samples']}")
-        
+        if 'ontology_aware_accuracy' in cell_type_metrics:
+            print(f"  Ontology-Aware Accuracy: {cell_type_metrics['ontology_aware_accuracy']:.4f}")
+            print(f"  Ontology Similarity Score: {cell_type_metrics['ontology_similarity_score']:.4f}")
+                
         # Print wrong predictions analysis
         if wrong_pred_analysis:
             print(f"\n{'='*60}")
@@ -719,7 +723,9 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                     'bert_score_recall': convert_json_compat(avg_bert_recall),
                     'bert_score_f1': convert_json_compat(avg_bert_f1),
                     'validation_loss': convert_json_compat(avg_loss),
-                    'cell_type_metrics': convert_json_compat(cell_type_metrics)
+                    'cell_type_metrics': convert_json_compat(cell_type_metrics),
+                    'ontology_aware_accuracy': convert_json_compat(cell_type_metrics.get('ontology_aware_accuracy')),  # Add this
+                    'ontology_similarity_score': convert_json_compat(cell_type_metrics.get('ontology_similarity_score'))  # Add this
                 },
                 'examples': convert_json_compat(examples),
                 'cell_type_distribution': {

@@ -152,7 +152,8 @@ def run_evaluation(rank, world_size, args):
         print_examples=args.print_examples if rank == 0 else 0,
         save_results=args.save_results if rank == 0 else None,
         use_ddp=True,
-        use_bertscore=args.use_bertscore
+        use_bertscore=args.use_bertscore,
+        similarity_file_path=args.similarity_file_path  # Add this line
     )
     
     # Only print results on rank 0
@@ -174,6 +175,10 @@ def run_evaluation(rank, world_size, args):
         print(f"Cell Type F1 Score: {results['cell_type_f1']:.4f}")
         print(f"Cell Type Precision: {results['cell_type_precision']:.4f}")
         print(f"Cell Type Recall: {results['cell_type_recall']:.4f}")
+
+        if 'ontology_aware_accuracy' in results:
+            print(f"Ontology-Aware Accuracy: {results['ontology_aware_accuracy']:.4f}")
+            print(f"Ontology Similarity Score: {results['ontology_similarity_score']:.4f}")
         
         # Save summary results
         if args.save_results:
@@ -285,7 +290,9 @@ def main():
     
     parser.add_argument("--use_bertscore", type=bool, default=True,
                         help="Whether to compute BERTScore")
-    
+    parser.add_argument("--similarity_file_path", type=str, 
+                    default="/home/arism/datasets/cell_type_similarities.pkl",
+                    help="Path to precomputed cell type similarities file")
     
     args = parser.parse_args()
     

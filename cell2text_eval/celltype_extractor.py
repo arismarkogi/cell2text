@@ -7,7 +7,7 @@ import numpy as np
 class CellTypeExtractor:
     """Extract cell types and calculate ontology-aware metrics"""
     
-    def __init__(self, similarity_file_path=None):
+    def __init__(self, similarity_file_path="/home/arism/datasets/cell_type_similarities.pkl"):
         # Original patterns
         self.cell_type_patterns = [
             r"consists of a ([^,\.]+?)(?:,|\.|$)",
@@ -112,7 +112,7 @@ class CellTypeExtractor:
         return np.mean(similarities) if similarities else 0.0
 
 
-def calculate_cell_type_metrics(predicted_types, target_types, similarity_file_path=None, 
+def calculate_cell_type_metrics(predicted_types, target_types, similarity_file_path="/home/arism/datasets/cell_type_similarities.pkl", 
                                        global_matches=None, global_total=None):
     """Calculate both traditional and ontology-aware metrics"""
     
