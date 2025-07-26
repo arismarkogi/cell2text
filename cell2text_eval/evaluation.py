@@ -613,7 +613,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     
     # Calculate cell type metrics
     cell_type_metrics = calculate_cell_type_metrics(
-        predicted_cell_types, target_cell_types, global_matches, global_total
+        predicted_cell_types, target_cell_types, "home/arism/datasets/cell_type_similarities.pkl" ,global_matches, global_total
     )
     
     # Analyze wrong predictions (only on main process)
