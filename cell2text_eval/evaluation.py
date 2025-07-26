@@ -631,7 +631,6 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         print(f"  F1 Score: {cell_type_metrics['f1']:.4f}")
         print(f"  Precision: {cell_type_metrics['precision']:.4f}")
         print(f"  Recall: {cell_type_metrics['recall']:.4f}")
-        print(f"  Ontology-Aware Accuracy: {cell_type_metrics.get('ontology_aware_accuracy', 0.0):.4f}")  # Ensure it's printed
         print(f"  Ontology Similarity Score: {cell_type_metrics.get('ontology_similarity_score', 0.0):.4f}")  # Ensure it's printed
         print(f"  Total Samples: {cell_type_metrics['total_samples']}")
                 
@@ -699,7 +698,6 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                     'bert_score_f1': convert_json_compat(avg_bert_f1),
                     'validation_loss': convert_json_compat(avg_loss),
                     'cell_type_metrics': convert_json_compat(cell_type_metrics),
-                    'ontology_aware_accuracy': convert_json_compat(cell_type_metrics.get('ontology_aware_accuracy', 0.0)),
                     'ontology_similarity_score': convert_json_compat(cell_type_metrics.get('ontology_similarity_score', 0.0))
                 },
                 'examples': convert_json_compat(examples),
@@ -726,7 +724,6 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         'cell_type_f1': cell_type_metrics['f1'],
         'cell_type_precision': cell_type_metrics['precision'],
         'cell_type_recall': cell_type_metrics['recall'],
-        'ontology_aware_accuracy': cell_type_metrics.get('ontology_aware_accuracy', 0.0),  # Add to return dict
         'ontology_similarity_score': cell_type_metrics.get('ontology_similarity_score', 0.0),  # Add to return dict
         'total_samples': total_bleu_samples if use_ddp and world_size > 1 else len(bleu_scores),
         'wrong_predictions_analysis': wrong_pred_analysis,

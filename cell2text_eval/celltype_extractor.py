@@ -78,26 +78,7 @@ class CellTypeExtractor:
         
         return 0.0
     
-    def calculate_ontology_aware_accuracy(self, predicted_types, target_types, similarity_threshold=2.0):
-        """Calculate accuracy considering ontology similarities"""
-        if not predicted_types or not target_types:
-            return 0.0
-        
-        if self.similarities is None:
-            # Fallback to exact match
-            return sum(1 for p, t in zip(predicted_types, target_types) if p == t) / len(target_types)
-        
-        correct = 0
-        for pred, target in zip(predicted_types, target_types):
-            if pred == target:
-                correct += 1
-            else:
-                # Check if they're similar enough in ontology
-                similarity = self.get_ontology_similarity(pred, target)
-                if similarity >= similarity_threshold:
-                    correct += 1
-        
-        return correct / len(target_types)
+    
     
     def calculate_ontology_similarity_score(self, predicted_types, target_types):
         """Calculate average ontology similarity between predictions and targets"""
@@ -126,7 +107,6 @@ def calculate_cell_type_metrics(predicted_types, target_types, similarity_file_p
             'f1': accuracy,
             'precision': accuracy,
             'recall': accuracy,
-            'ontology_aware_accuracy': accuracy,  # Approximation
             'ontology_similarity_score': 0.0,
             'total_samples': global_total
         }
@@ -144,7 +124,6 @@ def calculate_cell_type_metrics(predicted_types, target_types, similarity_file_p
         f1 = precision = recall = accuracy
     
     # Ontology-aware metrics
-    ontology_accuracy = extractor.calculate_ontology_aware_accuracy(predicted_types, target_types)
     similarity_score = extractor.calculate_ontology_similarity_score(predicted_types, target_types)
     
     return {
@@ -152,7 +131,6 @@ def calculate_cell_type_metrics(predicted_types, target_types, similarity_file_p
         'f1': f1,
         'precision': precision,
         'recall': recall,
-        'ontology_aware_accuracy': ontology_accuracy,
         'ontology_similarity_score': similarity_score,
         'total_samples': len(target_types)
     }
