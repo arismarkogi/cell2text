@@ -99,17 +99,6 @@ def calculate_cell_type_metrics(predicted_types, target_types, similarity_file_p
     
     extractor = CellTypeExtractor(similarity_file_path)
     
-    # Handle distributed case
-    if global_matches is not None and global_total is not None:
-        accuracy = global_matches / global_total if global_total > 0 else 0
-        return {
-            'accuracy': accuracy,
-            'f1': accuracy,
-            'precision': accuracy,
-            'recall': accuracy,
-            'ontology_similarity_score': 0.0,
-            'total_samples': global_total
-        }
     
     # Traditional metrics
     exact_matches = sum(1 for t, p in zip(target_types, predicted_types) if t == p)
