@@ -175,9 +175,7 @@ def run_evaluation(rank, world_size, args):
         print(f"Cell Type F1 Score: {results['cell_type_f1']:.4f}")
         print(f"Cell Type Precision: {results['cell_type_precision']:.4f}")
         print(f"Cell Type Recall: {results['cell_type_recall']:.4f}")
-
-        if 'ontology_aware_accuracy' in results:
-            print(f"Ontology-Aware Accuracy: {results['ontology_aware_accuracy']:.4f}")
+        if results['ontology_similarity_score']:
             print(f"Ontology Similarity Score: {results['ontology_similarity_score']:.4f}")
         
         # Save summary results
