@@ -423,35 +423,6 @@ def evaluate_cell2text_model(model: Cell2TextModel,
             
             # Calculate loss if we have target descriptions
             val_loss = None
-            # if "description_input_ids" in batch and batch["description_input_ids"] is not None:
-            #     description_ids = batch["description_input_ids"].to(device)
-                
-            #     # Create combined input and labels for loss calculation
-            #     combined_input_ids = torch.cat([text_input_ids, description_ids], dim=1)
-            #     combined_attention_mask = torch.cat([
-            #         text_attention_mask, 
-            #         torch.ones_like(description_ids, dtype=torch.bool)
-            #     ], dim=1)
-                
-            #     # Create labels: ignore prompt tokens (-100), use description tokens for loss
-            #     prompt_labels = torch.full_like(text_input_ids, fill_value=-100)
-            #     combined_labels = torch.cat([prompt_labels, description_ids], dim=1)
-                
-            #     # Forward pass with labels for loss calculation
-            #     try:
-            #         outputs = model(
-            #             expression_tokens=expression_tokens,
-            #             expression_token_lengths=expression_token_lengths,
-            #             input_ids=combined_input_ids,
-            #             attention_mask=combined_attention_mask,
-            #             labels=combined_labels,
-            #             return_dict=True
-            #         )
-            #         val_loss = outputs.loss.item()
-            #         val_losses.append(val_loss)
-            #     except Exception as e:
-            #         if is_main_process:
-            #             print(f"Warning: Could not calculate loss - {e}")
             
             # Generate descriptions
             generated = model.generate_cell_description(
@@ -507,6 +478,9 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                 
                 # Store example (only on main process to avoid duplicates)
                 if is_main_process:
+                    # Calculate ontology similarity for this example
+                    ont_similarity = cell_extractor.get_ontology_similarity(pred_cell_type, target_cell_type)
+                    
                     example = {
                         'batch_idx': batch_idx,
                         'sample_idx': j,
@@ -516,6 +490,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                         'predicted_cell_type': pred_cell_type,
                         'target_cell_type': target_cell_type,
                         'cell_type_match': pred_cell_type == target_cell_type,
+                        'ontology_similarity': ont_similarity,  # Add ontology similarity per example
                         'loss': val_loss
                     }
                     examples.append(example)
@@ -656,10 +631,9 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         print(f"  F1 Score: {cell_type_metrics['f1']:.4f}")
         print(f"  Precision: {cell_type_metrics['precision']:.4f}")
         print(f"  Recall: {cell_type_metrics['recall']:.4f}")
+        print(f"  Ontology-Aware Accuracy: {cell_type_metrics.get('ontology_aware_accuracy', 0.0):.4f}")  # Ensure it's printed
+        print(f"  Ontology Similarity Score: {cell_type_metrics.get('ontology_similarity_score', 0.0):.4f}")  # Ensure it's printed
         print(f"  Total Samples: {cell_type_metrics['total_samples']}")
-        if 'ontology_aware_accuracy' in cell_type_metrics:
-            print(f"  Ontology-Aware Accuracy: {cell_type_metrics['ontology_aware_accuracy']:.4f}")
-            print(f"  Ontology Similarity Score: {cell_type_metrics['ontology_similarity_score']:.4f}")
                 
         # Print wrong predictions analysis
         if wrong_pred_analysis:
@@ -695,6 +669,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
             print(f"Target Cell Type: '{example['target_cell_type']}'")
             print(f"Predicted Cell Type: '{example['predicted_cell_type']}'")
             print(f"Cell Type Match: {'✓' if example['cell_type_match'] else '✗'}")
+            print(f"Ontology Similarity: {example.get('ontology_similarity', 0.0):.4f}")  # Add ontology similarity to examples
             if example['loss'] is not None:
                 print(f"Loss: {example['loss']:.4f}")
         
@@ -724,8 +699,8 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                     'bert_score_f1': convert_json_compat(avg_bert_f1),
                     'validation_loss': convert_json_compat(avg_loss),
                     'cell_type_metrics': convert_json_compat(cell_type_metrics),
-                    'ontology_aware_accuracy': convert_json_compat(cell_type_metrics.get('ontology_aware_accuracy')),  # Add this
-                    'ontology_similarity_score': convert_json_compat(cell_type_metrics.get('ontology_similarity_score'))  # Add this
+                    'ontology_aware_accuracy': convert_json_compat(cell_type_metrics.get('ontology_aware_accuracy', 0.0)),
+                    'ontology_similarity_score': convert_json_compat(cell_type_metrics.get('ontology_similarity_score', 0.0))
                 },
                 'examples': convert_json_compat(examples),
                 'cell_type_distribution': {
@@ -751,6 +726,8 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         'cell_type_f1': cell_type_metrics['f1'],
         'cell_type_precision': cell_type_metrics['precision'],
         'cell_type_recall': cell_type_metrics['recall'],
+        'ontology_aware_accuracy': cell_type_metrics.get('ontology_aware_accuracy', 0.0),  # Add to return dict
+        'ontology_similarity_score': cell_type_metrics.get('ontology_similarity_score', 0.0),  # Add to return dict
         'total_samples': total_bleu_samples if use_ddp and world_size > 1 else len(bleu_scores),
         'wrong_predictions_analysis': wrong_pred_analysis,
         'confusion_matrix': confusion_matrix_df.to_dict() if confusion_matrix_df is not None else None,
