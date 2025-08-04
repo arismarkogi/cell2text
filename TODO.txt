@@ -1,14 +1,9 @@
 Maybe find a better prompt at dataset.py
-token dictionary path, fix this probably to NOT pass as argument in the trian scripts
+token dictionary path, fix this probably to NOT pass as argument in the train scripts
 Change the dataset creation scripts probably, 2 issues i) cancer cells, ii) multiple sequencing technilogies  (check scCello appendix).
-add some of the generated text descriptions at the validation.json
-Rewrite training with Accelerate 
 For drug responsiveness from scdeal.zip GSE117872, GSE149383
-Training only with torch distributed
-Models liek cell2sentence, Instructcell find their limitations, take their checkpoints
 PIpeline to get the h5ad downstream datasets to work for my models
 Gene-Gene interaction networks, to fuse the representation learning
-In the evaluation strategy for cell type classification, do what the langcell does at zero shot script
 Probably get a bigger dataset
 Find downstream tasks to evaluate the model
 
