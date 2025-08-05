@@ -14,57 +14,144 @@ import anndata
 # Connect to CELLxGENE API
 census = cellxgene_census.open_soma()
 
+import re
+from typing import Optional
+
 def map_dev_stage(stage: str) -> str:
-    if not isinstance(stage, str):
+    """
+    Map developmental stage to standardized categories.
+    
+    Categories:
+    - prenatal: embryonic/fetal development
+    - infant: 0-2 years
+    - child: 2-15 years  
+    - young_adult: 15-30 years
+    - adult: 30-60 years
+    - aged: 60+ years
+    - unknown: cannot determine
+    """
+    
+    if not isinstance(stage, str) or not stage.strip():
         return "unknown"
-
-    stage = stage.lower()
-
-    # Prenatal terms
-    if "post-fertilization" in stage or "blastula" in stage or "gastrula" in stage:
+    
+    stage = stage.lower().strip()
+    
+    # Handle empty or unknown cases
+    if stage in ['unknown', '', 'na', 'n/a', 'null']:
+        return "unknown"
+    
+    # Prenatal/Embryonic stages
+    prenatal_patterns = [
+        r'blastula', r'gastrula', r'embryonic', r'organogenesis',
+        r'post-fertilization', r'carnegie stage', r'lmp month',
+        r'fetal', r'prenatal', r'gestation'
+    ]
+    
+    if any(re.search(pattern, stage) for pattern in prenatal_patterns):
         return "prenatal"
-
-    # Try to extract an age and unit (year, month, week)
-    match = re.search(r"(\d+)[-\s]*(year|month|week)", stage)
-    if match:
-        value = int(match.group(1))
-        unit = match.group(2)
-
-        if unit == "week":
-            return "prenatal"  # still in gestation
+    
+    # Extract numeric age with units
+    # Handle formats like "5-year-old", "3 years", "12 months", "8 weeks"
+    age_match = re.search(r'(\d+)[-\s]*(year|month|week|day)s?[-\s]*old|\b(\d+)[-\s]*(year|month|week|day)s?\b', stage)
+    
+    if age_match:
+        # Get the numeric value and unit
+        value = int(age_match.group(1) or age_match.group(3))
+        unit = (age_match.group(2) or age_match.group(4)).lower()
+        
+        # Convert everything to years for easier comparison
+        if unit == "day":
+            age_years = value / 365.25
+        elif unit == "week":
+            age_years = value / 52.18
         elif unit == "month":
-            if value <= 12:
-                return "child"
-            elif value <= 360:  # 20 years
-                return "young_adult"
-            elif value <= 720:  # 60 years
-                return "adult"
-            else:
-                return "aged"
+            age_years = value / 12
         elif unit == "year":
-            if value <= 12:
+            age_years = value
+        else:
+            age_years = None
+            
+        if age_years is not None:
+            if age_years < 2:
+                return "infant"
+            elif age_years < 15:
                 return "child"
-            elif value <= 30:
+            elif age_years < 30:
                 return "young_adult"
-            elif value <= 60:
+            elif age_years < 60:
                 return "adult"
             else:
                 return "aged"
-
-    # Fallback: try to infer from known string patterns
-    if "child" in stage:
-        return "child"
-    if "adult" in stage:
-        if "young" in stage:
+    
+    # Handle decade-based descriptions
+    decade_mappings = {
+        r'first decade|0-10': 'child',
+        r'second decade|10-20': 'young_adult',
+        r'third decade|20-30': 'young_adult',
+        r'fourth decade|30-40': 'adult',
+        r'fifth decade|40-50': 'adult',
+        r'sixth decade|50-60': 'adult',
+        r'seventh decade|60-70': 'aged',
+        r'eighth decade|70-80': 'aged',
+        r'ninth decade|80-90': 'aged'
+    }
+    
+    for pattern, category in decade_mappings.items():
+        if re.search(pattern, stage):
+            return category
+    
+    # Handle stage-based descriptions
+    stage_mappings = {
+        # Infant stages
+        r'newborn|neonatal|infant(?!ile)': 'infant',
+        
+        # Child stages
+        r'child(?!birth)|juvenile|pediatric|toddler': 'child',
+        r'adolescent|teenage|teen': 'child',  # Late childhood/adolescence
+        
+        # Adult stages
+        r'young adult': 'young_adult',
+        r'prime adult|adult(?!escence)': 'adult',
+        r'middle.?aged': 'adult',
+        
+        # Elderly stages
+        r'elderly|aged|senior|geriatric': 'aged',
+        r'late adult': 'aged',
+        r'very elderly|advanced age': 'aged'
+    }
+    
+    for pattern, category in stage_mappings.items():
+        if re.search(pattern, stage):
+            return category
+    
+    # Handle specific age ranges (e.g., "60-79 year-old", "80+")
+    range_match = re.search(r'(\d+)[-–](\d+)|(\d+)\+', stage)
+    if range_match:
+        if range_match.group(3):  # "80+" format
+            start_age = int(range_match.group(3))
+        else:  # "60-79" format
+            start_age = int(range_match.group(1))
+            
+        if start_age < 2:
+            return "infant"
+        elif start_age < 15:
+            return "child"
+        elif start_age < 30:
             return "young_adult"
-        return "adult"
-    if "aged" in stage or "elderly" in stage:
-        return "aged"
-
+        elif start_age < 60:
+            return "adult"
+        else:
+            return "aged"
+    
+    # Handle postnatal (general term for after birth)
+    if 'postnatal' in stage:
+        return "infant"  # Default to infant for general postnatal
+    
     return "unknown"
 
+
 # Get only the metadata of cell from the database to
-obs_df = cellxgene_census.get_obs(census, "homo_sapiens", column_names=["soma_joinid", "development_stage", "disease", "dataset_id", "donor_id", "sex", "tissue", "tissue_general", "cell_type", "is_primary_data"])
+obs_df = cellxgene_census.get_obs(census, "homo_sapiens", column_names=["soma_joinid", "development_stage", "disease", "assay","dataset_id", "donor_id", "sex", "tissue", "tissue_general", "cell_type", "is_primary_data"])
 
 # Apply binning at development stage
 obs_df["dev_stage_group"] = obs_df["development_stage"].apply(map_dev_stage)
@@ -77,6 +164,16 @@ excluded_dataset_ids = [
 
 ]
 
+excluded_assays = [
+    "Smart-seq", "Smart-seq2", "Smart-seq3", "Smart-seq v4",  # Full-length protocols
+    "CEL-seq2", "Quartz-seq", "MARS-seq", "SORT-seq",         # Rare and/or niche protocols
+    "GEXSCOPE technology",                                     # Proprietary, very low usage
+    "BD Rhapsody Targeted mRNA",                               # Targeted, not full transcriptome
+    "10x gene expression flex"                                 # Low prevalence + differences
+]
+
+
+
 # Apply any filtering & sampling logic here
 filtered = obs_df[
     #obs_df["sex"].isin(["male", "female"]) &
@@ -88,15 +185,16 @@ filtered = obs_df[
     obs_df["cell_type"].ne("unknown") &
     obs_df["cell_type"].notna() &
     obs_df["is_primary_data"] == True & # removes duplicate entries from the dataset
-    ~obs_df["dataset_id"].isin(excluded_dataset_ids)
+    ~obs_df["dataset_id"].isin(excluded_dataset_ids) & 
+    ~obs_df["assay"].isin(excluded_assays)
 ]
 
 
 del obs_df
-print(filtered)
+
 
 # Target number of cells
-target_total = 310000
+target_total = 510000
 
 # Define our sampling strategy percentages with adjustments
 pct_distribution = 0.30
@@ -118,7 +216,7 @@ tissue_counts = filtered['tissue_general'].value_counts(normalize=True)
 
 # Adjust our sampling to reflect more realistic proportions
 tissue_adjustment = {
-    'brain': 0.20,  # Cap brain at 20%
+    'brain': 0.20,  # Cap brain at 15%
     'blood': 0.15   # Cap blood at 15%
 }
 
@@ -272,7 +370,7 @@ rare_tissue_cells = filtered[filtered['tissue_general'].isin(rare_tissues)]
 # Combine rare tissue and rare developmental stage cells
 rare_cells = pd.concat([rare_tissue_cells]).drop_duplicates()
 
-if len(rare_cells) > 0:
+if len(rare_cells) > n_rare:
     n_actual_rare = min(len(rare_cells), n_rare)
     rare_sample = rare_cells.sample(n=n_actual_rare, random_state=42)
 else:
@@ -388,11 +486,9 @@ print(f"Number of unique diseases in sample: {final_sample['disease'].nunique()}
 # Save the final sampled dataset
 final_sample.to_csv('balanced_cell_sample.csv', index=False)
 
-
-
-
 join_ids = final_sample["soma_joinid"].tolist()
 sorted_join_ids = sorted(final_sample['soma_joinid'].unique())
+
 
 # Clear variables from memory
 
@@ -404,9 +500,8 @@ for name in list(globals()):
 gc.collect()
 
 
-
 # Define batch size
-batch_size = 500000
+batch_size = 100000000000000
 all_data = []
 
 # Process in batches using ID ranges
@@ -425,7 +520,7 @@ for i in range(0, len(sorted_join_ids), batch_size):
         organism="Homo sapiens",
         obs_value_filter=f"soma_joinid  in [{join_ids_str}]",
         obs_column_names=["soma_joinid", "sex", "tissue", "donor_id", "dataset_id", "tissue_ontology_term_id", "tissue_general", 'tissue_general_ontology_term_id',
-                          "cell_type", "cell_type_ontology_term_id", "disease_ontology_term_id",
+                          "cell_type", "cell_type_ontology_term_id", "disease_ontology_term_id", "assay", "assay_ontology_term_id",
                           "disease", "development_stage"],
         X_name="raw"
     )
