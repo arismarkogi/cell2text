@@ -163,11 +163,11 @@ def create_argument_parser():
                     help='Sort training data by cl_depth in ascending order')
 
     # QFormer arguments
-    parser.add_argument("--qformer_bert_model", type=str, default="dmis-lab/biobert-base-cased-v1.2", 
-                       help="BERT model to use in QFormer")
+    # parser.add_argument("--qformer_bert_model", type=str, default="dmis-lab/biobert-large-cased-v1.1", 
+    #                    help="BERT model to use in QFormer")
     parser.add_argument("--qformer_cross_attention_freq", type=int, default=2,
                        help="Cross-attention frequency in QFormer")
-    parser.add_argument("--qformer_use_flash_attn", action="store_true",
+    parser.add_argument("--qformer_use_flash_attn", type=bool, default=False,
                        help="Use flash attention in QFormer")
     parser.add_argument("--qformer_freeze", type=bool, default=True,
                        help="Freeze QFormer parameters")

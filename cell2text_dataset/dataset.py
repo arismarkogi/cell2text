@@ -31,7 +31,7 @@ class Cell2TextDataset(Dataset):
             top_k: If specified, only use top k gene expression tokens
             sort_by_depth: If True, sort data by cl_depth in ascending order
         """
-        self.data = load_from_disk(data_path).select(range(32))
+        self.data = load_from_disk(data_path).select(range(100))
         self.tokenizer = tokenizer
         self.geneformer_tokenizer = geneformer_tokenizer
         self.system_message = system_message
@@ -74,6 +74,7 @@ class Cell2TextDataset(Dataset):
             expression_ids = sample["input_ids"]
             expression_tokens = torch.tensor(expression_ids, dtype=torch.long)
             expression_token_length = sample["length"]
+
         except KeyError as e:
             raise KeyError(f"Missing gene expression field: {e}")
 

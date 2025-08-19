@@ -44,4 +44,4 @@ def explore_checkpoint(checkpoint_path: str):
         print(f"❌ An error occurred while loading the checkpoint: {e}")
 
 # Example usage:
-explore_checkpoint("/home/arism/deepspeed_training/qformer_queries32_biobertbase_crossattn2_freezebertTrue_lorar32/qformer_queries32_biobertbase_crossattn2_freezebertTrue_lorar32_best_model/training_state.pt")
+explore_checkpoint("/home/arism/deepspeed_training/qformer_queries32_biobertlarge_crossattn2_freezebertTrue_lorar32_foo/qformer_queries32_biobertlarge_crossattn2_freezebertTrue_lorar32_foo_best_model/pytorch_model.bin")

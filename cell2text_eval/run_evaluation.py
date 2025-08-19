@@ -223,7 +223,7 @@ def main():
                         help="Hidden size of MLP projector")
     parser.add_argument("--mlp_dropout", type=float, default=0.1,
                         help="Dropout rate for MLP projector")
-    parser.add_argument("--top_k", type=int, default=256,
+    parser.add_argument("--top_k", type=int, default=32,
                         help="Top k gene expression tokens to use")
     parser.add_argument("--projector", type=str, default="mlp", choices=["mlp", "perceiver", "qformer"],
                         help="Type of projector to use")

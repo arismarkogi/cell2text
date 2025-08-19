@@ -43,7 +43,7 @@ class QFormerProjector(Blip2Base):
         num_query_tokens: int = 32,
         cross_attention_freq: int = 2,
         use_flash_attn: bool = False,
-        num_trainable_layers: int = 3  # Train last 3 layers
+        num_trainable_layers: int = 2  # Train last 3 layers
     ):
         super().__init__()
         

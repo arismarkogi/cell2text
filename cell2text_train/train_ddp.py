@@ -353,7 +353,6 @@ class Cell2TextDDPTrainer:
                 if param.requires_grad:
                     parameters.append({
                         "params": [param],
-                        "lr": self.args.projector_lr
                     })
         
         # Decoder parameters
