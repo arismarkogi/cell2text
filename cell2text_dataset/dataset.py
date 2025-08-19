@@ -18,7 +18,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 class Cell2TextDataset(Dataset):
     def __init__(self, data_path, tokenizer, geneformer_tokenizer=None, 
                  system_message="You are a scientific assistant specialized in analyzing single-cell gene expression data. Given the gene expression profile, describe the cell type and its characteristics clearly and concisely in professional language.",
-                 placeholder_token='<|reserved_special_token_1|>', top_k=None, projector="mlp", num_latents=None,
+                 placeholder_token='<|reserved_special_token_1|>', top_k=None, projector="qformer", num_latents=None,
                  sort_by_depth=False):
         """
         Dataset for cell expression data
@@ -31,7 +31,7 @@ class Cell2TextDataset(Dataset):
             top_k: If specified, only use top k gene expression tokens
             sort_by_depth: If True, sort data by cl_depth in ascending order
         """
-        self.data = load_from_disk(data_path)
+        self.data = load_from_disk(data_path).select(range(32))
         self.tokenizer = tokenizer
         self.geneformer_tokenizer = geneformer_tokenizer
         self.system_message = system_message
@@ -40,25 +40,25 @@ class Cell2TextDataset(Dataset):
         self.top_k = top_k
         self.num_latents = num_latents
         
-        def assign_depth_bin(example):
-            depth = example['cl_depth']
-            if depth <= 2:
-                return {'cl_depth_new': 0}
-            elif depth <= 4:
-                return {'cl_depth_new': 1}
-            elif depth <= 6:
-                return {'cl_depth_new': 2}
-            else:
-                return {'cl_depth_new': 3}
+        # def assign_depth_bin(example):
+        #     depth = example['cl_depth']
+        #     if depth <= 2:
+        #         return {'cl_depth_new': 0}
+        #     elif depth <= 4:
+        #         return {'cl_depth_new': 1}
+        #     elif depth <= 6:
+        #         return {'cl_depth_new': 2}
+        #     else:
+        #         return {'cl_depth_new': 3}
 
-        # Sort directly by the new int column
-        if sort_by_depth:
-            if 'cl_depth' in self.data.column_names:
-                self.data = self.data.map(assign_depth_bin, desc="Assigning cl_depth bins")
-                self.data = self.data.sort('cl_depth_new')
-                print("Dataset sorted by cl_depth_new (0=shallow, ..., 3=deep)")
-            else:
-                print("Warning: cl_depth_new not found, skipping sort")
+        # # Sort directly by the new int column
+        # if sort_by_depth:
+        #     if 'cl_depth' in self.data.column_names:
+        #         self.data = self.data.map(assign_depth_bin, desc="Assigning cl_depth bins")
+        #         self.data = self.data.sort('cl_depth_new')
+        #         print("Dataset sorted by cl_depth_new (0=shallow, ..., 3=deep)")
+        #     else:
+        #         print("Warning: cl_depth_new not found, skipping sort")
 
 
 
@@ -84,7 +84,7 @@ class Cell2TextDataset(Dataset):
         description = sample["natural_desc"]
         
         # Create chat template with placeholder tokens
-        if self.projector == "mlp" and self.top_k is not None:
+        if (self.projector == "mlp" or self.projector == "qformer") and self.top_k is not None:
                 placeholder_length = min(len(expression_ids), self.top_k)
         
         elif self.projector == "perceiver" and self.num_latents is not None:

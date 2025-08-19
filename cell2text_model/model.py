@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any
 import os
 from safetensors.torch import load_file
 
-from .projectors import  MLPProjectionLayer, PerceiverIO
+from .projectors import  MLPProjectionLayer, PerceiverIO, QFormerProjector
 from .geneformer_encoder import GeneformerModel, GeneformerConfig
 from .llama_decoder import Cell2TextLlamaModel, Cell2TextLlamaConfig
 
@@ -76,6 +76,17 @@ class Cell2TextModel(PreTrainedModel):
                 ff_mult=config.ff_mult,
                 dropout=config.perceiver_dropout,
                 use_position_encoding=config.use_position_encoding
+            )
+        
+        elif self.projector == "qformer":  
+            self.cell_to_embedding = QFormerProjector(
+                input_dim=self.cell_encoder_hidden_size,
+                output_dim=self.decoder_hidden_size,
+                num_query_tokens=config.top_k,  # Use top_k as number of queries
+                #bert_model_name=getattr(config, 'qformer_bert_model', 'dmis-lab/biobert-base-cased-v1.2'),
+                cross_attention_freq=getattr(config, 'qformer_cross_attention_freq', 2),
+                use_flash_attn=getattr(config, 'qformer_use_flash_attn', True),
+                #freeze_qformer=getattr(config, 'qformer_freeze', True)
             )
         
         self.config = config

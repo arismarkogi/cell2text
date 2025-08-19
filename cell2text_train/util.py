@@ -65,7 +65,7 @@ def create_argument_parser():
                         help="Dropout probability at MLP projector")
     parser.add_argument("--decoder_hidden_size", type=int, default=2048,
                         help="Hidden size of the decoder")
-    parser.add_argument("--top_k", type=int, default=384,
+    parser.add_argument("--top_k", type=int, default=32,
                         help="select the top_k most expressed genes after the Geneformer encoder")
     parser.add_argument("--geneformer_path", type=str, required=True,
                         help="Path to pretrained Geneformer model")
@@ -137,7 +137,7 @@ def create_argument_parser():
                         help="Local rank for distributed training (automatically set by DeepSpeed)")
     
     # Projector type selection
-    parser.add_argument("--projector", type=str, choices=["mlp", "perceiver"], default="mlp",
+    parser.add_argument("--projector", type=str, choices=["mlp", "perceiver", "qformer"], default="mlp",
                         help="Type of projector to use: 'mlp' or 'perceiver'")
     
     # Perceiver-specific parameters
@@ -161,6 +161,16 @@ def create_argument_parser():
                         help="Save model checkpoints")
     parser.add_argument('--sort_by_depth', type=bool, default=False, 
                     help='Sort training data by cl_depth in ascending order')
+
+    # QFormer arguments
+    parser.add_argument("--qformer_bert_model", type=str, default="dmis-lab/biobert-base-cased-v1.2", 
+                       help="BERT model to use in QFormer")
+    parser.add_argument("--qformer_cross_attention_freq", type=int, default=2,
+                       help="Cross-attention frequency in QFormer")
+    parser.add_argument("--qformer_use_flash_attn", action="store_true",
+                       help="Use flash attention in QFormer")
+    parser.add_argument("--qformer_freeze", type=bool, default=True,
+                       help="Freeze QFormer parameters")
 
     return parser
 

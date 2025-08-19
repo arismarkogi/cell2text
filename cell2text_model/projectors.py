@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 from einops import repeat
 import math
+from transformers import BertTokenizer, BertModel
+from .blip2_base import Blip2Base  # Assuming you have the blip2_base module available
 
 
 class MLPProjectionLayer(nn.Module):
@@ -28,6 +30,157 @@ class MLPProjectionLayer(nn.Module):
         return self.projection(x)
 
 
+class QFormerProjector(Blip2Base):
+    """
+    QFormer projector with BioBERT-Large, trainable query tokens, 
+    and trainable last few BERT layers
+    """
+    
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        num_query_tokens: int = 32,
+        cross_attention_freq: int = 2,
+        use_flash_attn: bool = False,
+        num_trainable_layers: int = 3  # Train last 3 layers
+    ):
+        super().__init__()
+        
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.num_query_tokens = num_query_tokens
+        self.num_trainable_layers = num_trainable_layers
+        
+        # Hard-coded BioBERT-Large
+        bert_model_name = 'dmis-lab/biobert-large-cased-v1.1'
+        bert_hidden_size = 1024  # BioBERT-Large hidden size
+        
+
+        # Input projection to BioBERT-Large dimension
+        self.input_projection = nn.Linear(input_dim, bert_hidden_size)
+        
+        # Initialize QFormer with BioBERT-Large
+        self.Qformer, self.query_tokens = self.init_Qformer(
+            model_name=bert_model_name,
+            num_query_token=num_query_tokens,
+            graph_width=bert_hidden_size,
+            cross_attention_freq=cross_attention_freq,
+            use_flash_attn=use_flash_attn
+        )
+        
+        # Output projection
+        self.output_projection = nn.Linear(bert_hidden_size, output_dim)
+        
+        # Layer normalization
+        self.ln_cell = nn.LayerNorm(bert_hidden_size)
+        
+        # Configure trainable parameters
+        self._configure_trainable_params()
+        
+        print(f"✓ BioBERT-Large QFormer initialized")
+        print(f"✓ Query tokens: {num_query_tokens} (trainable)")
+        print(f"✓ Trainable BERT layers: last {num_trainable_layers}")
+        self._print_trainable_summary()
+    
+    def _configure_trainable_params(self):
+        """Configure which parameters are trainable"""
+        
+        # 1. Freeze all QFormer parameters initially
+        for param in self.Qformer.parameters():
+            param.requires_grad = False
+        
+        # 2. Make query tokens trainable
+        self.query_tokens.requires_grad = True
+        
+        # 3. Make last N encoder layers trainable
+        total_layers = len(self.Qformer.bert.encoder.layer)
+        trainable_start = total_layers - self.num_trainable_layers
+        
+        for i in range(trainable_start, total_layers):
+            print(f"Making layer {i} trainable")
+            for param in self.Qformer.bert.encoder.layer[i].parameters():
+                param.requires_grad = True
+        
+        # 4. Keep projection layers trainable (they're not part of QFormer)
+        for param in self.input_projection.parameters():
+            param.requires_grad = True
+        for param in self.output_projection.parameters():
+            param.requires_grad = True
+        for param in self.ln_cell.parameters():
+            param.requires_grad = True
+    
+    def _print_trainable_summary(self):
+        """Print summary of trainable parameters"""
+        trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        total_params = sum(p.numel() for p in self.parameters())
+        
+        print(f"Trainable parameters: {trainable_params:,} / {total_params:,} "
+              f"({100 * trainable_params / total_params:.1f}%)")
+        
+        # Breakdown by component
+        query_params = self.query_tokens.numel()
+        proj_params = (sum(p.numel() for p in self.input_projection.parameters()) +
+                      sum(p.numel() for p in self.output_projection.parameters()) +
+                      sum(p.numel() for p in self.ln_cell.parameters()))
+        
+        # Count trainable BERT layers
+        bert_trainable = 0
+        total_layers = len(self.Qformer.bert.encoder.layer)
+        trainable_start = total_layers - self.num_trainable_layers
+        
+        for i in range(trainable_start, total_layers):
+            bert_trainable += sum(p.numel() for p in self.Qformer.bert.encoder.layer[i].parameters())
+        
+        print(f"  • Query tokens: {query_params:,}")
+        print(f"  • Projection layers: {proj_params:,}")
+        print(f"  • BERT layers ({trainable_start}-{total_layers-1}): {bert_trainable:,}")
+    
+    def forward(self, cell_embeddings: torch.Tensor, attention_mask: torch.Tensor = None) -> torch.Tensor:
+        """
+        Forward pass through QFormer projector
+        
+        Args:
+            cell_embeddings: [batch_size, seq_len, input_dim]
+            attention_mask: [batch_size, seq_len] - optional attention mask
+        
+        Returns:
+            [batch_size, num_query_tokens, output_dim]
+        """
+        batch_size = cell_embeddings.size(0)
+        device = cell_embeddings.device
+        
+        # Project input to BioBERT-Large dimension
+        projected_embeddings = self.input_projection(cell_embeddings)
+        projected_embeddings = self.ln_cell(projected_embeddings)
+        
+        # Prepare query tokens
+        query_tokens = self.query_tokens.expand(batch_size, -1, -1).to(device)
+        
+        # Create attention mask if not provided
+        if attention_mask is None:
+            attention_mask = torch.ones(
+                cell_embeddings.size()[:2], 
+                dtype=torch.long, 
+                device=device
+            )
+        
+        # QFormer forward pass
+        query_output = self.Qformer.bert(
+            query_embeds=query_tokens,
+            encoder_hidden_states=projected_embeddings,
+            encoder_attention_mask=attention_mask,
+            use_cache=False,
+            return_dict=True,
+        )
+        
+        # Extract and project query outputs
+        query_embeddings = query_output.last_hidden_state[:, :self.num_query_tokens, :]
+        output_embeddings = self.output_projection(query_embeddings)
+        
+        return output_embeddings
+
+        
 class PerceiverIO(nn.Module):
     """
     Perceiver IO implementation with both cross-attention and self-attention
@@ -304,4 +457,3 @@ class PositionalEncoding(nn.Module):
         """
         seq_len = x.size(1)
         return x + self.pe[:, :seq_len]
-

@@ -48,6 +48,12 @@ def create_model_args(args):
         "mlp_hidden_size": args.mlp_hidden_size,
         "mlp_dropout": args.mlp_dropout,
         "top_k": args.top_k,
+
+        #QFormer arguments
+        #"qformer_bert_model": args.qformer_bert_model,
+        "qformer_cross_attention_freq": args.qformer_cross_attention_freq,
+        "qformer_use_flash_attn": args.qformer_use_flash_attn,
+        #"qformer_freeze": args.qformer_freeze,
         
         # Geneformer settings
         "emb_mode": args.emb_mode,
@@ -219,7 +225,7 @@ def main():
                         help="Dropout rate for MLP projector")
     parser.add_argument("--top_k", type=int, default=256,
                         help="Top k gene expression tokens to use")
-    parser.add_argument("--projector", type=str, default="mlp", choices=["mlp", "perceiver"],
+    parser.add_argument("--projector", type=str, default="mlp", choices=["mlp", "perceiver", "qformer"],
                         help="Type of projector to use")
     
     # Geneformer arguments
@@ -272,6 +278,17 @@ def main():
                         help="Dropout rate in Perceiver")
     parser.add_argument("--use_position_encoding", type=bool, default=False,
                         help="Use position encoding in Perceiver")
+    
+     # QFormer arguments
+    # parser.add_argument("--qformer_bert_model", type=str, default="dmis-lab/biobert-base-cased-v1.2", 
+    #                    help="BERT model to use in QFormer")
+    parser.add_argument("--qformer_cross_attention_freq", type=int, default=2,
+                       help="Cross-attention frequency in QFormer")
+    parser.add_argument("--qformer_use_flash_attn", type=bool, default=True,
+                       help="Use flash attention in QFormer")
+    # parser.add_argument("--qformer_freeze", type=bool, default=True,
+    #                    help="Freeze QFormer parameters")
+
     
     # Evaluation arguments
     parser.add_argument("--batch_size", type=int, default=8,

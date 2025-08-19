@@ -101,7 +101,7 @@ class Cell2TextDDPTrainer:
             print(f"Loading dataset...")
         
         # Load full training dataset
-        if self.args.projector == "mlp":
+        if self.args.projector == "mlp" or self.args.projector == "qformer":
             top_k = self.args.top_k
         else:  # perceiver
             top_k = None
@@ -338,7 +338,15 @@ class Cell2TextDDPTrainer:
         parameters = []
         
         # Projector parameters
-        projector_name = "cell_to_embedding" if self.args.projector == "mlp" else "perceiver_projector"
+        if self.args.projector == "mlp":
+            projector_name = "cell_to_embedding"
+        elif self.args.projector == "perceiver":
+            projector_name = "cell_to_embedding"
+        elif self.args.projector == "qformer":  
+            projector_name = "cell_to_embedding"
+        else:
+            projector_name = "cell_to_embedding"
+
         projector_module = getattr(model_for_params, projector_name, None)
         if projector_module:
             for name, param in projector_module.named_parameters():

@@ -1,50 +1,58 @@
-import pandas as pd
-import numpy as np
-import scanpy as sc
+import resource
 import os
-import json
-import random
-import cellxgene_census
 import re
-import os
 import gc
-import scipy
-import anndata
-import mygene
-from pyscenic.aucell import GeneSignature, create_rankings, enrichment
-import pandas as pd
-import numpy as np
-import mygene
-import pandas as pd
-import numpy as np
-import scanpy as sc
-import os
-import json
-from tqdm import tqdm
-import matplotlib.pyplot as plt
-import random
-import re
-import os
-import scipy.sparse
-from anndata import AnnData
-import gc
-import h5py
-import scipy.sparse as sparse
-from scipy.sparse import csr_matrix, vstack
-import anndata as ad
-import anndata
-import torch
 import sys
-from datasets import  load_from_disk
-from Geneformer.geneformer import TranscriptomeTokenizer
+import time
+import json
+import torch
+import h5py
+import argparse
+import random
+import requests
+import numpy as np
+import pandas as pd
+import scanpy as sc
+import scipy
+import mygene
+import shutil
+import matplotlib.pyplot as plt
+
+from tqdm import tqdm
+from pathlib import Path
+from typing import Dict, Optional
+from bs4 import BeautifulSoup
+from datasets import Dataset, load_from_disk
+from anndata import AnnData
+import anndata as ad
+
+from scipy.sparse import csr_matrix, vstack
+import scipy.sparse as sparse
+
+from pyscenic.aucell import GeneSignature, create_rankings, enrichment
+from geneformer import TranscriptomeTokenizer
+import cellxgene_census
+
+ROOT = Path(__file__).resolve().parent.parent
+# ROOT = Path("/datadisk3/cell2text")
 
 
+DATA_DIR = ROOT / 'data_preprocess'
+
+argParser = argparse.ArgumentParser()
+argParser.add_argument("-N", type=int, required=True, help="Sample size targeted")
+argParser.add_argument("-BS", type=int, required=True, help="Batch size")
+argParser.add_argument("-CS", type=int, required=True, help="Chunck size")
+args = argParser.parse_args()
+
+target_total = args.N
+
+print("--- Starting Data Pre-processing and Sampling ---")
+print("Connecting to CELLxGENE census...")
 
 # Connect to CELLxGENE API
-census = cellxgene_census.open_soma()
-
-import re
-from typing import Optional
+census = cellxgene_census.open_soma(census_version="2025-01-30")
+print("Connection successful.")
 
 def map_dev_stage(stage: str) -> str:
     """
@@ -185,6 +193,18 @@ obs_df = cellxgene_census.get_obs(census, "homo_sapiens", column_names=["soma_jo
 # Apply binning at development stage
 obs_df["dev_stage_group"] = obs_df["development_stage"].apply(map_dev_stage)
 
+filtered = obs_df[
+    obs_df["tissue_general"].notna() &
+    obs_df["tissue_general"].ne("unknown") &
+    obs_df["disease"].notna() &
+    obs_df["disease"].ne("unknown") &
+    obs_df["cell_type"].ne("unknown") &
+    obs_df["cell_type"].notna() &
+    obs_df["is_primary_data"] == True
+]
+
+del obs_df
+
 excluded_dataset_ids = [
     "1b9d8702-5af8-4142-85ed-020eb06ec4f6", # Dominguez
     "fe52003e-1460-4a65-a213-2bb1a508332f", # Dominguez
@@ -194,36 +214,19 @@ excluded_dataset_ids = [
 ]
 
 excluded_assays = [
-    "Smart-seq", "Smart-seq2", "Smart-seq3", "Smart-seq v4",  # Full-length protocols
-    "CEL-seq2", "Quartz-seq", "MARS-seq", "SORT-seq",         # Rare and/or niche protocols
+    "Smart-seq", "Smart-seq2", "Smart-seq3", "Smart-seq v4",   # Full-length protocols
+    "Quartz-seq", "MARS-seq", "SORT-seq",                      # Rare and/or niche protocols
     "GEXSCOPE technology",                                     # Proprietary, very low usage
     "BD Rhapsody Targeted mRNA",                               # Targeted, not full transcriptome
     "10x gene expression flex"                                 # Low prevalence + differences
 ]
 
 
-
-# Apply any filtering & sampling logic here
-filtered = obs_df[
-    #obs_df["sex"].isin(["male", "female"]) &
-    #obs_df["dev_stage_group"].ne("unknown") &
-    obs_df["tissue_general"].notna() &
-    obs_df["tissue_general"].ne("unknown") &
-    obs_df["disease"].notna() &
-    obs_df["disease"].ne("unknown") &
-    obs_df["cell_type"].ne("unknown") &
-    obs_df["cell_type"].notna() &
-    obs_df["is_primary_data"] == True & # removes duplicate entries from the dataset
-    ~obs_df["dataset_id"].isin(excluded_dataset_ids) & 
-    ~obs_df["assay"].isin(excluded_assays)
+filtered = filtered[
+    ~filtered["dataset_id"].isin(excluded_dataset_ids) & 
+    ~filtered["assay"].isin(excluded_assays)
 ]
-
-
-del obs_df
-
-
-# Target number of cells
-target_total = 510000
+print(f"Filtered down to {len(filtered)} cells after applying initial criteria.")
 
 # Define our sampling strategy percentages with adjustments
 pct_distribution = 0.30
@@ -435,262 +438,479 @@ elif len(final_sample) < target_total:
 # Final analysis of our sample
 print(f"Final dataset size: {len(final_sample)} cells")
 
-# Compare distributions of key variables
+# Measure diversity
 variables = ['tissue_general', 'dev_stage_group', 'cell_type', 'sex', 'is_disease', 'disease', 'donor_id']
 
-for var in variables:
-    if var in filtered.columns:
-        orig_dist = filtered[var].value_counts(normalize=True).head(10)
-        sample_dist = final_sample[var].value_counts(normalize=True).head(10)
+def shannon_diversity(series):
+    proportions = series.value_counts(normalize = True)
+    shannon_index = - (proportions * np.log2(proportions)).sum()
+    return shannon_index
 
-        print(f"\nTop 10 {var} distribution (original):")
-        print(orig_dist)
+def normalized_shannon_diversity(series):
+    num_categories = series.nunique()
+    if num_categories <= 1:
+        return 0.0
+    
+    raw_shannon = shannon_diversity(series)
+    max_shannon = np.log2(num_categories)
+    
+    return raw_shannon / max_shannon
 
-        print(f"\nTop 10 {var} distribution (sampled):")
-        print(sample_dist)
+diversity_scores = {}
+old_diversity_scores = {}
+for col in variables:
+    diversity_scores[col] = normalized_shannon_diversity(final_sample[col])
+    old_diversity_scores[col] = normalized_shannon_diversity(filtered[col])
+    print(f"Normalized Shannon for '{col}': {old_diversity_scores[col]:.4f} -> {diversity_scores[col]:.4f} ")
 
-        # Calculate percentage change for key categories
-        if var in ['tissue_general']:
-            print("\nKey tissue changes (original → sampled):")
-            for tissue in ['brain', 'blood', 'lung', 'eye', 'breast']:
-                orig_pct = orig_dist.get(tissue, 0) * 100
-                sample_pct = sample_dist.get(tissue, 0) * 100
-                change = sample_pct - orig_pct
-                print(f"{tissue}: {orig_pct:.1f}% → {sample_pct:.1f}% ({change:+.1f}%)")
+# Calculate the overall average diversity
+average_diversity = np.mean(list(diversity_scores.values()))
+old_average_diversity = np.mean(list(old_diversity_scores.values()))
+print(f"\nAverage Normalized Diversity: {old_average_diversity:.4f} -> {average_diversity:.4f}")
 
-        if var == 'disease':
-            print("\nKey disease changes (original → sampled):")
-            for disease in ['normal', 'COVID-19', 'Parkinson disease', 'lung adenocarcinoma']:
-                if disease in filtered['disease'].values:
-                    orig_count = filtered[filtered['disease'] == disease].shape[0]
-                    orig_pct = (orig_count / len(filtered)) * 100
-
-                    sample_count = final_sample[final_sample['disease'] == disease].shape[0]
-                    sample_pct = (sample_count / len(final_sample)) * 100
-
-                    change = sample_pct - orig_pct
-                    print(f"{disease}: {orig_pct:.1f}% → {sample_pct:.1f}% ({change:+.1f}%)")
-
-# Check disease representation
-disease_orig_pct = filtered[filtered['is_disease']].shape[0] / len(filtered) * 100
-disease_sample_pct = final_sample[final_sample['is_disease']].shape[0] / len(final_sample) * 100
-change = disease_sample_pct - disease_orig_pct
-
-print(f"\nDisease samples: {disease_orig_pct:.1f}% → {disease_sample_pct:.1f}% ({change:+.1f}%)")
-
-# Check donor diversity
-orig_unique_donors = filtered['donor_id'].nunique()
-sample_unique_donors = final_sample['donor_id'].nunique()
-donor_coverage = (sample_unique_donors / orig_unique_donors) * 100
-
-print(f"\nDonor diversity:")
-print(f"Original dataset: {orig_unique_donors} unique donors")
-print(f"Sampled dataset: {sample_unique_donors} unique donors ({donor_coverage:.1f}% coverage)")
-
-# Check average cells per donor in sample
-avg_cells_per_donor = len(final_sample) / sample_unique_donors
-max_cells_from_donor = final_sample['donor_id'].value_counts().iloc[0]
-print(f"Average cells per donor in sample: {avg_cells_per_donor:.1f}")
-print(f"Maximum cells from any single donor: {max_cells_from_donor}")
-
-# Check rare category representation
-rare_tissue_orig_pct = filtered[filtered['tissue_general'].isin(rare_tissues)].shape[0] / len(filtered) * 100
-rare_tissue_sample_pct = final_sample[final_sample['tissue_general'].isin(rare_tissues)].shape[0] / len(final_sample) * 100
-
-
-print(f"\nRare tissues: {rare_tissue_orig_pct:.2f}% → {rare_tissue_sample_pct:.2f}% ({rare_tissue_sample_pct - rare_tissue_orig_pct:+.2f}%)")
-
-# Get cell type distribution for further analysis
-print("\nDetailed cell type distribution in sampled dataset:")
-cell_type_dist = final_sample['cell_type'].value_counts().head(15)
-print(cell_type_dist)
-print(f"Number of unique cell types in sample: {final_sample['cell_type'].nunique()}")
-
-# Get disease distribution for further analysis
-print("\nDetailed disease distribution in sampled dataset:")
-disease_dist = final_sample['disease'].value_counts().head(15)
-print(disease_dist)
-print(f"Number of unique diseases in sample: {final_sample['disease'].nunique()}")
-
-# Save the final sampled dataset
-final_sample.to_csv('balanced_cell_sample.csv', index=False)
 
 join_ids = final_sample["soma_joinid"].tolist()
 sorted_join_ids = sorted(final_sample['soma_joinid'].unique())
+
+print("\n--- Preparing for Robust 95/2.5/2.5 Split ---")
+
+# Define the columns for which we must ensure category representation
+stratification_cols = ['disease', 'cell_type', 'tissue_general', 'dev_stage_group']
+
+# Get cell counts for each donor, which helps in making smart choices
+donor_cell_counts = final_sample['donor_id'].value_counts()
+
+# --- Step 1: Guarantee representation for every category in the training set ---
+
+train_donors = set()
+unassigned_donors = set(final_sample['donor_id'].unique())
+
+print("Ensuring all metadata categories are represented in the training set...")
+
+for col in stratification_cols:
+    # Group donors by the categories they belong to in the current column
+    category_to_donors = final_sample.groupby(col)['donor_id'].unique().apply(set)
+    
+    for category, donors_with_category in category_to_donors.items():
+        # Check if this category is already represented by a donor in our training set
+        if train_donors.isdisjoint(donors_with_category):
+            # This category is NOT represented yet. We must add one of its donors.
+            
+            # Find which of the potential donors are still available to be assigned
+            available_donors = donors_with_category.intersection(unassigned_donors)
+            
+            if not available_donors:
+                # This should not happen if logic is correct, but as a safeguard:
+                # It means all donors for this category were already assigned to train_donors
+                # in a previous step. We can continue.
+                continue
+
+            # Heuristic: Pick the smallest available donor to fulfill the requirement.
+            # This leaves larger donors for the flexible greedy assignment later.
+            chosen_donor = min(available_donors, key=lambda d: donor_cell_counts[d])
+            
+            # Reserve this donor for the training set
+            train_donors.add(chosen_donor)
+            unassigned_donors.remove(chosen_donor)
+
+print(f"Reserved {len(train_donors)} donors to guarantee category coverage in the training set.")
+
+
+# --- Step 2: Greedily assign remaining donors to validation and test sets ---
+
+# Calculate target cell counts
+total_cells = len(final_sample)
+val_target_size = int(total_cells * 0.025)
+test_target_size = int(total_cells * 0.025)
+
+# The pool for assignment is the set of donors not already reserved for training
+assignment_pool = list(unassigned_donors)
+np.random.seed(42)
+np.random.shuffle(assignment_pool)
+
+val_donors = set()
+test_donors = set()
+val_current_size = 0
+test_current_size = 0
+
+for donor_id in assignment_pool:
+    donor_size = donor_cell_counts[donor_id]
+    
+    # Decide which set is "emptier" proportionally
+    val_fullness = val_current_size / val_target_size if val_target_size > 0 else 1
+    test_fullness = test_current_size / test_target_size if test_target_size > 0 else 1
+    
+    # Assign to the less full set, as long as it's not over its target
+    if val_fullness <= test_fullness and val_current_size + donor_size < val_target_size * 1.001: # Allow going slightly over
+        val_donors.add(donor_id)
+        val_current_size += donor_size
+    elif test_current_size + donor_size < test_target_size * 1.001:
+        test_donors.add(donor_id)
+        test_current_size += donor_size
+    else:
+        # If both are full enough, add the remainder to the training set pool
+        pass 
+
+# --- Step 3: Finalize the splits ---
+
+# The training set consists of the initially reserved donors plus any unassigned ones
+final_train_donors = train_donors.union(set(assignment_pool) - val_donors - test_donors)
+
+# Create the final DataFrames
+train_df = final_sample[final_sample['donor_id'].isin(final_train_donors)]
+val_df = final_sample[final_sample['donor_id'].isin(val_donors)]
+test_df = final_sample[final_sample['donor_id'].isin(test_donors)]
+
+
+# --- Step 4: Verification and Analysis ---
+
+print("\n--- Final Split Analysis ---")
+
+# Check for donor overlap
+assert len(final_train_donors.intersection(val_donors)) == 0, "FATAL: Overlap between train and val!"
+assert len(final_train_donors.intersection(test_donors)) == 0, "FATAL: Overlap between train and test!"
+assert len(val_donors.intersection(test_donors)) == 0, "FATAL: Overlap between val and test!"
+print("✅ No donor overlap between sets.")
+
+# Check for category coverage
+for col in stratification_cols:
+    train_categories = set(train_df[col].unique())
+    val_categories = set(val_df[col].unique())
+    test_categories = set(test_df[col].unique())
+    
+    assert val_categories.issubset(train_categories), f"FATAL: Column '{col}' in validation has categories not in train!"
+    assert test_categories.issubset(train_categories), f"FATAL: Column '{col}' in test has categories not in train!"
+print(f"✅ All categories in {stratification_cols} for val/test are present in train.")
+
+# Report on sizes
+print("\n--- Dataset Sizes ---")
+print(f"{'Set':<12} | {'Donors':>10} | {'Cells':>12} | {'% of Total Cells':>18}")
+print("-" * 68)
+print(f"{'Training':<12} | {len(final_train_donors):>10} | {len(train_df):>12,} | {len(train_df)/total_cells:>17.2%}")
+print(f"{'Validation':<12} | {len(val_donors):>10} | {len(val_df):>12,} | {len(val_df)/total_cells:>17.2%}")
+print(f"{'Test':<12} | {len(test_donors):>10} | {len(test_df):>12,} | {len(test_df)/total_cells:>17.2%}")
+
+# Report on diversity preservation
+print("\n--- Diversity Preservation (Normalized Shannon Index) ---")
+diversity_results = []
+for col in ['tissue_general', 'dev_stage_group', 'cell_type', 'is_disease']:
+    train_div = normalized_shannon_diversity(train_df[col])
+    val_div = normalized_shannon_diversity(val_df[col])
+    test_div = normalized_shannon_diversity(test_df[col])
+    diversity_results.append({
+        "Variable": col,
+        "Train": f"{train_div:.3f}",
+        "Validation": f"{val_div:.3f}",
+        "Test": f"{test_div:.3f}"
+    })
+
+print(pd.DataFrame(diversity_results).to_string(index=False))
+
+join_ids = train_df["soma_joinid"].tolist()
+train_join_ids = sorted(train_df['soma_joinid'].unique())
+test_join_ids = sorted(test_df['soma_joinid'].unique())
+val_join_ids = sorted(val_df['soma_joinid'].unique())
 
 
 # Clear variables from memory
 
 for name in list(globals()):
-    if name in ('filtered', 'final_sample', 'remaining_cells', 'normal_cells', 'weights', 'covid_cells', 'rare_cells', 'join_ids') :
+    if name in ('filtered', 'final_sample', 'remaining_cells', 'normal_cells', 'weights', 'covid_cells', 'rare_cells', 'join_ids', 'train_df', 'test_df', 'val_df') :
         globals().pop(name)
 
 # Force garbage collection
 gc.collect()
 
+def _save_adata_in_batches(adata, dataset_type, base_output_dir, batch_size):
+    """Helper function to save a large AnnData object in smaller batches."""
+    if adata.n_obs == 0:
+        print(f"Skipping save for '{dataset_type}' as it has 0 cells.")
+        return
 
-# Define batch size
-batch_size = 100000000000000
-all_data = []
+    print(f"--- Saving {dataset_type} data in batches ---")
+    pbar = tqdm(range(0, adata.n_obs, batch_size), desc=f"Saving {dataset_type} batches")
+    for i in pbar:
+        batch_slice = adata[i:i+batch_size, :].copy()  # Use .copy() to avoid modifying the original adata object
+        batch_num = i // batch_size + 1
+        
+        # Define save directory and create it
+        save_dir = os.path.join(base_output_dir, f"{dataset_type}_{batch_num}")
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # Define the output path
+        output_path = os.path.join(save_dir, f"batch_{batch_num}.h5ad")
+        
+        pbar.set_description(f"Saving {dataset_type} batch {batch_num}")
 
-# Process in batches using ID ranges
-for i in range(0, len(sorted_join_ids), batch_size):
-    batch_ids = sorted_join_ids[i:i+batch_size]
-    join_ids_str = ",".join(map(str, batch_ids))
-    if not batch_ids:
-        continue
+        # --- MODIFICATION TO HANDLE GENE SYMBOL CONFLICT ---
+        if batch_slice.var.index.name == 'gene_symbol' and 'gene_symbol' in batch_slice.var.columns:
+            # Check if the index values are identical to the column values
+            if all(batch_slice.var.index == batch_slice.var['gene_symbol']):
+                print(f"  Batch {batch_num}: Index and 'gene_symbol' column are identical. Dropping the column.")
+                batch_slice.var.drop(columns=['gene_symbol'], inplace=True)
+            else:
+                print(f"  Batch {batch_num}: Index and 'gene_symbol' column have different values. Renaming the column.")
+                batch_slice.var.rename(columns={'gene_symbol': 'gene_symbol_col'}, inplace=True)
+            
+            # Remove the index name to prevent further conflicts during writing
+            batch_slice.var.index.name = None
+            print(f"  Batch {batch_num}: Removed index name.")
+        
+        batch_slice.write(output_path)
+        
+    print(f"Finished saving {dataset_type} data.")
 
+def process_anndata_and_split(
+    sorted_join_ids,
+    train_ids,
+    test_ids,
+    val_ids,
+    batch_size,
+    data_dir,
+    census,
+    organism="Homo sapiens",
+    gmt_path=None,
+    output_dir=None,
+    chunk_size=1000,
+):
+    """
+    Fetches a full dataset, processes it globally with HVG selection and normalization,
+    then calculates pathway scores in batches and splits into train/test/val sets.
 
-    print(f"Processing batch {i//batch_size + 1}")
+    Args:
+        sorted_join_ids (list): A sorted list of ALL soma_joinids to process.
+        train_ids (list): A list of soma_joinids for the training set.
+        test_ids (list): A list of soma_joinids for the test set.
+        val_ids (list): A list of soma_joinids for the validation set.
+        batch_size (int): The number of cells to save in each output file (batch).
+        data_dir (pathlib.Path or str): The base directory for data.
+        census: The cellxgene_census object.
+        organism (str, optional): The organism to query. Defaults to "Homo sapiens".
+        gmt_path (str, optional): Path to the GMT file for gene signatures.
+        output_dir (str, optional): Directory to save the output h5ad files.
+        chunk_size (int, optional): Chunk size for AUCell calculation.
+    """
+    if gmt_path is None:
+        gmt_path = os.path.join(data_dir,"h.all.v2025.1.Hs.symbols.gmt")
+    if output_dir is None:
+        output_dir = os.path.join(data_dir, 'input_data')
 
-    # Query using range instead of membership
-    batch_data = cellxgene_census.get_anndata(
+    os.makedirs(output_dir, exist_ok=True)
+
+    # --- 1. Fetch ALL data at once ---
+    print("--- Starting to fetch the entire AnnData object ---")
+    if not sorted_join_ids:
+        print("Warning: sorted_join_ids is empty. Nothing to do.")
+        return
+        
+    join_ids_str = ",".join(map(str, sorted_join_ids))
+
+    full_data = cellxgene_census.get_anndata(
         census=census,
-        organism="Homo sapiens",
-        obs_value_filter=f"soma_joinid  in [{join_ids_str}]",
-        obs_column_names=["soma_joinid", "sex", "tissue", "donor_id", "dataset_id", "tissue_ontology_term_id", "tissue_general", 'tissue_general_ontology_term_id',
-                          "cell_type", "cell_type_ontology_term_id", "disease_ontology_term_id", "assay", "assay_ontology_term_id",
-                          "disease", "development_stage"],
+        organism=organism,
+        obs_value_filter=f"soma_joinid in [{join_ids_str}]",
+        obs_column_names=[
+            "soma_joinid", "sex", "tissue", "donor_id", "dataset_id",
+            "tissue_ontology_term_id", "tissue_general", 'tissue_general_ontology_term_id',
+            "cell_type", "cell_type_ontology_term_id", "disease_ontology_term_id",
+            "assay", "assay_ontology_term_id", "disease", "development_stage"
+        ],
         X_name="raw"
     )
+    print(f"Successfully fetched {full_data.n_obs} cells.")
 
-    # these are necesary for the tokenization with Geneformer
-    if 'ensembl_id' not in batch_data.var.columns:
-        batch_data.var['ensembl_id'] = batch_data.var['feature_id']
+    # --- 2. Initial processing and gene annotation ---
+    print("--- Adding basic annotations ---")
+    
+    if 'ensembl_id' not in full_data.var.columns:
+        full_data.var['ensembl_id'] = full_data.var['feature_id']
 
-
-    if scipy.sparse.issparse(batch_data.X):
-        batch_data.obs["n_counts"] = np.array(batch_data.X.sum(axis=1)).flatten()
+    if scipy.sparse.issparse(full_data.X):
+        full_data.obs["n_counts"] = np.array(full_data.X.sum(axis=1)).flatten()
     else:
-        batch_data.obs["n_counts"] = batch_data.X.sum(axis=1)
+        full_data.obs["n_counts"] = full_data.X.sum(axis=1)
+    print("Added n_counts and ensembl_id.")
 
-    # CELLxGENE return the raw values at adata.X and Geneforemr expect the raw values at adata.raw.X
-    if batch_data.raw is None:
-      batch_data.raw = batch_data.copy()
-
-
-
-    # Initialize MyGeneInfo
     mg = mygene.MyGeneInfo()
-
-    # Convert Ensembl IDs to gene symbols
-    ensembl_ids = batch_data.var['ensembl_id'].tolist()
-
-    # Query mygene
+    ensembl_ids = full_data.var['ensembl_id'].tolist()
+    print("Querying MyGene.info for gene symbols...")
     results = mg.querymany(ensembl_ids, scopes='ensembl.gene', fields='symbol', species='human')
-
-    # Build a mapping from Ensembl ID to gene symbol
     id_to_symbol = {res['query']: res.get('symbol', '') for res in results}
-
-    # Create new column in adata.var with gene symbols
-    batch_data.var['gene_symbol'] = batch_data.var['ensembl_id'].map(id_to_symbol)
-
-    batch_data.var.index = batch_data.var['gene_symbol']
-
-    sc.pp.normalize_total(batch_data, target_sum=1e4)
-    sc.pp.log1p(batch_data)
-    sc.pp.highly_variable_genes(batch_data, n_top_genes=40000, flavor="seurat")
-    batch_data = batch_data[:, batch_data.var.highly_variable]
+    full_data.var['gene_symbol'] = full_data.var['ensembl_id'].map(id_to_symbol)
+    full_data.var.index = full_data.var['gene_symbol']
+    print("Gene symbols added.")
 
 
-    import gc
+
+    # --- 4. Global normalization and HVG selection ---
+    print("--- Global normalization and HVG selection ---")
+    
+    # Create a copy for global processing
+    global_data = full_data.copy()
+    
+    # Global normalization and HVG selection
+    sc.pp.normalize_total(global_data, target_sum=1e4)
+    sc.pp.log1p(global_data)
+    sc.pp.highly_variable_genes(global_data, n_top_genes=40000, flavor="seurat")
+    
+    # Get the global HVG genes
+    hvg_genes = global_data.var_names[global_data.var.highly_variable]
+    print(f"Selected {len(hvg_genes)} highly variable genes globally.")
+    
+    # Keep only HVGs in the normalized data
+    global_data_hvg = global_data[:, global_data.var.highly_variable].copy()
+    print(f"Global normalized data shape: {global_data_hvg.shape}")
+    
+    # Clean up the full global_data (keep only HVG version)
+    del global_data
     gc.collect()
 
-    # Load gene signatures
-    GMT_FNAME = "/home/arism/cell2text/data_preprocess/h.all.v2025.1.Hs.symbols.gmt"
-    signatures = GeneSignature.from_gmt(GMT_FNAME, field_separator="\t")
-
-    # Convert adata.X to float32 dense matrix (saves 50% memory)
-    print("Creating expression matrix...")
-    ex_matrix = pd.DataFrame(
-        batch_data.X.astype(np.float32).toarray(),
-        index=batch_data.obs_names,
-        columns=batch_data.var_names
-    )
-
-    # Parameters
-    chunk_size = 20000  # Adjust based on your memory budget
-    n_chunks = int(np.ceil(ex_matrix.shape[0] / chunk_size))
-
-    # Prepare result container
-    all_aucs = []
+    # --- 5. Load gene signatures ---
+    print("--- Loading gene signatures ---")
+    signatures = GeneSignature.from_gmt(str(gmt_path), field_separator="\t")
     signature_names = [sig.name for sig in signatures]
+    print(f"Loaded {len(signatures)} gene signatures.")
 
-    print("Processing in chunks...")
-    for i in range(n_chunks):
-        print(f"Processing chunk {i+1}/{n_chunks}")
-        chunk = ex_matrix.iloc[i*chunk_size:(i+1)*chunk_size]
-
-        # Create rankings
-        rnk_chunk = create_rankings(chunk)
-
-        # Calculate AUCs for this chunk
+    # --- 6. Calculate AUCell scores in batches ---
+    print("--- Calculating AUCell scores in batches ---")
+    
+    # Convert to CSR for efficient row slicing
+    ex_matrix = global_data_hvg.X.tocsr() if sparse.issparse(global_data_hvg.X) else global_data_hvg.X
+    n_chunks = int(np.ceil(global_data_hvg.n_obs / chunk_size))
+    
+    # Initialize storage for all AUC scores
+    all_aucs = []
+    
+    for chunk_idx in range(n_chunks):
+        start_idx = chunk_idx * chunk_size
+        end_idx = min((chunk_idx + 1) * chunk_size, global_data_hvg.n_obs)
+        
+        print(f"Processing chunk {chunk_idx + 1}/{n_chunks} (cells {start_idx}:{end_idx})")
+        
+        # Get chunk data
+        chunk_slice = slice(start_idx, end_idx)
+        chunk_matrix = ex_matrix[chunk_slice]
+        
+        # Convert to dense for AUCell
+        if sparse.issparse(chunk_matrix):
+            chunk_dense = np.array(chunk_matrix.todense(), dtype=np.float16)
+        else:
+            chunk_dense = chunk_matrix.astype(np.float16)
+        
+        # Create DataFrame for this chunk
+        chunk_df = pd.DataFrame(
+            chunk_dense,
+            index=global_data_hvg.obs_names[chunk_slice],
+            columns=global_data_hvg.var_names
+        )
+        
+        # Create rankings for this chunk
+        rnk_chunk = create_rankings(chunk_df)
+        
+        # Calculate AUC scores for all signatures
         chunk_aucs = []
         for signature in signatures:
             auc_scores = enrichment(rnk_chunk, signature)
             chunk_aucs.append(auc_scores)
         
-        # Stack into array and add to list
-        chunk_aucs = np.column_stack(chunk_aucs)  # shape: (n_cells_chunk, n_signatures)
+        # Stack AUC scores for this chunk
+        chunk_aucs = np.column_stack(chunk_aucs)
         all_aucs.append(chunk_aucs)
+        
+        # Clean up chunk data
+        del chunk_df, rnk_chunk, chunk_dense
+        gc.collect()
 
-    # Combine all chunks into one big array
-    print("Combining results...")
-    final_auc_array = np.vstack(all_aucs)  # shape: (n_total_cells, n_signatures)
-
-    # Create final DataFrame
+    # --- 7. Combine all AUC scores ---
+    print("--- Combining AUCell results ---")
+    final_auc_array = np.vstack(all_aucs)
     aucs_df = pd.DataFrame(
         final_auc_array,
-        index=ex_matrix.index,
+        index=global_data_hvg.obs_names,
         columns=signature_names
     )
+    
+    # Clean up
+    del all_aucs, final_auc_array, ex_matrix, global_data_hvg
+    gc.collect()
 
-    # Filter pathways that appear in top 5% of >0.5% of cells
+    # --- 8. Filter pathways and calculate top pathways ---
+    print("--- Filtering pathways and calculating top pathways ---")
+    
+    # Pathway filtering (keep pathways active in >0.5% of cells)
     top5_percentile_mask = aucs_df.apply(lambda row: row >= np.percentile(row, 95), axis=1)
     pathway_frequencies = top5_percentile_mask.sum(axis=0) / top5_percentile_mask.shape[0]
     selected_pathways = pathway_frequencies[pathway_frequencies > 0.005].index
-
-    # Final filtered AUCell matrix
     filtered_aucs = aucs_df[selected_pathways]
-
-    # Store in AnnData object
-    batch_data.obsm["AUCell_scores_filtered"] = filtered_aucs.loc[batch_data.obs_names]
-
-    # Find the pathway with the maximum score for each cell
-    batch_data.obs["pathway1"] = aucs_df.idxmax(axis=1)
-
-    # --- Add "pathway2" (second most active) to adata.obs ---
-    # Define a function to get the second largest pathway name (index) for a given row (cell)
+    
+    print(f"Kept {len(selected_pathways)} pathways out of {len(signature_names)} after filtering.")
+    
+    # Calculate top 2 pathways for each cell
+    pathway1 = aucs_df.idxmax(axis=1)
+    
     def get_second_largest_pathway_name(row):
-        # Sort the row values in descending order and get the index (pathway names)
         sorted_pathways = row.sort_values(ascending=False).index
-
-        # If there are at least two pathways, return the second one
-        if len(sorted_pathways) >= 2:
-            return sorted_pathways[1]
-        else:
-            # Return a placeholder for cells that don't have a second pathway
-            # (e.g., if a cell only has one non-zero pathway score, or fewer than 2 pathways overall)
-            return np.nan
-
-    # Apply this function across each row (cell) to get the second most active pathway
-    batch_data.obs["pathway2"] = aucs_df.apply(get_second_largest_pathway_name, axis=1)
-
-    # --- Optional: Fill NaN values if some cells didn't have a second pathway ---
-    # If you prefer 'N/A' or another string instead of NaN for better readability
-    batch_data.obs["pathway2"] = batch_data.obs["pathway2"].fillna("No_Second_Pathway")
-
-    # Save results
-    batch_data.write(f"/home/arism/datasets/raw_data/batch_{i}.h5ad")
-
-    del batch_data
+        return sorted_pathways[1] if len(sorted_pathways) >= 2 else np.nan
+    
+    pathway2 = aucs_df.apply(get_second_largest_pathway_name, axis=1).fillna("No_Second_Pathway")
+    
+    # --- 9. Add pathway information to original data ---
+    print("--- Adding pathway information to original data ---")
+    
+    # Ensure the indices match between aucs results and original data
+    common_cells = full_data.obs_names.intersection(aucs_df.index)
+    print(f"Found {len(common_cells)} common cells between original and processed data.")
+    
+    # Initialize pathway columns
+    full_data.obs["pathway1"] = "Unknown"
+    full_data.obs["pathway2"] = "Unknown"
+    
+    # Add pathway information for cells that were processed
+    full_data.obs.loc[common_cells, "pathway1"] = pathway1.loc[common_cells].values
+    full_data.obs.loc[common_cells, "pathway2"] = pathway2.loc[common_cells].values
+    
+    
+    # Clean up AUC data
+    del aucs_df, filtered_aucs, pathway1, pathway2
     gc.collect()
+    
+    print("--- Completed pathway enrichment for all data ---")
 
+    # --- 10. Split the data ---
+    print("--- Splitting data into train, test, and validation sets ---")
+    
+    train_mask = full_data.obs['soma_joinid'].isin(set(train_ids))
+    test_mask = full_data.obs['soma_joinid'].isin(set(test_ids))
+    val_mask = full_data.obs['soma_joinid'].isin(set(val_ids))
 
-import requests
-from bs4 import BeautifulSoup
-import time # Import time for rate limiting
-import os # Import os for file path handling
+    train_adata = full_data[train_mask, :].copy()
+    test_adata = full_data[test_mask, :].copy()
+    val_adata = full_data[val_mask, :].copy()
+    
+    print(f"Split complete. Train: {train_adata.n_obs}, Test: {test_adata.n_obs}, Val: {val_adata.n_obs} cells.")
+    
+    del full_data
+    gc.collect()
+    
+    # --- 11. Save each split in batches ---
+    _save_adata_in_batches(train_adata, 'train', output_dir, batch_size)
+    _save_adata_in_batches(test_adata, 'test', output_dir, batch_size)
+    _save_adata_in_batches(val_adata, 'val', output_dir, batch_size)
+    
+    print("\n--- All processing and saving complete. ---")
+
+process_anndata_and_split(
+    sorted_join_ids,
+    train_join_ids,
+    test_join_ids,
+    val_join_ids,
+    args.BS,
+    DATA_DIR,
+    census,
+    organism="Homo sapiens",
+    chunk_size=args.CS,
+)
+
 
 def get_webpage_content(url):
     """
@@ -782,7 +1002,7 @@ def parse_pathway_descriptions(pathway_text):
 
 
 # Specify the name of your .gmt file
-gmt_filename = "/home/arism/cell2text/data_preprocess/h.all.v2025.1.Hs.symbols.gmt" # You can change this to your file's name
+gmt_filename = DATA_DIR /  "h.all.v2025.1.Hs.symbols.gmt"
 
 if os.path.exists(gmt_filename):
     with open(gmt_filename, 'r') as f:
@@ -859,9 +1079,9 @@ def tokenize_with_geneformer(input_dir, output_dir, dataset_name):
 
     # Initialize Tokenizer
     tk = TranscriptomeTokenizer(custom_attrs,
-                                gene_median_file="/home/arism/cell2text/data_preprocess/Geneformer/geneformer/gene_median_dictionary_gc104M.pkl",
-                                token_dictionary_file="/home/arism/cell2text/data_preprocess/Geneformer/geneformer/token_dictionary_gc104M.pkl",
-                                gene_mapping_file="/home/arism/cell2text/data_preprocess/Geneformer/geneformer/ensembl_mapping_dict_gc104M.pkl"
+                                gene_median_file= ROOT / "Geneformer" / "geneformer" / "gene_median_dictionary_gc104M.pkl", ######################## to change location #############################
+                                token_dictionary_file= ROOT / "Geneformer" / "geneformer" / "token_dictionary_gc104M.pkl",
+                                gene_mapping_file= ROOT / "Geneformer" / "geneformer" / "ensembl_mapping_dict_gc104M.pkl"
                                 )
 
     # Tokenize the data
@@ -875,9 +1095,7 @@ def tokenize_with_geneformer(input_dir, output_dir, dataset_name):
 
     return os.path.join(output_dir, dataset_name)
 
-import re
-from typing import Dict, Optional
-from datasets import Dataset
+
 
 class CellDescriptionGenerator:
     def __init__(self):
@@ -1169,7 +1387,7 @@ def process_dataset(
     print("Tokenizing dataset...")
 
     #Tokenize the dataset
-    tokenize_with_geneformer(input_dir, output_dir, dataset_name)
+    #tokenize_with_geneformer(input_dir, output_dir, dataset_name)
 
     print("Loading tokenized dataset...")
     # Load the tokenized dataset
@@ -1198,7 +1416,18 @@ def process_dataset(
     # Verify all examples have descriptions
     print(f"Examples with struct_desc: {sum(1 for ex in hf_dataset if 'struct_desc' in ex and ex['struct_desc'])}")
 
-    print("Saving final dataset...")
+    print("Saving final dataset and deleting the old one...")
+
+    # --- Deletion of the old dataset ---
+    old_dataset_path = os.path.join(output_dir, dataset_name, ".dataset")
+
+    # Check if the old directory exists before trying to delete it
+    if os.path.exists(old_dataset_path) and os.path.isdir(old_dataset_path):
+        print(f"Deleting old dataset directory: {old_dataset_path}")
+        shutil.rmtree(old_dataset_path)
+        print("Old dataset successfully deleted.")
+    else:
+        print(f"Old dataset directory not found at {old_dataset_path}. Nothing to delete.")
     #Save the final dataset
     final_save_path = os.path.join(output_dir, dataset_name + "_with_descriptions")
     hf_dataset.save_to_disk(final_save_path)
@@ -1207,6 +1436,28 @@ def process_dataset(
 
     return hf_dataset
 
-hf_dataset = process_dataset(input_dir="/home/arism/datasets/raw_data/", output_dir="/home/arism/datasets", ontology_filepath="/home/arism/cell2text/data_preprocess/obo.json" ,dataset_name="dataset_510k")
+
+######################## to change location #############################
+# os.makedirs(os.path.join(DATA_DIR,'output_data', 'train'), exist_ok=True)
+# os.makedirs(os.path.join(DATA_DIR,'output_data', 'test'), exist_ok=True)
+# os.makedirs(os.path.join(DATA_DIR,'output_data', 'val'), exist_ok=True)
+path = DATA_DIR / 'output_data'
+
+i_train = 1
+i_test = 1
+i_val = 1
+in_dirs = [os.path.join(path, name) for name in os.listdir(path) if os.path.isdir(os.path.join(path, name))]
+for directo in tqdm(in_dirs, desc='final step'):
+    if 'train' in directo.split('/')[-1]:
+        hf_dataset = process_dataset(input_dir=directo, output_dir=DATA_DIR / 'output_data' / 'train', ontology_filepath=DATA_DIR  / "obo.json" ,dataset_name=f"dataset_{i_train}")
+        i_train+=1
+    # elif 'test' in directo.split('/')[-1]:
+    #     hf_dataset = process_dataset(input_dir=directo, output_dir=DATA_DIR / 'output_data' / 'test', ontology_filepath=DATA_DIR  / "obo.json" ,dataset_name=f"dataset_{i_test}")
+    #     i_test+=1
+    # elif 'val' in directo.split('/')[-1]:
+    #     hf_dataset = process_dataset(input_dir=directo, output_dir=DATA_DIR / 'output_data' / 'val', ontology_filepath=DATA_DIR  / "obo.json" ,dataset_name=f"dataset_{i_val}")
+    #     i_val+=1
 
 
+usage = resource.getrusage(resource.RUSAGE_SELF)
+print(f"Maximum RAM used: {usage.ru_maxrss / (1024*1024):.2f} MB")

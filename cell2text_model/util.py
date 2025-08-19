@@ -5,13 +5,14 @@ from transformers import PretrainedConfig
 import os
 import sys
 from peft import AutoPeftModelForCausalLM
+from transformers import AutoModel
 
 # Import your model classes
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from cell2text_model.model import Cell2TextModel
 from cell2text_model.geneformer_encoder import GeneformerModel, GeneformerConfig
 from cell2text_model.llama_decoder import Cell2TextLlamaModel, Cell2TextLlamaConfig
-from cell2text_model.projectors import MLPProjectionLayer, PerceiverIO
+from cell2text_model.projectors import MLPProjectionLayer, PerceiverIO, QFormerProjector
 
 
 def load_model(args: Dict[str, Any]) -> Cell2TextModel:
@@ -78,6 +79,15 @@ def load_model(args: Dict[str, Any]) -> Cell2TextModel:
             use_position_encoding=args["use_position_encoding"]
         )
         print(f'USE_POSITION_ENCODINGS: {args["use_position_encoding"]}')
+    elif args["projector"] == "qformer":
+        adapter = QFormerProjector(
+            #bert_model_name=args["qformer_bert_model"],
+            cross_attention_freq=args["qformer_cross_attention_freq"],
+            use_flash_attn=args["qformer_use_flash_attn"],
+            #freeze_qformer=args["qformer_freeze"],
+            input_dim=args["cell_encoder_hidden_size"],
+            output_dim=args["decoder_hidden_size"],
+        )
     else:
         raise ValueError(f"Unknown projector type: {args['projector']}")
     
@@ -93,7 +103,7 @@ def load_model(args: Dict[str, Any]) -> Cell2TextModel:
     
     # Load projector weights if provided
     if args.get("load_model_checkpoint_path"):
-        load_projector_weights(model, args["load_model_checkpoint_path"])
+        load_projector_weights(model, args["load_model_checkpoint_path"],bert_model_name=args.get("qformer_bert_model"))
     
     # Apply LoRA to decoder
     if args.get("load_adapter_checkpoint_dir"):
@@ -109,47 +119,64 @@ def load_model(args: Dict[str, Any]) -> Cell2TextModel:
     return model
 
 
-def load_projector_weights(model: Cell2TextModel, checkpoint_path: str):
-    """Load only the projector weights from checkpoint"""
+
+def load_projector_weights(model: Cell2TextModel, checkpoint_path: str, bert_model_name: str = None):
+    """Load projector weights with proper QFormer handling"""
     print(f"Loading projector weights from {checkpoint_path}")
-    
+
     full_state_dict = torch.load(checkpoint_path, map_location="cpu")
-    
-    # Extract only projector weights
-    projector_state_dict = {
-        k[len("cell_to_embedding."):]: v 
-        for k, v in full_state_dict.items() 
+
+    # Extract projector-related weights
+    raw_projector_state_dict = {
+        k: v for k, v in full_state_dict.items()
         if k.startswith("cell_to_embedding.")
     }
-    
-    print(f"Loading {len(projector_state_dict)} projector parameters")
-    
-    # Load into projector
-    missing, unexpected = model.cell_to_embedding.load_state_dict(
-        projector_state_dict, strict=False
-    )
 
-    # DEBUG: Print all projector parameters in checkpoint
-    print("\n=== CHECKPOINT PROJECTOR PARAMETERS ===")
-    checkpoint_projector_keys = [k for k in full_state_dict.keys() if k.startswith("cell_to_embedding.")]
-    for key in sorted(checkpoint_projector_keys):
-        print(f"  {key}: {full_state_dict[key].shape}")
+    # For QFormer, we need to be more careful about loading
+    if isinstance(model.cell_to_embedding, QFormerProjector):
+        # Load only the custom components from checkpoint
+        custom_components = {}
+        for k, v in raw_projector_state_dict.items():
+            new_key = k[len("cell_to_embedding."):]
+            
+            # Only load our custom layers, not the BERT weights
+            if (new_key.startswith("input_projection") or 
+                new_key.startswith("output_projection") or 
+                new_key.startswith("ln_cell") or
+                new_key == "query_tokens"):
+                custom_components[new_key] = v
+        
+        # Load custom components
+        missing, unexpected = model.cell_to_embedding.load_state_dict(
+            custom_components, strict=False
+        )
+        
+        print(f"✓ Loaded custom QFormer components: {list(custom_components.keys())}")
+        print(f"✓ BERT weights loaded from pretrained model during initialization")
+        
+        if missing:
+            # Filter out BERT-related missing keys (expected)
+            non_bert_missing = [k for k in missing if not k.startswith("Qformer.")]
+            if non_bert_missing:
+                print(f"⚠️ Missing non-BERT parameters: {non_bert_missing}")
     
-    # DEBUG: Print all projector parameters in current model
-    print("\n=== MODEL PROJECTOR PARAMETERS ===")
-    model_projector_dict = model.cell_to_embedding.state_dict()
-    for key in sorted(model_projector_dict.keys()):
-        print(f"  {key}: {model_projector_dict[key].shape}")
+    else:
+        # For non-QFormer projectors, load normally
+        projector_state_dict = {}
+        for k, v in raw_projector_state_dict.items():
+            new_key = k[len("cell_to_embedding."):]
+            projector_state_dict[new_key] = v
+        
+        missing, unexpected = model.cell_to_embedding.load_state_dict(
+            projector_state_dict, strict=False
+        )
+        
+        if missing:
+            print(f"⚠️ Missing projector parameters: {missing}")
+        if unexpected:
+            print(f"⚠️ Unexpected projector parameters: {unexpected}")
     
-    # Debug: print the missing parameter
-    if missing:
-        print(f"Missing parameter(s): {missing}")
-    
-    if unexpected:
-        raise ValueError(f"Unexpected keys in projector state dict: {unexpected}")
-    
-    print(f"✓ Loaded {len(projector_state_dict) - len(missing)} parameters")
-
+    print(f"✓ Projector weights loaded successfully")
 
 def create_lora_adapter(decoder_model, args: Dict[str, Any]) -> PeftModel:
     """Create a new LoRA adapter for the decoder"""

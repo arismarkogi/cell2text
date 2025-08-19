@@ -23,7 +23,7 @@ class Cell2TextConfig(PretrainedConfig):
         # When useing the "mlp"
         mlp_hidden_size=2048, # projection layer hidden_dim
         mlp_dropout=0.05,
-        top_k=256, # hyperparameter for the top_k selection of genes (tokens)
+        top_k=32, # hyperparameter for the top_k selection of genes (tokens) and qformer tokens
 
         # When using the "perceiver"
         num_latents = 128,
@@ -34,6 +34,11 @@ class Cell2TextConfig(PretrainedConfig):
         use_position_encoding=True,
         perceiver_cross_attn_layers=1,
         perceiver_num_heads=4,
+
+        qformer_bert_model: str = "dmis-lab/biobert-base-cased-v1.2",
+        qformer_cross_attention_freq: int = 2,
+        qformer_use_flash_attn: bool = False,
+        qformer_freeze: bool = True,
 
 
 
@@ -99,3 +104,8 @@ class Cell2TextConfig(PretrainedConfig):
         self.llama_config = llama_config or {}
         self.decoder_model_name_or_path = decoder_model_name_or_path
         self.decoder_hidden_size = decoder_hidden_size
+
+        self.qformer_bert_model = qformer_bert_model
+        self.qformer_cross_attention_freq = qformer_cross_attention_freq
+        self.qformer_use_flash_attn = qformer_use_flash_attn
+        self.qformer_freeze = qformer_freeze
