@@ -4,10 +4,10 @@ CUDA_VISIBLE_DEVICES=1 python3 /home/arism/cell2text/cell2text_train/train_ddp.p
     --val_data_path /home/arism/datasets/val/dataset_1_with_descriptions \
     --geneformer_path /home/arism/cell2text/Geneformer \
     --decoder_path 'meta-llama/Llama-3.2-3B-Instruct' \
-    --batch_size_per_device 6 \
+    --batch_size_per_device 8 \
     --gradient_accumulation_steps 8 \
     --top_k 32 \
-    --epochs 30 \
+    --epochs 2 \
     --decoder_hidden_size 3072 \
     --projector qformer \
     --qformer_freeze True \
@@ -15,7 +15,7 @@ CUDA_VISIBLE_DEVICES=1 python3 /home/arism/cell2text/cell2text_train/train_ddp.p
     --mode full \
     --num_beams 1 \
     --qformer_cross_attention_freq 2 \
-    --experiment_name "qformer_queries32_biobertlarge_crossattn2_freezebertTrue_lorar32_foo"\
+    --experiment_name "qformer_queries32_biobertbase_crossattn2_3bertlayerstrainable_lorar32"\
     --eval_steps 10600 \
     --zero_stage 1 \
     --lora_r_decoder 32 \

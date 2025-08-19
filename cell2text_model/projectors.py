@@ -43,7 +43,7 @@ class QFormerProjector(Blip2Base):
         num_query_tokens: int = 32,
         cross_attention_freq: int = 2,
         use_flash_attn: bool = False,
-        num_trainable_layers: int = 2  # Train last 3 layers
+        num_trainable_layers: int = 3  # Train last 3 layers
     ):
         super().__init__()
         
@@ -53,8 +53,8 @@ class QFormerProjector(Blip2Base):
         self.num_trainable_layers = num_trainable_layers
         
         # Hard-coded BioBERT-Large
-        bert_model_name = 'dmis-lab/biobert-large-cased-v1.1'
-        bert_hidden_size = 1024  # BioBERT-Large hidden size
+        bert_model_name = 'dmis-lab/biobert-base-cased-v1.2'
+        bert_hidden_size = 768  # BioBERT-Large hidden size
         
 
         # Input projection to BioBERT-Large dimension
