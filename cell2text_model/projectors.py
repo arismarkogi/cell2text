@@ -63,7 +63,7 @@ class QFormerProjector(Blip2Base):
             model_name=bert_model_name,
             num_query_token=num_query_tokens,
             graph_width=bert_hidden_size,
-            cross_attention_freq=3, #cross_attention_freq,
+            cross_attention_freq=cross_attention_freq, #cross_attention_freq,
             use_flash_attn=use_flash_attn
         )
         

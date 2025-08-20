@@ -85,168 +85,144 @@ class CellPuzzlesDataset(Dataset):
     
     def __getitem__(self, idx):
         sample = self.data[idx]
-        
-        # Get multiple cell expression data
-        input_ids_batch = sample["input_ids_batch"]  # List of tokenized cell expressions
-        system_msg = sample["system_msg"]
-        user_msg = sample["user_msg"] 
-        assistant_msg = sample["assistant_msg"]
-        
-        # Limit number of cells and pad if needed
+        input_ids_batch = sample["input_ids_batch"]  # list of lists
         num_cells = len(input_ids_batch)
-        cell_expressions = input_ids_batch[:num_cells]
-        
-        # Convert to tensors and get lengths
-        cell_tokens_list = []
+
+        # find max length for this sample
+        max_len = max(len(c) for c in input_ids_batch if len(c) > 0)
+
+        # create tensor (num_cells, max_len)
+        cell_expressions = torch.full(
+            (num_cells, max_len), 
+            fill_value=self.tokenizer.pad_token_id, 
+            dtype=torch.long
+        )
+        cell_masks = torch.zeros((num_cells, max_len), dtype=torch.long)
         cell_lengths = []
-        
-        for cell_expr in cell_expressions:
-            if len(cell_expr) > 0:  # Skip empty cells
-                tokens = torch.tensor(cell_expr, dtype=torch.long)
-                cell_tokens_list.append(tokens)
-                cell_lengths.append(len(cell_expr))
-        
-        
-        # Replace gene lists with placeholders in the original user message
-        user_message = self._replace_gene_lists_with_placeholders(user_msg, len(cell_tokens_list))
-        
-        # Create conversation
+
+        for i, cell_expr in enumerate(input_ids_batch):
+            expr_len = len(cell_expr)
+            if expr_len > 0:
+                cell_expressions[i, :expr_len] = torch.tensor(cell_expr, dtype=torch.long)
+                cell_masks[i, :expr_len] = 1
+                cell_lengths.append(expr_len)
+            else:
+                cell_lengths.append(0)
+
+        # Prepare conversation tokens
+        user_message = self._replace_gene_lists_with_placeholders(sample["user_msg"], num_cells)
         conversation = [
-            {"role": "system", "content": system_msg},
+            {"role": "system", "content": sample["system_msg"]},
             {"role": "user", "content": user_message}
         ]
-
-        print(conversation)
-        
-        # Tokenize prompt
         prompt_ids = self.tokenizer.apply_chat_template(
             conversation,
             add_generation_prompt=True,
             tokenize=True,
             padding=False,
             return_tensors="pt"
-        )
-        
-        # Tokenize target response
+        )[0]  # (seq_len,)
+
         target_ids = self.tokenizer(
-            [assistant_msg + self.tokenizer.eos_token],
+            [sample["assistant_msg"] + self.tokenizer.eos_token],
             add_special_tokens=False,
             return_attention_mask=False,
             return_tensors="pt"
-        )["input_ids"]
-        
+        )["input_ids"][0]  # (target_len,)
+
         return {
-            "cell_expressions": cell_tokens_list,  # List of tensors
+            "cell_expressions": cell_expressions,  # (num_cells, max_len)
+            "cell_masks": cell_masks,              # (num_cells, max_len)
             "cell_lengths": torch.tensor(cell_lengths, dtype=torch.long),
             "num_cells": num_cells,
             "prompt_input_ids": prompt_ids,
             "target_input_ids": target_ids,
-            "raw_user_msg": user_msg,  # Original for reference
-            "raw_assistant_msg": assistant_msg
+            "raw_user_msg": sample["user_msg"],
+            "raw_assistant_msg": sample["assistant_msg"]
         }
+
     
     def collate_fn(self, geneformer_pad_token_id=0, mode="train"):
-        """
-        Collate function for batching multi-cell data
-        """
         def collate(batch):
             batch_size = len(batch)
-            
-            # Find max cells and max expression length across batch
-            max_cells_in_batch = max(len(item["cell_expressions"]) for item in batch)
-            max_expr_len = 0
-            for item in batch:
-                for cell_expr in item["cell_expressions"]:
-                    max_expr_len = max(max_expr_len, len(cell_expr))
-            
-            # Prepare cell expression tensors: (batch_size, max_cells, max_expr_len)
-            batch_cell_expressions = torch.full(
-                (batch_size, max_cells_in_batch, max_expr_len), 
-                fill_value=geneformer_pad_token_id, 
+
+            # Pad cell_expressions (B, max_cells, max_len)
+            max_cells = max(item["num_cells"] for item in batch)
+            max_len = max(item["cell_expressions"].shape[1] for item in batch)
+
+            cell_expressions = torch.full(
+                (batch_size, max_cells, max_len),
+                fill_value=geneformer_pad_token_id,
                 dtype=torch.long
             )
-            batch_cell_masks = torch.zeros(
-                (batch_size, max_cells_in_batch, max_expr_len), 
-                dtype=torch.long
-            )
-            batch_cell_lengths = torch.zeros(
-                (batch_size, max_cells_in_batch), 
-                dtype=torch.long
-            )
-            
-            # Fill in the data
-            for batch_idx, item in enumerate(batch):
-                for cell_idx, cell_expr in enumerate(item["cell_expressions"]):
-                    expr_len = len(cell_expr)
-                    batch_cell_expressions[batch_idx, cell_idx, :expr_len] = cell_expr
-                    batch_cell_masks[batch_idx, cell_idx, :expr_len] = 1
-                    batch_cell_lengths[batch_idx, cell_idx] = item["cell_lengths"][cell_idx]
-            
-            # Handle text sequences (similar to your original code)
-            prompt_input_ids = [item["prompt_input_ids"][0] for item in batch]
-            target_input_ids = [item["target_input_ids"][0] for item in batch]
-            
+            cell_masks = torch.zeros((batch_size, max_cells, max_len), dtype=torch.long)
+            cell_lengths = torch.zeros((batch_size, max_cells), dtype=torch.long)
+
+            for i, item in enumerate(batch):
+                ncells, clen = item["cell_expressions"].shape
+                cell_expressions[i, :ncells, :clen] = item["cell_expressions"]
+                cell_masks[i, :ncells, :clen] = item["cell_masks"]
+                cell_lengths[i, :ncells] = item["cell_lengths"]
+
             # Pad prompts
-            max_prompt_len = max(len(p) for p in prompt_input_ids)
-            padded_prompt_ids = torch.full(
-                (batch_size, max_prompt_len), 
-                fill_value=self.tokenizer.pad_token_id, 
+            prompt_lens = [len(item["prompt_input_ids"]) for item in batch]
+            max_prompt_len = max(prompt_lens)
+            prompt_ids = torch.full(
+                (batch_size, max_prompt_len),
+                fill_value=self.tokenizer.pad_token_id,
                 dtype=torch.long
             )
-            padded_prompt_mask = torch.zeros((batch_size, max_prompt_len), dtype=torch.long)
-            
-            for i, p in enumerate(prompt_input_ids):
-                padded_prompt_ids[i, :len(p)] = p
-                padded_prompt_mask[i, :len(p)] = 1
-            
+            prompt_mask = torch.zeros((batch_size, max_prompt_len), dtype=torch.long)
+            for i, item in enumerate(batch):
+                L = len(item["prompt_input_ids"])
+                prompt_ids[i, :L] = item["prompt_input_ids"]
+                prompt_mask[i, :L] = 1
+
             # Pad targets
-            max_target_len = max(len(t) for t in target_input_ids)
-            padded_target_ids = torch.full(
-                (batch_size, max_target_len), 
-                fill_value=self.tokenizer.pad_token_id, 
+            target_lens = [len(item["target_input_ids"]) for item in batch]
+            max_target_len = max(target_lens)
+            target_ids = torch.full(
+                (batch_size, max_target_len),
+                fill_value=self.tokenizer.pad_token_id,
                 dtype=torch.long
             )
-            padded_target_mask = torch.zeros((batch_size, max_target_len), dtype=torch.long)
-            padded_labels = torch.full((batch_size, max_target_len), fill_value=-100, dtype=torch.long)
-            
-            for i, t in enumerate(target_input_ids):
-                padded_target_ids[i, :len(t)] = t
-                padded_target_mask[i, :len(t)] = 1
-                padded_labels[i, :len(t)] = t
-            
+            target_mask = torch.zeros((batch_size, max_target_len), dtype=torch.long)
+            labels = torch.full((batch_size, max_target_len), -100, dtype=torch.long)
+            for i, item in enumerate(batch):
+                L = len(item["target_input_ids"])
+                target_ids[i, :L] = item["target_input_ids"]
+                target_mask[i, :L] = 1
+                labels[i, :L] = item["target_input_ids"]
+
             if mode == "train":
-                # Combine prompt and target for training
-                combined_input_ids = torch.cat([padded_prompt_ids, padded_target_ids], dim=1)
-                combined_attention_mask = torch.cat([padded_prompt_mask, padded_target_mask], dim=1)
+                input_ids = torch.cat([prompt_ids, target_ids], dim=1)
+                attention_mask = torch.cat([prompt_mask, target_mask], dim=1)
                 combined_labels = torch.cat([
-                    torch.full_like(padded_prompt_ids, fill_value=-100),
-                    padded_labels
+                    torch.full_like(prompt_ids, -100), labels
                 ], dim=1)
-                
+
                 return {
-                    "expression_tokens": batch_cell_expressions,  # (B, max_cells, max_expr_len)
-                    "expression_attention_mask": batch_cell_masks,
-                    "expression_token_lengths": batch_cell_lengths,  # (B, max_cells)
+                    "expression_tokens": cell_expressions,
+                    "expression_attention_mask": cell_masks,
+                    "expression_token_lengths": cell_lengths,
                     "num_cells": torch.tensor([item["num_cells"] for item in batch]),
-                    "input_ids": combined_input_ids,
-                    "attention_mask": combined_attention_mask,
+                    "input_ids": input_ids,
+                    "attention_mask": attention_mask,
                     "labels": combined_labels
                 }
-            
+
             elif mode == "inference":
                 return {
-                    "expression_tokens": batch_cell_expressions,
-                    "expression_attention_mask": batch_cell_masks,
-                    "expression_token_lengths": batch_cell_lengths,
+                    "expression_tokens": cell_expressions,
+                    "expression_attention_mask": cell_masks,
+                    "expression_token_lengths": cell_lengths,
                     "num_cells": torch.tensor([item["num_cells"] for item in batch]),
-                    "input_ids": padded_prompt_ids,
-                    "attention_mask": padded_prompt_mask,
-                    "target_input_ids": padded_target_ids,  # For evaluation
+                    "input_ids": prompt_ids,
+                    "attention_mask": prompt_mask,
+                    "target_input_ids": target_ids,
                     "raw_user_msgs": [item["raw_user_msg"] for item in batch],
                     "raw_assistant_msgs": [item["raw_assistant_msg"] for item in batch]
                 }
-            else:
-                raise ValueError(f"Invalid mode: {mode}")
-        
         return collate
+
 

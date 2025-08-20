@@ -14,8 +14,8 @@ CUDA_VISIBLE_DEVICES=1 python3 /home/arism/cell2text/cell2text_train/train_ddp.p
     --mlp_hidden_size 2048 \
     --mode full \
     --num_beams 1 \
-    --qformer_cross_attention_freq 3 \
-    --experiment_name "qformer_queries32_biobertbase_crossattn3_3bertlayerstrainable_lorar32"\
+    --qformer_cross_attention_freq 2 \
+    --experiment_name "qformer_queries32_biobertbase_crossattnfreq2__lorar32_20250820 "\
     --eval_steps 10600 \
     --zero_stage 1 \
     --lora_r_decoder 32 \
