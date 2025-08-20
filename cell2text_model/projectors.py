@@ -41,16 +41,14 @@ class QFormerProjector(Blip2Base):
         input_dim: int,
         output_dim: int,
         num_query_tokens: int = 32,
-        cross_attention_freq: int = 2,
+        cross_attention_freq: int = 3,
         use_flash_attn: bool = False,
-        num_trainable_layers: int = 3  # Train last 3 layers
     ):
         super().__init__()
         
         self.input_dim = input_dim
         self.output_dim = output_dim
         self.num_query_tokens = num_query_tokens
-        self.num_trainable_layers = num_trainable_layers
         
         # Hard-coded BioBERT-Large
         bert_model_name = 'dmis-lab/biobert-base-cased-v1.2'
@@ -65,7 +63,7 @@ class QFormerProjector(Blip2Base):
             model_name=bert_model_name,
             num_query_token=num_query_tokens,
             graph_width=bert_hidden_size,
-            cross_attention_freq=cross_attention_freq,
+            cross_attention_freq=3, #cross_attention_freq,
             use_flash_attn=use_flash_attn
         )
         
@@ -80,11 +78,10 @@ class QFormerProjector(Blip2Base):
         
         print(f"✓ BioBERT-Large QFormer initialized")
         print(f"✓ Query tokens: {num_query_tokens} (trainable)")
-        print(f"✓ Trainable BERT layers: last {num_trainable_layers}")
         self._print_trainable_summary()
     
     def _configure_trainable_params(self):
-        """Configure which parameters are trainable"""
+        """Configure trainable parameters: query tokens, cross-attention, and query-specific FFNs"""
         
         # 1. Freeze all QFormer parameters initially
         for param in self.Qformer.parameters():
@@ -92,95 +89,132 @@ class QFormerProjector(Blip2Base):
         
         # 2. Make query tokens trainable
         self.query_tokens.requires_grad = True
+        print("✅ Query tokens: TRAINABLE")
         
-        # 3. Make last N encoder layers trainable
-        total_layers = len(self.Qformer.bert.encoder.layer)
-        trainable_start = total_layers - self.num_trainable_layers
+        # 3. Make ALL cross-attention components trainable (all layers)
+        cross_attn_count = 0
+        for i, layer in enumerate(self.Qformer.bert.encoder.layer):
+            if hasattr(layer, 'crossattention'):
+                # Cross-attention components
+                for param in layer.crossattention.parameters():
+                    param.requires_grad = True
+                cross_attn_count += 1
+                print(f"✅ Layer {i}: cross-attention TRAINABLE")
         
-        for i in range(trainable_start, total_layers):
-            print(f"Making layer {i} trainable")
-            for param in self.Qformer.bert.encoder.layer[i].parameters():
-                param.requires_grad = True
+        # 4. Make ALL query-specific FFN components trainable (all layers)
+        query_ffn_count = 0
+        for i, layer in enumerate(self.Qformer.bert.encoder.layer):
+            # Query-specific intermediate layer
+            if hasattr(layer, 'intermediate_query'):
+                for param in layer.intermediate_query.parameters():
+                    param.requires_grad = True
+                query_ffn_count += 1
+                print(f"✅ Layer {i}: intermediate_query TRAINABLE")
+            
+            # Query-specific output layer  
+            if hasattr(layer, 'output_query'):
+                for param in layer.output_query.parameters():
+                    param.requires_grad = True
+                print(f"✅ Layer {i}: output_query TRAINABLE")
         
-        # 4. Keep projection layers trainable (they're not part of QFormer)
+        # 5. Keep projection layers trainable
         for param in self.input_projection.parameters():
             param.requires_grad = True
         for param in self.output_projection.parameters():
             param.requires_grad = True
         for param in self.ln_cell.parameters():
             param.requires_grad = True
-    
+        print("✅ Projection layers: TRAINABLE")
+        
+        print(f"\n📊 Summary:")
+        print(f"   • Cross-attention layers: {cross_attn_count}")
+        print(f"   • Query FFN layers: {query_ffn_count}")
+        print(f"   • All randomly-initialized components are now trainable!")
+
     def _print_trainable_summary(self):
-        """Print summary of trainable parameters"""
+        """Print detailed summary of trainable parameters"""
         trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
         total_params = sum(p.numel() for p in self.parameters())
         
-        print(f"Trainable parameters: {trainable_params:,} / {total_params:,} "
-              f"({100 * trainable_params / total_params:.1f}%)")
+        print(f"\n📈 PARAMETER SUMMARY:")
+        print(f"Trainable: {trainable_params:,} / {total_params:,} "
+            f"({100 * trainable_params / total_params:.1f}%)")
         
-        # Breakdown by component
+        # Component breakdown
         query_params = self.query_tokens.numel()
-        proj_params = (sum(p.numel() for p in self.input_projection.parameters()) +
-                      sum(p.numel() for p in self.output_projection.parameters()) +
-                      sum(p.numel() for p in self.ln_cell.parameters()))
         
-        # Count trainable BERT layers
-        bert_trainable = 0
-        total_layers = len(self.Qformer.bert.encoder.layer)
-        trainable_start = total_layers - self.num_trainable_layers
+        # Projection layers
+        proj_params = (
+            sum(p.numel() for p in self.input_projection.parameters()) +
+            sum(p.numel() for p in self.output_projection.parameters()) +
+            sum(p.numel() for p in self.ln_cell.parameters())
+        )
         
-        for i in range(trainable_start, total_layers):
-            bert_trainable += sum(p.numel() for p in self.Qformer.bert.encoder.layer[i].parameters())
+        # Count cross-attention and query FFN parameters
+        cross_attn_params = 0
+        query_ffn_params = 0
         
-        print(f"  • Query tokens: {query_params:,}")
-        print(f"  • Projection layers: {proj_params:,}")
-        print(f"  • BERT layers ({trainable_start}-{total_layers-1}): {bert_trainable:,}")
-    
+        for layer in self.Qformer.bert.encoder.layer:
+            # Cross-attention parameters
+            if hasattr(layer, 'crossattention'):
+                cross_attn_params += sum(p.numel() for p in layer.crossattention.parameters() if p.requires_grad)
+            
+            # Query FFN parameters
+            if hasattr(layer, 'intermediate_query'):
+                query_ffn_params += sum(p.numel() for p in layer.intermediate_query.parameters() if p.requires_grad)
+            if hasattr(layer, 'output_query'):
+                query_ffn_params += sum(p.numel() for p in layer.output_query.parameters() if p.requires_grad)
+        
+        print(f"\n🔍 BREAKDOWN:")
+        print(f"   • Query tokens: {query_params:,}")
+        print(f"   • Cross-attention (all layers): {cross_attn_params:,}")
+        print(f"   • Query FFNs (all layers): {query_ffn_params:,}")
+        print(f"   • Projection layers: {proj_params:,}")
+        print(f"   • Total trainable: {query_params + cross_attn_params + query_ffn_params + proj_params:,}")
+        
+        print(f"\n✅ STRATEGY: Train only randomly-initialized components")
+        print(f"✅ FROZEN: All pre-trained BERT components (self-attention, standard FFNs)")
+
     def forward(self, cell_embeddings: torch.Tensor, attention_mask: torch.Tensor = None) -> torch.Tensor:
         """
-        Forward pass through QFormer projector
-        
-        Args:
-            cell_embeddings: [batch_size, seq_len, input_dim]
-            attention_mask: [batch_size, seq_len] - optional attention mask
-        
-        Returns:
-            [batch_size, num_query_tokens, output_dim]
+        Forward pass - what actually happens during cross-attention
         """
         batch_size = cell_embeddings.size(0)
         device = cell_embeddings.device
         
-        # Project input to BioBERT-Large dimension
+        # Project input to BioBERT dimension
         projected_embeddings = self.input_projection(cell_embeddings)
         projected_embeddings = self.ln_cell(projected_embeddings)
         
-        # Prepare query tokens
+        # Prepare query tokens [batch_size, num_query_tokens, hidden_size]
         query_tokens = self.query_tokens.expand(batch_size, -1, -1).to(device)
         
-        # Create attention mask if not provided
         if attention_mask is None:
             attention_mask = torch.ones(
-                cell_embeddings.size()[:2], 
-                dtype=torch.long, 
-                device=device
+                cell_embeddings.size()[:2], dtype=torch.long, device=device
             )
         
-        # QFormer forward pass
+        # During QFormer.bert() forward pass:
+        # 1. Query tokens go through self-attention (attend to each other)
+        # 2. Every cross_attention_freq layers: query tokens attend to projected_embeddings
+        # 3. This cross-attention is WHERE THE MAGIC HAPPENS - queries learn to extract
+        #    relevant information from your cell embeddings
+        # 4. Feed-forward networks process the attended representations
+        
         query_output = self.Qformer.bert(
-            query_embeds=query_tokens,
-            encoder_hidden_states=projected_embeddings,
-            encoder_attention_mask=attention_mask,
+            query_embeds=query_tokens,                    # [B, num_queries, H] 
+            encoder_hidden_states=projected_embeddings,   # [B, seq_len, H] - your cell data
+            encoder_attention_mask=attention_mask,        # [B, seq_len]
             use_cache=False,
             return_dict=True,
         )
         
-        # Extract and project query outputs
+        # Extract final query representations
         query_embeddings = query_output.last_hidden_state[:, :self.num_query_tokens, :]
         output_embeddings = self.output_projection(query_embeddings)
         
-        return output_embeddings
-
-        
+        return output_embeddings  # [batch_size, num_query_tokens, output_dim]
+            
 class PerceiverIO(nn.Module):
     """
     Perceiver IO implementation with both cross-attention and self-attention

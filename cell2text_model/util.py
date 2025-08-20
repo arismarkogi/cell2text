@@ -145,8 +145,9 @@ def load_projector_weights(model: Cell2TextModel, checkpoint_path: str, bert_mod
             if (new_key.startswith("input_projection") or 
                 new_key.startswith("output_projection") or 
                 new_key.startswith("ln_cell") or
-                new_key.startswith("Qformer.bert.encoder.layer.22.") or
-                new_key.startswith("Qformer.bert.encoder.layer.23.") or
+                new_key.startswith("Qformer.bert.encoder.layer.9.") or
+                new_key.startswith("Qformer.bert.encoder.layer.10.") or
+                new_key.startswith("Qformer.bert.encoder.layer.11.") or
                 new_key == "query_tokens"):
                 custom_components[new_key] = v
             else:
