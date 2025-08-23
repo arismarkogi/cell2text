@@ -29,6 +29,20 @@ from peft import (
     PeftModel,
 )
 
+# Add these imports at the top of your file after existing imports
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp.wrap import (
+    size_based_auto_wrap_policy,
+    enable_wrap,
+    wrap,
+)
+from torch.distributed.fsdp import (
+    MixedPrecision,
+    BackwardPrefetch,
+    ShardingStrategy,
+)
+import functools
+
 
 from util import create_argument_parser, create_progress_bar, compute_enhanced_training_summary, convert_json_compat, save_simple_training_history
 
@@ -65,7 +79,20 @@ class Cell2TextDDPTrainer:
         # Set device
         self.device = torch.device(f"cuda:{rank}" if torch.cuda.is_available() and not args.no_cuda else "cpu")
         torch.cuda.set_device(self.device)
-         
+    
+    def calculate_validation_steps(self, epoch_length):
+        """Calculate the steps at which to validate within an epoch"""
+        if self.args.vals_per_epoch <= 0:
+            return []
+        
+        # Calculate validation points within the epoch
+        val_points = []
+        for i in range(1, self.args.vals_per_epoch + 1):
+            val_step = int((epoch_length * i) / self.args.vals_per_epoch)
+            val_points.append(val_step)
+        
+        return val_points
+            
         
     def setup_distributed(self):
         """Initialize distributed training"""
@@ -79,6 +106,86 @@ class Cell2TextDDPTrainer:
             rank=self.rank,
             world_size=self.world_size
         )
+    def setup_fsdp_model(self):
+        """Setup model with FSDP wrapping"""
+        if self.is_main_process:
+            print("Setting up FSDP model...")
+        
+        # Move model to device first
+        self.model = self.model.to(self.device)
+        
+        # FSDP auto wrap policy - wrap layers with >= 100M parameters
+        auto_wrap_policy = functools.partial(
+            size_based_auto_wrap_policy, min_num_params=100_000_000
+        )
+        
+        # Mixed precision policy
+        if self.args.use_fp16:
+            mixed_precision_policy = MixedPrecision(
+                param_dtype=torch.float16,
+                reduce_dtype=torch.float16,
+                buffer_dtype=torch.float16,
+            )
+        else:
+            mixed_precision_policy = None
+        
+        # Wrap model with FSDP
+        self.model = FSDP(
+            self.model,
+            auto_wrap_policy=auto_wrap_policy,
+            mixed_precision=mixed_precision_policy,
+            backward_prefetch=BackwardPrefetch.BACKWARD_PRE,
+            sharding_strategy=ShardingStrategy.FULL_SHARD,
+            device_id=self.rank,
+        )
+        
+        if self.is_main_process:
+            print("FSDP model setup complete")
+    def unfreeze_all_parameters(self):
+        """Unfreeze all model parameters for full fine-tuning"""
+        if self.is_main_process:
+            print("Unfreezing ALL model parameters for full fine-tuning...")
+        
+        # Get the base model (unwrap FSDP/DDP if needed)
+        if hasattr(self.model, 'module'):
+            base_model = self.model.module
+        else:
+            base_model = self.model
+        
+        # Unfreeze all parameters
+        for name, param in base_model.named_parameters():
+            param.requires_grad = True
+        
+        if self.is_main_process:
+            trainable_params = sum(p.numel() for p in base_model.parameters() if p.requires_grad)
+            total_params = sum(p.numel() for p in base_model.parameters())
+            print(f"All parameters unfrozen: {trainable_params:,} / {total_params:,} (100.0%)")
+
+    def setup_fsdp_optimizer(self):
+        """Setup optimizer for FSDP training with all parameters"""
+        if self.is_main_process:
+            print("Setting up FSDP optimizer for all parameters...")
+        
+        # Simple optimizer for all parameters
+        self.optimizer = AdamW(
+            self.model.parameters(),
+            lr=self.args.decoder_lr,
+            weight_decay=self.args.weight_decay,
+            betas=(0.9, 0.999),
+            eps=1e-8
+        )
+        
+        # Create scheduler
+        total_steps = self.args.epochs * len(self.train_loader) // self.args.gradient_accumulation_steps
+        self.lr_scheduler = get_linear_schedule_with_warmup(
+            self.optimizer,
+            num_warmup_steps=self.args.warmup_steps,
+            num_training_steps=total_steps
+        )
+        
+        if self.is_main_process:
+            print("FSDP optimizer and scheduler created")
+
 
         
     def load_tokenizer(self):
@@ -258,6 +365,11 @@ class Cell2TextDDPTrainer:
         
     def freeze_model_components(self):
         """Freeze specified model components"""
+        if self.args.full_finetune:
+            # Don't freeze anything if full fine-tuning is enabled
+            if self.is_main_process:
+                print("Full fine-tuning enabled - NOT freezing any parameters")
+            return
         print("Freezing cell encoder parameters...")
         for param in self.model.cell_encoder.parameters():
             param.requires_grad = False
@@ -271,6 +383,12 @@ class Cell2TextDDPTrainer:
             
     def apply_lora_to_model(self):
         """Apply LoRA to the specified components of the model"""
+        if self.args.full_finetune:
+            # Skip LoRA if full fine-tuning
+            if self.is_main_process:
+                print("Full fine-tuning enabled - skipping LoRA application")
+            return
+        
         if not self.args.use_lora_decoder:
             return
             
@@ -591,7 +709,11 @@ class Cell2TextDDPTrainer:
     def sanity_train(self):
         """Sanity training loop - overfit on small dataset"""
         print("="*60)
-        print("STARTING DDP SANITY CHECK TRAINING")
+        print("STARTING SANITY CHECK TRAINING")
+        if self.args.use_fsdp:
+            print("Using FSDP (Fully Sharded Data Parallel)")
+        else:
+            print("Using DDP (Distributed Data Parallel)")
         print("="*60)
         print(f"Target loss: {self.args.target_loss}")
         print(f"Epochs: {self.args.epochs}")
@@ -599,7 +721,10 @@ class Cell2TextDDPTrainer:
         print(f"Batch size per device: {self.args.batch_size_per_device}")
         print(f"Gradient accumulation steps: {self.args.gradient_accumulation_steps}")
         print(f"Projector type: {self.args.projector}")
+        print(f"Full fine-tuning: {'Yes' if self.args.full_finetune else 'No'}")
+        print(f"Using LoRA: {'Yes' if self.args.use_lora_decoder and not self.args.full_finetune else 'No'}")
         print("="*60)
+    
         
         # Training loop - overfit until target loss
         self.model.train()
@@ -682,10 +807,14 @@ class Cell2TextDDPTrainer:
         return final_loss <= self.args.target_loss
     
     def full_train(self):
-        """Full training loop with DDP"""
+        """Full training loop with DDP/FSDP"""
         if self.is_main_process:
             print("="*60)
-            print("STARTING DDP FULL TRAINING")
+            print("STARTING FULL TRAINING")
+            if self.args.use_fsdp:
+                print("Using FSDP (Fully Sharded Data Parallel)")
+            else:
+                print("Using DDP (Distributed Data Parallel)")
             print("="*60)
             print(f"World size: {self.world_size}")
             print(f"Rank: {self.rank}")
@@ -694,14 +823,23 @@ class Cell2TextDDPTrainer:
             print(f"Batch size per device: {self.args.batch_size_per_device}")
             print(f"Gradient accumulation steps: {self.args.gradient_accumulation_steps}")
             print(f"Projector type: {self.args.projector}")
-            print(f"Validation every: {self.args.eval_steps} steps")
+            print(f"Full fine-tuning: {'Yes' if self.args.full_finetune else 'No'}")
+            print(f"Using LoRA: {'Yes' if self.args.use_lora_decoder and not self.args.full_finetune else 'No'}")
+            if self.args.use_fsdp:
+                print(f"Mixed precision (fp16): {'Yes' if self.args.use_fp16 else 'No'}")
+            print(f"Validations per epoch: {self.args.vals_per_epoch}")
             print("="*60)
-        
-        self.model.train()
+            self.model.train()
         
         # Initialize validation tracking
         validation_history = []
         training_history = []
+
+        val_steps_per_epoch = self.calculate_validation_steps(len(self.train_loader))
+    
+        if self.is_main_process:
+            print(f"Validation points per epoch: {val_steps_per_epoch}")
+            print(f"Validations per epoch: {self.args.vals_per_epoch}")
         
         total_steps = self.args.epochs * len(self.train_loader)
         progress_bar = create_progress_bar("🚀 DDP Full Training", total_steps, self.is_main_process)
@@ -736,30 +874,38 @@ class Cell2TextDDPTrainer:
                 if progress_bar:
                     progress_bar.update(1)
                     progress_bar.set_description(
-                        f"🚀 DDP Training | Epoch: {epoch+1}/{self.args.epochs} | "
+                        f"🚀 Training | Epoch: {epoch+1}/{self.args.epochs} | "
                         f"Step: {step+1}/{len(self.train_loader)} | Loss: {loss:.4f}"
                     )
                 
-                # Validation 
-                if self.global_step % self.args.eval_steps == 0 and self.val_loader is not None:
+                # NEW VALIDATION LOGIC - Check if current step is a validation point
+                current_epoch_step = step + 1  # 1-indexed step within epoch
+                if current_epoch_step in val_steps_per_epoch and self.val_loader is not None:
                     if self.world_size > 1:
                         dist.barrier()
 
                     self.model.eval()
                     val_loss = self.validate()
                     
+                    # Calculate validation point number
+                    val_point = val_steps_per_epoch.index(current_epoch_step) + 1
+                    
                     # Store validation results
                     validation_record = {
                         'epoch': epoch + 1,
                         'step': step + 1,
+                        'epoch_step': current_epoch_step,
+                        'validation_point': val_point,
+                        'total_val_points': len(val_steps_per_epoch),
                         'global_step': self.global_step,
                         'validation_loss': val_loss,
-                        'training_loss': np.mean(self.losses[-self.args.eval_steps:]) if len(self.losses) >= self.args.eval_steps else np.mean(self.losses)
+                        'training_loss': np.mean(epoch_losses) if epoch_losses else 0.0
                     }
                     validation_history.append(validation_record)
                     
                     if self.is_main_process:
-                        print(f"\nValidation at step {self.global_step}:")
+                        print(f"\nValidation {val_point}/{len(val_steps_per_epoch)} for Epoch {epoch+1}:")
+                        print(f"  Step: {current_epoch_step}/{len(self.train_loader)}")
                         print(f"  Validation Loss: {val_loss:.4f}")
                     
                     # Early stopping and best model tracking
@@ -780,7 +926,9 @@ class Cell2TextDDPTrainer:
                             if self.is_main_process:
                                 print(f"Best model checkpoint saved to: {checkpoint_dir}")
                     else:
-                        steps_since_improvement += self.args.eval_steps
+                        # Count steps since improvement (approximate)
+                        steps_since_last_val = len(self.train_loader) // len(val_steps_per_epoch)
+                        steps_since_improvement += steps_since_last_val
                         
                         if self.args.early_stopping > 0 and steps_since_improvement >= self.args.early_stopping:
                             if self.is_main_process:
@@ -796,7 +944,7 @@ class Cell2TextDDPTrainer:
                 
                 if self.world_size > 1:
                     dist.barrier()
-                    
+            
             # End of epoch summary
             epoch_loss = np.mean(epoch_losses)
             if self.is_main_process:
@@ -877,14 +1025,30 @@ def run_ddp(rank, world_size, args):
 
 
 def main():
-    """Main function for DeepSpeed training"""
+    """Main function for DDP/FSDP training"""
     parser = create_argument_parser()
     args = parser.parse_args()
     
-    # Handle experiment naming
+    # Validate FSDP arguments
+    if args.use_fsdp and args.world_size == 1:
+        print("Warning: FSDP is designed for multi-GPU training. Using single GPU/CPU instead.")
+    
+    if args.full_finetune and args.use_lora_decoder:
+        print("Warning: Full fine-tuning enabled. LoRA will be disabled.")
+        args.use_lora_decoder = False
+    
+    if args.use_fsdp and not torch.cuda.is_available():
+        print("Warning: FSDP requires CUDA. Falling back to CPU training without FSDP.")
+        args.use_fsdp = False
+    
+    # Handle experiment naming with FSDP indication
     if args.experiment_name:
         # Create experiment-specific output directory
         base_output_dir = args.output_dir
+        if args.use_fsdp:
+            args.experiment_name += "_fsdp"
+        if args.full_finetune:
+            args.experiment_name += "_fullft"
         args.output_dir = os.path.join(base_output_dir, args.experiment_name)
         print(f"Using experiment name: {args.experiment_name}")
         print(f"Output directory: {args.output_dir}")
@@ -892,7 +1056,9 @@ def main():
         # Generate default experiment name with timestamp
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_name = f"{args.mode}_{args.projector}_{timestamp}"
+        strategy = "fsdp" if args.use_fsdp else "ddp"
+        finetune_type = "fullft" if args.full_finetune else "lora" if args.use_lora_decoder else "proj"
+        default_name = f"{args.mode}_{args.projector}_{strategy}_{finetune_type}_{timestamp}"
         args.output_dir = os.path.join(args.output_dir, default_name)
         print(f"No experiment name provided. Using default: {default_name}")
         print(f"Output directory: {args.output_dir}")

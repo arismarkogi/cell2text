@@ -28,6 +28,16 @@ def create_argument_parser():
     """Create and return the argument parser for DeepSpeed training"""
     parser = argparse.ArgumentParser(description="DeepSpeed training for Cell2Text model")
 
+
+    # Add these lines in the argument parser function:
+    parser.add_argument("--use_fsdp", type=bool, default=False, 
+                        help="Use FSDP (Fully Sharded Data Parallel) instead of DDP")
+    parser.add_argument("--full_finetune", type=bool, default=False,
+                        help="Enable full fine-tuning of all model parameters (unfreeze everything)")
+    parser.add_argument("--use_fp16", type=bool, default=False,
+                        help="Use mixed precision (fp16) with FSDP")
+
+
      # Add experiment naming parameter
     parser.add_argument("--experiment_name", type=str, required=True,
                         help="Name for the experiment (will be used in output directory and file names)")
@@ -151,10 +161,8 @@ def create_argument_parser():
                         help="Dropout probability in Perceiver")
     
     # Full training specific parameters
-    parser.add_argument("--eval_steps", type=int, default=2000,
-                        help="Number of steps between evaluations")
-    parser.add_argument("--save_steps", type=int, default=1000,
-                        help="Number of steps between saving checkpoints")
+    parser.add_argument("--vals_per_epoch", type=int, default=3, 
+                   help="Number of validation points per epoch (e.g., 3 = validate at 1/3, 2/3, and end of epoch)")
     parser.add_argument("--early_stopping", type=int, default=0,
                         help="Number of steps without improvement before early stopping (0 to disable)")
     parser.add_argument("--save_model", type=bool, default=True,

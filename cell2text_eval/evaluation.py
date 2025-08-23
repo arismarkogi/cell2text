@@ -22,6 +22,159 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from cell2text_model.model import Cell2TextModel
 
+
+
+# Add these imports at the top of evaluation.py
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+from nltk.translate.meteor_score import meteor_score
+from rouge_score import rouge_scorer
+from scipy.spatial.distance import cdist
+from scipy.stats import wasserstein_distance
+import nltk
+
+# Download required NLTK data (add this after imports)
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt')
+try:
+    nltk.data.find('corpora/wordnet')
+except LookupError:
+    nltk.download('wordnet')
+
+def compute_additional_metrics(predictions, references):
+    """
+    Compute BLEU-2, ROUGE-2, METEOR, MMD, and EMD metrics
+    
+    Args:
+        predictions: List of predicted texts
+        references: List of reference texts
+        
+    Returns:
+        dict: Dictionary containing all computed metrics
+    """
+    smooth = SmoothingFunction().method4
+    rouge_scorer_obj = rouge_scorer.RougeScorer(['rouge2'], use_stemmer=True)
+    
+    bleu2_scores = []
+    rouge2_scores = []
+    meteor_scores = []
+    
+    # Compute text-based metrics
+    for pred, ref in zip(predictions, references):
+        # BLEU-2
+        bleu2 = sentence_bleu(
+            [ref.split()], 
+            pred.split(), 
+            weights=(0.5, 0.5, 0, 0),  # Only use 1-gram and 2-gram
+            smoothing_function=smooth
+        )
+        bleu2_scores.append(bleu2)
+        
+        # ROUGE-2
+        rouge_scores = rouge_scorer_obj.score(ref, pred)
+        rouge2_scores.append(rouge_scores['rouge2'].fmeasure)
+        
+        # METEOR
+        try:
+            meteor = meteor_score([ref.split()], pred.split())
+            meteor_scores.append(meteor)
+        except:
+            meteor_scores.append(0.0)  # Fallback if METEOR fails
+    
+    # Compute sentence embeddings for MMD and EMD
+    # Using simple TF-IDF vectors for demonstration
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    
+    try:
+        # Combine all texts for vocabulary
+        all_texts = predictions + references
+        vectorizer = TfidfVectorizer(max_features=1000, stop_words='english')
+        all_vectors = vectorizer.fit_transform(all_texts)
+        
+        # Split back into predictions and references
+        pred_vectors = all_vectors[:len(predictions)].toarray()
+        ref_vectors = all_vectors[len(predictions):].toarray()
+        
+        # Compute MMD (Maximum Mean Discrepancy)
+        mmd = compute_mmd(pred_vectors, ref_vectors)
+        
+        # Compute EMD (Earth Mover's Distance) - average across dimensions
+        emd = compute_average_emd(pred_vectors, ref_vectors)
+        
+    except Exception as e:
+        print(f"Warning: Could not compute MMD/EMD: {e}")
+        mmd = 0.0
+        emd = 0.0
+    
+    return {
+        'bleu2': np.mean(bleu2_scores) if bleu2_scores else 0.0,
+        'rouge2': np.mean(rouge2_scores) if rouge2_scores else 0.0,
+        'meteor': np.mean(meteor_scores) if meteor_scores else 0.0,
+        'mmd': mmd,
+        'emd': emd,
+        'individual_scores': {
+            'bleu2': bleu2_scores,
+            'rouge2': rouge2_scores,
+            'meteor': meteor_scores
+        }
+    }
+
+def compute_mmd(X, Y, kernel='rbf', gamma=1.0):
+    """
+    Compute Maximum Mean Discrepancy between two distributions
+    
+    Args:
+        X: Samples from first distribution (n_samples_X, n_features)
+        Y: Samples from second distribution (n_samples_Y, n_features)
+        kernel: Kernel type ('rbf' or 'linear')
+        gamma: Kernel parameter for RBF
+        
+    Returns:
+        float: MMD value
+    """
+    try:
+        if kernel == 'rbf':
+            # RBF kernel
+            XX = np.exp(-gamma * cdist(X, X, 'sqeuclidean'))
+            XY = np.exp(-gamma * cdist(X, Y, 'sqeuclidean'))
+            YY = np.exp(-gamma * cdist(Y, Y, 'sqeuclidean'))
+        else:
+            # Linear kernel
+            XX = np.dot(X, X.T)
+            XY = np.dot(X, Y.T)
+            YY = np.dot(Y, Y.T)
+        
+        mmd = XX.mean() + YY.mean() - 2 * XY.mean()
+        return max(0.0, mmd)  # MMD should be non-negative
+        
+    except Exception as e:
+        print(f"Warning: MMD computation failed: {e}")
+        return 0.0
+
+def compute_average_emd(X, Y):
+    """
+    Compute average Earth Mover's Distance across all dimensions
+    
+    Args:
+        X: Samples from first distribution
+        Y: Samples from second distribution
+        
+    Returns:
+        float: Average EMD across all dimensions
+    """
+    try:
+        emds = []
+        for i in range(X.shape[1]):
+            emd = wasserstein_distance(X[:, i], Y[:, i])
+            emds.append(emd)
+        return np.mean(emds)
+    except Exception as e:
+        print(f"Warning: EMD computation failed: {e}")
+        return 0.0
+
+
+
 def convert_json_compat(obj):
     if isinstance(obj, dict):
         return {k: convert_json_compat(v) for k, v in obj.items()}
@@ -392,6 +545,13 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     bert_scores_precision = []
     bert_scores_recall = []
     bert_scores_f1 = []
+    additional_metrics_data = {
+        'bleu2': [],
+        'rouge2': [], 
+        'meteor': [],
+        'predictions_for_metrics': [],
+        'targets_for_metrics': []
+    }
     val_losses = []
     smooth = SmoothingFunction().method4
     
@@ -464,6 +624,8 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                 if use_bertscore:
                     batch_predictions.append(decoded_pred)
                     batch_targets.append(target)
+                additional_metrics_data['predictions_for_metrics'].append(decoded_pred)
+                additional_metrics_data['targets_for_metrics'].append(target)
                 
                 # Extract cell types
                 pred_cell_type = cell_extractor.extract_cell_type(decoded_pred)
@@ -530,6 +692,27 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                 print(f"Warning: BERTScore computation failed - {e}")
             use_bertscore = False
     
+    additional_metrics = None
+    if additional_metrics_data['predictions_for_metrics']:
+        try:
+            if is_main_process:
+                print(f"Computing additional metrics (BLEU-2, ROUGE-2, METEOR, MMD, EMD)...")
+            
+            additional_metrics = compute_additional_metrics(
+                additional_metrics_data['predictions_for_metrics'],
+                additional_metrics_data['targets_for_metrics']
+            )
+            
+            if is_main_process:
+                print("Additional metrics computed successfully")
+                
+        except Exception as e:
+            if is_main_process:
+                print(f"Warning: Additional metrics computation failed - {e}")
+            additional_metrics = {
+                'bleu2': 0.0, 'rouge2': 0.0, 'meteor': 0.0, 'mmd': 0.0, 'emd': 0.0
+            }
+    
     # Reduce metrics from all processes if using DDP
     global_matches = None
     global_total = None
@@ -562,6 +745,34 @@ def evaluate_cell2text_model(model: Cell2TextModel,
             )
         else:
             global_matches, global_total = 0, 0
+        
+        if additional_metrics:
+            if additional_metrics['individual_scores']['bleu2']:
+                avg_bleu2, _ = reduce_distributed_metrics(
+                    additional_metrics['individual_scores']['bleu2'], world_size, rank
+                )
+            else:
+                avg_bleu2 = 0.0
+                
+            if additional_metrics['individual_scores']['rouge2']:
+                avg_rouge2, _ = reduce_distributed_metrics(
+                    additional_metrics['individual_scores']['rouge2'], world_size, rank
+                )
+            else:
+                avg_rouge2 = 0.0
+                
+            if additional_metrics['individual_scores']['meteor']:
+                avg_meteor, _ = reduce_distributed_metrics(
+                    additional_metrics['individual_scores']['meteor'], world_size, rank
+                )
+            else:
+                avg_meteor = 0.0
+            
+            # MMD and EMD are already aggregated metrics, use as-is
+            avg_mmd = additional_metrics['mmd']
+            avg_emd = additional_metrics['emd']
+        else:
+            avg_bleu2 = avg_rouge2 = avg_meteor = avg_mmd = avg_emd = 0.0
             
         # Print sample counts for debugging
         if is_main_process:
@@ -583,6 +794,16 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         else:
             avg_bert_precision = avg_bert_recall = avg_bert_f1 = None
             total_bert_samples = 0
+        
+        # Additional metrics averages  
+        if additional_metrics:
+            avg_bleu2 = additional_metrics['bleu2']
+            avg_rouge2 = additional_metrics['rouge2'] 
+            avg_meteor = additional_metrics['meteor']
+            avg_mmd = additional_metrics['mmd']
+            avg_emd = additional_metrics['emd']
+        else:
+            avg_bleu2 = avg_rouge2 = avg_meteor = avg_mmd = avg_emd = 0.0
         
         global_matches = sum(1 for p, t in zip(predicted_cell_types, target_cell_types) if p == t)
         global_total = len(predicted_cell_types)
@@ -620,6 +841,14 @@ def evaluate_cell2text_model(model: Cell2TextModel,
             print(f"  Recall: {avg_bert_recall:.4f}")
             print(f"  F1: {avg_bert_f1:.4f}")
             print(f"  Total BERTScore samples: {total_bert_samples}")
+        
+        if additional_metrics:
+            print(f"\nAdditional Metrics:")
+            print(f"  BLEU-2: {avg_bleu2:.4f}")
+            print(f"  ROUGE-2: {avg_rouge2:.4f}")
+            print(f"  METEOR: {avg_meteor:.4f}")
+            print(f"  MMD (↓): {avg_mmd:.4f}")
+            print(f"  EMD (↓): {avg_emd:.4f}")
         
         if avg_loss is not None:
             print(f"\nValidation Loss: {avg_loss:.4f}")
@@ -669,6 +898,10 @@ def evaluate_cell2text_model(model: Cell2TextModel,
             print(f"Predicted Cell Type: '{example['predicted_cell_type']}'")
             print(f"Cell Type Match: {'✓' if example['cell_type_match'] else '✗'}")
             print(f"Ontology Similarity: {example.get('ontology_similarity', 0.0):.4f}")  # Add ontology similarity to examples
+            if additional_metrics and i < len(additional_metrics['individual_scores']['bleu2']):
+                print(f"BLEU-2: {additional_metrics['individual_scores']['bleu2'][i]:.4f}")
+                print(f"ROUGE-2: {additional_metrics['individual_scores']['rouge2'][i]:.4f}")
+                print(f"METEOR: {additional_metrics['individual_scores']['meteor'][i]:.4f}")
             if example['loss'] is not None:
                 print(f"Loss: {example['loss']:.4f}")
         
@@ -693,6 +926,11 @@ def evaluate_cell2text_model(model: Cell2TextModel,
             results = {
                 'overall_metrics': {
                     'bleu_score': convert_json_compat(avg_bleu),
+                    'bleu2_score': convert_json_compat(avg_bleu2),
+                    'rouge2_score': convert_json_compat(avg_rouge2),
+                    'meteor_score': convert_json_compat(avg_meteor),
+                    'mmd_score': convert_json_compat(avg_mmd),
+                    'emd_score': convert_json_compat(avg_emd),
                     'bert_score_precision': convert_json_compat(avg_bert_precision),
                     'bert_score_recall': convert_json_compat(avg_bert_recall),
                     'bert_score_f1': convert_json_compat(avg_bert_f1),
@@ -715,6 +953,12 @@ def evaluate_cell2text_model(model: Cell2TextModel,
             print(f"\nDetailed results saved to: {save_results}")
     
     return convert_json_compat({
+        'bleu': avg_bleu,
+        'bleu2': avg_bleu2,
+        'rouge2': avg_rouge2,
+        'meteor': avg_meteor,
+        'mmd': avg_mmd,
+        'emd': avg_emd,
         'bleu': avg_bleu,
         'bert_score_precision': avg_bert_precision,
         'bert_score_recall': avg_bert_recall,
