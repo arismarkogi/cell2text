@@ -65,6 +65,12 @@ def create_argument_parser():
                         help="Save the overfitted model")
     parser.add_argument("--save_results", type=bool, default=True,
                         help="Save evaluation results to JSON")
+
+
+
+
+
+    parser.add_argument("--eval_steps", type=int, default=50000)
     
     # Model parameters
     parser.add_argument("--encoder_hidden_size", type=int, default=1152,
@@ -179,6 +185,11 @@ def create_argument_parser():
                        help="Use flash attention in QFormer")
     parser.add_argument("--qformer_freeze", type=bool, default=True,
                        help="Freeze QFormer parameters")
+
+    parser.add_argument("--world_size", type=int, default=2,
+                       help="Number of distributed processes (GPUs) for training")
+
+     # FSDP parameters
 
     return parser
 

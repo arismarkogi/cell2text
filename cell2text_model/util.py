@@ -120,61 +120,104 @@ def load_model(args: Dict[str, Any]) -> Cell2TextModel:
 
 
 
-def load_projector_weights(model: Cell2TextModel, checkpoint_path: str, bert_model_name: str = None):
-    """Load projector weights with detailed debugging (esp. for QFormer)."""
-    print(f"\n[DEBUG] Loading projector weights from {checkpoint_path}")
+import torch
 
+def is_trainable_parameter_qformer(param_name):
+    """Check if a QFormer parameter should be trainable (and thus loaded)"""
+    # Query tokens
+    if param_name == "query_tokens":
+        return True
+    
+    # Projection layers
+    if any(comp in param_name for comp in ["input_projection", "output_projection", "ln_cell"]):
+        return True
+    
+    # Cross-attention (any layer)
+    if ".crossattention." in param_name:
+        return True
+    
+    # Query-specific components (any layer)
+    if ".output_query" in param_name or ".intermediate_query." in param_name:
+        return True
+    
+    return False
+
+def load_projector_weights(model, checkpoint_path: str, bert_model_name: str = None, load_only_trainable: bool = False):
+    """Load projector weights with proper trainable parameter filtering for QFormer."""
+    print(f"\n[DEBUG] Loading projector weights from {checkpoint_path}")
+    
     full_state_dict = torch.load(checkpoint_path, map_location="cpu")
     print(f"[DEBUG] Full checkpoint keys: {len(full_state_dict)} parameters")
-
+    
     # Extract projector-related weights
     raw_projector_state_dict = {
         k: v for k, v in full_state_dict.items()
         if k.startswith("cell_to_embedding.")
     }
     print(f"[DEBUG] Extracted {len(raw_projector_state_dict)} projector-related parameters")
-
-    if isinstance(model.cell_to_embedding, QFormerProjector):
-        print("[DEBUG] Detected QFormer projector → filtering BERT weights")
-
-        custom_components = {}
-        skipped_keys = []
-
-        for k, v in raw_projector_state_dict.items():
-            new_key = k[len("cell_to_embedding."):]
-            if (new_key.startswith("input_projection") or 
-                new_key.startswith("output_projection") or 
-                new_key.startswith("ln_cell") or
-                new_key.startswith("Qformer.bert.encoder.layer.9.") or
-                new_key.startswith("Qformer.bert.encoder.layer.10.") or
-                new_key.startswith("Qformer.bert.encoder.layer.11.") or
-                new_key == "query_tokens"):
+    
+    if hasattr(model.cell_to_embedding, '__class__') and 'QFormer' in model.cell_to_embedding.__class__.__name__:
+        print("[DEBUG] Detected QFormer projector")
+        
+        if load_only_trainable:
+            print("[DEBUG] → Loading only trainable components")
+            trainable_components = {}
+            frozen_components = {}
+            
+            for k, v in raw_projector_state_dict.items():
+                new_key = k[len("cell_to_embedding."):]
+                
+                if is_trainable_parameter_qformer(new_key):
+                    trainable_components[new_key] = v
+                else:
+                    frozen_components[new_key] = v
+            
+            print(f"[DEBUG] Trainable components: {len(trainable_components)} parameters")
+            print(f"[DEBUG] → Loading: {list(trainable_components.keys())[:5]}{' ...' if len(trainable_components) > 5 else ''}")
+            print(f"[DEBUG] Frozen components: {len(frozen_components)} parameters (skipped)")
+            print(f"[DEBUG] → Skipping: {list(frozen_components.keys())[:5]}{' ...' if len(frozen_components) > 5 else ''}")
+            
+            # Load only trainable components
+            missing, unexpected = model.cell_to_embedding.load_state_dict(
+                trainable_components, strict=False
+            )
+            
+        else:
+            print("[DEBUG] → Loading all QFormer components")
+            # Load everything except BERT base weights (your original logic)
+            custom_components = {}
+            skipped_keys = []
+            
+            for k, v in raw_projector_state_dict.items():
+                new_key = k[len("cell_to_embedding."):]    
                 custom_components[new_key] = v
-            else:
-                skipped_keys.append(new_key)
-
-        print(f"[DEBUG] Keeping {len(custom_components)} keys for QFormer: {list(custom_components.keys())}")
-        print(f"[DEBUG] Skipped {len(skipped_keys)} keys (likely base BERT): {skipped_keys[:10]}{' ...' if len(skipped_keys) > 10 else ''}")
-
-        missing, unexpected = model.cell_to_embedding.load_state_dict(
-            custom_components, strict=False
-        )
-        print(f"[DEBUG] Load results → Missing: {missing}, Unexpected: {unexpected}")
-
+               
+            print(f"[DEBUG] Loading {len(custom_components)} custom components")
+            print(f"[DEBUG] Skipped {len(skipped_keys)} base BERT components")
+            
+            missing, unexpected = model.cell_to_embedding.load_state_dict(
+                custom_components, strict=False
+            )
+    
     else:
         print("[DEBUG] Detected non-QFormer projector → loading all projector weights")
         projector_state_dict = {}
         for k, v in raw_projector_state_dict.items():
             new_key = k[len("cell_to_embedding."):]
             projector_state_dict[new_key] = v
-
+        
         print(f"[DEBUG] Loading {len(projector_state_dict)} projector weights")
         missing, unexpected = model.cell_to_embedding.load_state_dict(
             projector_state_dict, strict=False
         )
-        print(f"[DEBUG] Load results → Missing: {missing}, Unexpected: {unexpected}")
-
+    
+    print(f"[DEBUG] Load results → Missing: {missing}")
+    print(f"[DEBUG] Load results → Unexpected: {unexpected}")
     print(f"[DEBUG] ✓ Projector weights loaded successfully\n")
+    
+    return missing, unexpected
+
+
 
 def create_lora_adapter(decoder_model, args: Dict[str, Any]) -> PeftModel:
     """Create a new LoRA adapter for the decoder"""

@@ -51,7 +51,7 @@ class QFormerProjector(Blip2Base):
         self.num_query_tokens = num_query_tokens
         
         # Hard-coded BioBERT-Large
-        bert_model_name = 'dmis-lab/biobert-base-cased-v1.2'
+        #bert_model_name = 'dmis-lab/biobert-base-cased-v1.2'
         bert_hidden_size = 768  # BioBERT-Large hidden size
         
 
@@ -60,7 +60,7 @@ class QFormerProjector(Blip2Base):
         
         # Initialize QFormer with BioBERT-Large
         self.Qformer, self.query_tokens = self.init_Qformer(
-            model_name=bert_model_name,
+            model_name="pubmedbert",
             num_query_token=num_query_tokens,
             graph_width=bert_hidden_size,
             cross_attention_freq=cross_attention_freq, #cross_attention_freq,
@@ -85,7 +85,7 @@ class QFormerProjector(Blip2Base):
         
         # 1. Freeze all QFormer parameters initially
         for param in self.Qformer.parameters():
-            param.requires_grad = False
+            param.requires_grad = True
         
         # 2. Make query tokens trainable
         self.query_tokens.requires_grad = True

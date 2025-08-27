@@ -162,36 +162,27 @@ def run_evaluation(rank, world_size, args):
         similarity_file_path=args.similarity_file_path  # Add this line
     )
     
-    # Only print results on rank 0
-    if rank == 0:
-        print("\n" + "="*60)
-        print("FINAL EVALUATION RESULTS")
-        print("="*60)
-        print(f"BLEU Score: {results['bleu']:.4f}")
-        
+    # Handle results only on rank 0
+    if rank == 0 and results is not None:
+        print(f"\n{'='*60}")
+        print(f"FINAL EVALUATION SUMMARY")
+        print(f"{'='*60}")
+        print(f"Total Samples: {results['total_samples']}")
+        print(f"BLEU: {results['bleu']:.4f}")
+        print(f"BLEU-2: {results['bleu2']:.4f}")
+        print(f"ROUGE-2: {results['rouge2']:.4f}")
+        print(f"METEOR: {results['meteor']:.4f}")
+        print(f"MMD (↓): {results['mmd']:.4f}")
+        print(f"EMD (↓): {results['emd']:.4f}")
+            
         if results['bert_score_f1'] is not None:
-            print(f"BERTScore - Precision: {results['bert_score_precision']:.4f}")
-            print(f"BERTScore - Recall: {results['bert_score_recall']:.4f}")
-            print(f"BERTScore - F1: {results['bert_score_f1']:.4f}")
-        
-        if results['validation_loss'] is not None:
-            print(f"Validation Loss: {results['validation_loss']:.4f}")
-        
+            print(f"BERTScore Precision: {results['bert_score_precision']:.4f}")
+            print(f"BERTScore Recall: {results['bert_score_recall']:.4f}")
+            print(f"BERTScore F1: {results['bert_score_f1']:.4f}")
+            
         print(f"Cell Type Accuracy: {results['cell_type_accuracy']:.4f}")
-        print(f"Cell Type F1 Score: {results['cell_type_f1']:.4f}")
-        print(f"Cell Type Precision: {results['cell_type_precision']:.4f}")
-        print(f"Cell Type Recall: {results['cell_type_recall']:.4f}")
-        if results['ontology_similarity_score']:
-            print(f"Ontology Similarity Score: {results['ontology_similarity_score']:.4f}")
-        
-        # Save summary results
-        if args.save_results:
-            summary_path = args.save_results.replace('.json', '_summary.json')
-            with open(summary_path, 'w') as f:
-                json.dump(results, f, indent=2)
-            print(f"Summary results saved to: {summary_path}")
-        
-        print("Evaluation completed successfully!")
+        print(f"Ontology Similarity: {results['ontology_similarity_score']:.4f}")
+        print(f"{'='*60}")
     
     cleanup_ddp()
 
