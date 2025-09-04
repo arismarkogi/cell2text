@@ -377,25 +377,17 @@ def process_and_save_splits(
     # --- 9. Add pathway information to original data ---
     print("--- Adding pathway information to original data ---")
     
-    # Check if indices match exactly (they should in your new workflow)
-    if len(full_data.obs_names) == len(aucs_df.index) and all(full_data.obs_names == aucs_df.index):
-        print(f"Perfect match: all {len(full_data.obs_names)} cells have pathway scores.")
-        # Direct assignment since order matches
-        full_data.obs["pathway1"] = pathway1.values
-        full_data.obs["pathway2"] = pathway2.values
-    else:
-        # Fall back to intersection method if there's any mismatch
-        common_cells = full_data.obs_names.intersection(aucs_df.index)
-        print(f"Found {len(common_cells)} common cells out of {len(full_data.obs_names)} total.")
-        
-        # Initialize pathway columns
-        full_data.obs["pathway1"] = "Unknown"
-        full_data.obs["pathway2"] = "Unknown"
-        
-        # Add pathway information for cells that were processed
-        full_data.obs.loc[common_cells, "pathway1"] = pathway1.loc[common_cells].values
-        full_data.obs.loc[common_cells, "pathway2"] = pathway2.loc[common_cells].values
-        
+    # Ensure the indices match between aucs results and original data
+    common_cells = full_data.obs_names.intersection(aucs_df.index)
+    print(f"Found {len(common_cells)} common cells between original and processed data.")
+    
+    # Initialize pathway columns
+    full_data.obs["pathway1"] = "Unknown"
+    full_data.obs["pathway2"] = "Unknown"
+    
+    # Add pathway information for cells that were processed
+    full_data.obs.loc[common_cells, "pathway1"] = pathway1.loc[common_cells].values
+    full_data.obs.loc[common_cells, "pathway2"] = pathway2.loc[common_cells].values
     
     
     # Clean up AUC data
