@@ -377,9 +377,6 @@ def process_and_save_splits(
     # --- 9. Add pathway information to original data ---
     print("--- Adding pathway information to original data ---")
     
-    # Ensure the indices match between aucs results and original data
-    common_cells = full_data.obs_names.intersection(aucs_df.index)
-    print(f"Found {len(common_cells)} common cells between original and processed data.")
     
     # Initialize pathway columns
     full_data.obs["pathway1"] = "Unknown"
