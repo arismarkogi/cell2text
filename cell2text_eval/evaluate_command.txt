@@ -1,16 +1,16 @@
-CUDA_VISIBLE_DEVICES=0 python3 /home/arism/cell2text/cell2text_eval/run_evaluation.py \
-    --checkpoint_path /home/arism/deepspeed_training/qformer_queries32_biobertbase_crossattnfreq2_fsdp_202508251740_foo/qformer_queries32_biobertbase_crossattnfreq2_fsdp_202508251740_foo_best_model/pytorch_model.bin \
-    --test_data_path /datadisk/datasets_cell2text/train/  \
+CUDA_VISIBLE_DEVICES=1 python3 /home/arism/cell2text/cell2text_eval/run_evaluation.py \
+    --checkpoint_path /home/arism/deepspeed_training/qformer_queries32_pubmedbert_crossattnfreq2_batchsize8_gradacc6_2gpus_lorar32_202508262352/qformer_queries32_pubmedbert_crossattnfreq2_batchsize8_gradacc6_2gpus_lorar32_202508262352_epoch2/pytorch_model.bin \
+    --test_data_path /datadisk/datasets_cell2text/test/  \
     --tokenizer_path meta-llama/Llama-3.2-3B-Instruct \
     --geneformer_path /home/arism/cell2text/Geneformer \
     --llama_path  meta-llama/Llama-3.2-3B-Instruct \
-    --adapter_checkpoint_dir /home/arism/deepspeed_training/qformer_queries32_biobertbase_crossattnfreq2_fsdp_202508251740_foo/qformer_queries32_biobertbase_crossattnfreq2_fsdp_202508251740_foo_best_model/adapter \
+    --adapter_checkpoint_dir /home/arism/deepspeed_training/qformer_queries32_pubmedbert_crossattnfreq2_batchsize8_gradacc6_2gpus_lorar32_202508262352/qformer_queries32_pubmedbert_crossattnfreq2_batchsize8_gradacc6_2gpus_lorar32_202508262352_epoch2/adapter \
     --token_dictionary_path /home/arism/cell2text/Geneformer/geneformer/token_dictionary_gc104M.pkl \
     --projector qformer \
     --top_k 32 \
     --num_latents 128 \
     --qformer_cross_attention_freq 2 \
     --use_position_encoding True \
-    --save_results /home/arism/results/qformer_queries32_biobertbase_crossattnfreq2__lorar32_20250825_foo.json \
+    --save_results /home/arism/results/qformer_queries32_pubmedbert_crossattnfreq2_batchsize8_gradacc4_2gpus_lorar32_202508290152_test.json \
     --num_beams 1 \
     --batch_size 12  

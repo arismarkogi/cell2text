@@ -695,7 +695,7 @@ class Cell2TextDDPTrainer:
         return final_loss <= self.args.target_loss
     
     def full_train(self):
-        """Full training loop with DDP"""
+        """Full training loop with DDP - validates and saves model after each epoch"""
         if self.is_main_process:
             print("="*60)
             print("STARTING DDP FULL TRAINING")
@@ -707,7 +707,7 @@ class Cell2TextDDPTrainer:
             print(f"Batch size per device: {self.args.batch_size_per_device}")
             print(f"Gradient accumulation steps: {self.args.gradient_accumulation_steps}")
             print(f"Projector type: {self.args.projector}")
-            print(f"Validation every: {self.args.eval_steps} steps")
+            print(f"Validation after each epoch")
             print("="*60)
         
         self.model.train()
@@ -720,7 +720,7 @@ class Cell2TextDDPTrainer:
         progress_bar = create_progress_bar("🚀 DDP Full Training", total_steps, self.is_main_process)
         
         best_val_loss = float('inf')
-        steps_since_improvement = 0
+        epochs_since_improvement = 0
         
         for epoch in range(self.args.epochs):
             # Set epoch for distributed sampler
@@ -752,107 +752,68 @@ class Cell2TextDDPTrainer:
                         f"🚀 DDP Training | Epoch: {epoch+1}/{self.args.epochs} | "
                         f"Step: {step+1}/{len(self.train_loader)} | Loss: {loss:.4f}"
                     )
-                
-                # Validation 
-                if self.global_step % self.args.eval_steps == 0 and self.val_loader is not None:
-                    if self.world_size > 1:
-                        dist.barrier()
-
-                    self.model.eval()
-                    val_loss = self.validate()
-                    
-                    # Store validation results
-                    validation_record = {
-                        'epoch': epoch + 1,
-                        'step': step + 1,
-                        'global_step': self.global_step,
-                        'validation_loss': val_loss,
-                        'training_loss': np.mean(self.losses[-self.args.eval_steps:]) if len(self.losses) >= self.args.eval_steps else np.mean(self.losses)
-                    }
-                    validation_history.append(validation_record)
-                    
-                    if self.is_main_process:
-                        print(f"\nValidation at step {self.global_step}:")
-                        print(f"  Validation Loss: {val_loss:.4f}")
-                    
-                    # Early stopping and best model tracking
-                    improved = val_loss < best_val_loss
-                    
-                    if improved:
-                        best_val_loss = val_loss
-                        steps_since_improvement = 0
-                        
-                        if self.args.save_model:
-                            checkpoint_name = "best_model"
-                            if self.experiment_name:
-                                checkpoint_name = f"{self.experiment_name}_best_model"
-                            
-                            checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
-                            self.save_checkpoint_separate_adapters(checkpoint_dir)
-                            
-                            if self.is_main_process:
-                                print(f"Best model checkpoint saved to: {checkpoint_dir}")
-                    else:
-                        steps_since_improvement += self.args.eval_steps
-                        
-                        if self.args.early_stopping > 0 and steps_since_improvement >= self.args.early_stopping:
-                            if self.is_main_process:
-                                print(f"\nEarly stopping triggered after {steps_since_improvement} steps without improvement")
-                            if progress_bar:
-                                progress_bar.close()
-                            
-                            # Save final training and validation history
-                            save_simple_training_history(self, training_history, validation_history)
-                            return
-                    
-                    self.model.train()  # Switch back to training mode
-                
-                if self.world_size > 1:
-                    dist.barrier()
-                    
+            
             # End of epoch summary
             epoch_loss = np.mean(epoch_losses)
             if self.is_main_process:
                 print(f"\nEpoch {epoch+1} completed. Average loss: {epoch_loss:.4f}")
+            
+            # Validation after each epoch
+            if self.val_loader is not None:
+                if self.world_size > 1:
+                    dist.barrier()
+
+                self.model.eval()
+                val_loss = self.validate()
+                    
+                # Store validation results
+                validation_record = {
+                    'epoch': epoch + 1,
+                    'step': 'epoch_end',
+                    'global_step': self.global_step,
+                    'validation_loss': val_loss,
+                    'training_loss': epoch_loss
+                }
+                validation_history.append(validation_record)
+                    
+                if self.is_main_process:
+                    print(f"Validation after epoch {epoch+1}:")
+                    print(f"  Validation Loss: {val_loss:.4f}")
+                    
+                # Early stopping and best model tracking
+                improved = val_loss < best_val_loss
+                    
+                if improved:
+                    best_val_loss = val_loss
+                    epochs_since_improvement = 0
+                else:
+                    epochs_since_improvement += 1
+                
+                # Save model for this epoch
+                if self.args.save_model:
+                    # Save epoch model
+                    checkpoint_name = f"epoch{epoch+1}"
+                    if self.experiment_name:
+                        checkpoint_name = f"{self.experiment_name}_epoch{epoch+1}"
+                    
+                    checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
+                    self.save_checkpoint_separate_adapters(checkpoint_dir)
+                    
+                    if self.is_main_process:
+                        print(f"Epoch {epoch+1} model saved to: {checkpoint_dir}")
+                    
+                    
+                self.model.train()  # Switch back to training mode
+                
+                if self.world_size > 1:
+                    dist.barrier()
         
         if progress_bar is not None:
             progress_bar.close()
         
-        # Final evaluation
-        if self.val_loader is not None:
-            self.model.eval()
-            final_val_loss = self.validate()
-            
-            # Add final validation to history
-            final_validation_record = {
-                'epoch': self.args.epochs,
-                'step': 'final',
-                'global_step': self.global_step,
-                'validation_loss': final_val_loss,
-                'training_loss': np.mean(self.losses[-100:]) if len(self.losses) >= 100 else np.mean(self.losses),
-                'is_final': True
-            }
-            validation_history.append(final_validation_record)
-            
-            if self.is_main_process:
-                print(f"\nFinal Validation Loss: {final_val_loss:.4f}")
-
-            # Check if final model is better than best saved model
-            if final_val_loss < best_val_loss and self.args.save_model:
-                checkpoint_name = "best_model"
-                if self.experiment_name:
-                    checkpoint_name = f"{self.experiment_name}_best_model"
-                
-                checkpoint_dir = os.path.join(self.args.output_dir, checkpoint_name)
-                self.save_checkpoint(checkpoint_dir)
-                
-                if self.is_main_process:
-                    print(f"New best model saved after final evaluation to: {checkpoint_dir}")
-        
         # Save training history
         if self.is_main_process:
             save_simple_training_history(self, training_history, validation_history)
-        
         
 def run_ddp(rank, world_size, args):
     """Run training with DDP on specific rank"""

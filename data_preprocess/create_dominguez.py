@@ -54,564 +54,72 @@ print("Connecting to CELLxGENE census...")
 census = cellxgene_census.open_soma(census_version="2025-01-30")
 print("Connection successful.")
 
-def map_dev_stage(stage: str) -> str:
-    """
-    Map developmental stage to standardized categories.
-    
-    Categories:
-    - prenatal: embryonic/fetal development
-    - infant: 0-2 years
-    - child: 2-15 years  
-    - young_adult: 15-30 years
-    - adult: 30-60 years
-    - aged: 60+ years
-    - unknown: cannot determine
-    """
-    
-    if not isinstance(stage, str) or not stage.strip():
-        return "unknown"
-    
-    stage = stage.lower().strip()
-    
-    # Handle empty or unknown cases
-    if stage in ['unknown', '', 'na', 'n/a', 'null']:
-        return "unknown"
-    
-    # Prenatal/Embryonic stages
-    prenatal_patterns = [
-        r'blastula', r'gastrula', r'embryonic', r'organogenesis',
-        r'post-fertilization', r'carnegie stage', r'lmp month',
-        r'fetal', r'prenatal', r'gestation'
-    ]
-    
-    if any(re.search(pattern, stage) for pattern in prenatal_patterns):
-        return "prenatal"
-    
-    # Extract numeric age with units
-    # Handle formats like "5-year-old", "3 years", "12 months", "8 weeks"
-    age_match = re.search(r'(\d+)[-\s]*(year|month|week|day)s?[-\s]*old|\b(\d+)[-\s]*(year|month|week|day)s?\b', stage)
-    
-    if age_match:
-        # Get the numeric value and unit
-        value = int(age_match.group(1) or age_match.group(3))
-        unit = (age_match.group(2) or age_match.group(4)).lower()
-        
-        # Convert everything to years for easier comparison
-        if unit == "day":
-            age_years = value / 365.25
-        elif unit == "week":
-            age_years = value / 52.18
-        elif unit == "month":
-            age_years = value / 12
-        elif unit == "year":
-            age_years = value
-        else:
-            age_years = None
-            
-        if age_years is not None:
-            if age_years < 2:
-                return "infant"
-            elif age_years < 15:
-                return "child"
-            elif age_years < 30:
-                return "young_adult"
-            elif age_years < 60:
-                return "adult"
-            else:
-                return "aged"
-    
-    # Handle decade-based descriptions
-    decade_mappings = {
-        r'first decade|0-10': 'child',
-        r'second decade|10-20': 'young_adult',
-        r'third decade|20-30': 'young_adult',
-        r'fourth decade|30-40': 'adult',
-        r'fifth decade|40-50': 'adult',
-        r'sixth decade|50-60': 'adult',
-        r'seventh decade|60-70': 'aged',
-        r'eighth decade|70-80': 'aged',
-        r'ninth decade|80-90': 'aged'
-    }
-    
-    for pattern, category in decade_mappings.items():
-        if re.search(pattern, stage):
-            return category
-    
-    # Handle stage-based descriptions
-    stage_mappings = {
-        # Infant stages
-        r'newborn|neonatal|infant(?!ile)': 'infant',
-        
-        # Child stages
-        r'child(?!birth)|juvenile|pediatric|toddler': 'child',
-        r'adolescent|teenage|teen': 'child',  # Late childhood/adolescence
-        
-        # Adult stages
-        r'young adult': 'young_adult',
-        r'prime adult|adult(?!escence)': 'adult',
-        r'middle.?aged': 'adult',
-        
-        # Elderly stages
-        r'elderly|aged|senior|geriatric': 'aged',
-        r'late adult': 'aged',
-        r'very elderly|advanced age': 'aged'
-    }
-    
-    for pattern, category in stage_mappings.items():
-        if re.search(pattern, stage):
-            return category
-    
-    # Handle specific age ranges (e.g., "60-79 year-old", "80+")
-    range_match = re.search(r'(\d+)[-–](\d+)|(\d+)\+', stage)
-    if range_match:
-        if range_match.group(3):  # "80+" format
-            start_age = int(range_match.group(3))
-        else:  # "60-79" format
-            start_age = int(range_match.group(1))
-            
-        if start_age < 2:
-            return "infant"
-        elif start_age < 15:
-            return "child"
-        elif start_age < 30:
-            return "young_adult"
-        elif start_age < 60:
-            return "adult"
-        else:
-            return "aged"
-    
-    # Handle postnatal (general term for after birth)
-    if 'postnatal' in stage:
-        return "infant"  # Default to infant for general postnatal
-    
-    return "unknown"
-
 
 # Get only the metadata of cell from the database to
 obs_df = cellxgene_census.get_obs(census, "homo_sapiens", column_names=["soma_joinid", "development_stage", "disease", "assay","dataset_id", "donor_id", "sex", "tissue", "tissue_general", "cell_type", "is_primary_data"])
 
-# Apply binning at development stage
-obs_df["dev_stage_group"] = obs_df["development_stage"].apply(map_dev_stage)
 
-filtered = obs_df[
-    obs_df["tissue_general"].notna() &
-    obs_df["tissue_general"].ne("unknown") &
-    obs_df["disease"].notna() &
-    obs_df["disease"].ne("unknown") &
-    obs_df["cell_type"].ne("unknown") &
-    obs_df["cell_type"].notna() &
-    obs_df["is_primary_data"] == True
+# Direct API call with dataset filter
+print("--- Fetching Dominguez datasets directly from CELLxGENE census ---")
+
+dominguez_dataset_ids = [
+    "1b9d8702-5af8-4142-85ed-020eb06ec4f6",
+    "fe52003e-1460-4a65-a213-2bb1a508332f",
+    "b6579ac6-2298-4a9e-8bbe-bdf70b9bb303",
+    "e47f2480-6493-4b42-a83e-a2df2e1a6bb4"
 ]
 
-del obs_df
+# Build the dataset ID list first
+dataset_id_list = ','.join([f'"{id}"' for id in dominguez_dataset_ids])
+dataset_filter = f"dataset_id in [{dataset_id_list}] and is_primary_data == True"
 
-excluded_dataset_ids = [
-    "1b9d8702-5af8-4142-85ed-020eb06ec4f6", # Dominguez
-    "fe52003e-1460-4a65-a213-2bb1a508332f", # Dominguez
-    "b6579ac6-2298-4a9e-8bbe-bdf70b9bb303", # Dominguez
-    "e47f2480-6493-4b42-a83e-a2df2e1a6bb4", # Dominguez
-
-]
-
-excluded_assays = [
-    "Smart-seq", "Smart-seq2", "Smart-seq3", "Smart-seq v4",   # Full-length protocols
-    "Quartz-seq", "MARS-seq", "SORT-seq",                      # Rare and/or niche protocols
-    "GEXSCOPE technology",                                     # Proprietary, very low usage
-    "BD Rhapsody Targeted mRNA",                               # Targeted, not full transcriptome
-    "10x gene expression flex"                                 # Low prevalence + differences
-]
-
-
-filtered = filtered[
-    ~filtered["dataset_id"].isin(excluded_dataset_ids) & 
-    ~filtered["assay"].isin(excluded_assays)
-]
-print(f"Filtered down to {len(filtered)} cells after applying initial criteria.")
-
-# Define our sampling strategy percentages with adjustments
-pct_distribution = 0.30
-pct_cell_type = 0.25
-pct_disease = 0.20
-pct_donor = 0.15
-pct_rare = 0.10
-
-# Calculate target counts for each strategy
-n_distribution = int(target_total * pct_distribution)
-n_cell_type = int(target_total * pct_cell_type)
-n_disease = int(target_total * pct_disease)
-n_donor = int(target_total * pct_donor)
-n_rare = target_total - n_distribution - n_cell_type - n_disease - n_donor
-
-# Part 1: Distribution-based sampling with tissue adjustment
-# Let's check if brain/blood are overrepresented in the original data
-tissue_counts = filtered['tissue_general'].value_counts(normalize=True)
-
-# Adjust our sampling to reflect more realistic proportions
-tissue_adjustment = {
-    'brain': 0.20,  # Cap brain at 15%
-    'blood': 0.15   # Cap blood at 15%
-}
-
-# Create adjusted weights for distribution sampling
-weights = np.ones(len(filtered))
-
-for tissue, cap in tissue_adjustment.items():
-    # Calculate how much to downweight these tissues
-    current_prop = tissue_counts.get(tissue, 0)
-    if current_prop > cap:
-        downweight_factor = cap / current_prop
-        # Apply downweighting to these tissues
-        weights[filtered['tissue_general'] == tissue] = downweight_factor
-
-# Sample with adjusted weights
-distribution_sample = filtered.sample(
-    n=n_distribution,
-    weights=weights,
-    random_state=42
+# Fetch data directly with the filter
+full_data = cellxgene_census.get_anndata(
+    census=census,
+    organism="homo_sapiens",
+    obs_value_filter=dataset_filter,
+    obs_column_names=[
+        "soma_joinid", "sex", "tissue", "donor_id", "dataset_id",
+        "tissue_ontology_term_id", "tissue_general", "tissue_general_ontology_term_id",
+        "cell_type", "cell_type_ontology_term_id", "disease_ontology_term_id",
+        "assay", "assay_ontology_term_id", "disease", "development_stage"
+    ],
+    X_name="raw"
 )
 
-# Part 2: Cell type representation with improved balance
-# Get counts of each cell type
-cell_type_counts = filtered['cell_type'].value_counts()
+print(f"Successfully fetched {full_data.n_obs} cells from Dominguez datasets.")
 
-# Calculate the max cells per type (cap at 3% of the cell type sample)
-max_per_cell_type = int(n_cell_type * 0.03)
+# Now do donor-based train/test/val split
+print("--- Splitting by donors ---")
 
-# Initialize list to hold samples from each cell type
-cell_samples = []
-
-# Sample from each cell type, capping at the max per type
-for cell_type in cell_type_counts.index:
-    cell_subset = filtered[filtered['cell_type'] == cell_type]
-
-    # Determine how many to sample (capped at our max)
-    n_to_sample = min(len(cell_subset), max_per_cell_type)
-
-    if n_to_sample > 0:
-        sample = cell_subset.sample(n=n_to_sample, random_state=42)
-        cell_samples.append(sample)
-
-# Combine all the cell type samples
-cell_type_sample = pd.concat(cell_samples, ignore_index=True)
-
-# If we have more than needed, take a random subsample
-if len(cell_type_sample) > n_cell_type:
-    cell_type_sample = cell_type_sample.sample(n=n_cell_type, random_state=42)
-# If we have less than needed, sample more from the general population
-elif len(cell_type_sample) < n_cell_type:
-    remaining = n_cell_type - len(cell_type_sample)
-    remaining_cells = filtered[~filtered.index.isin(cell_type_sample.index)]
-    additional = remaining_cells.sample(n=remaining, random_state=42)
-    cell_type_sample = pd.concat([cell_type_sample, additional], ignore_index=True)
-
-# Part 3: Disease representation with improved balance
-# Get disease counts
-disease_counts = filtered['disease'].value_counts()
-
-# Cap COVID-19 representation
-max_covid = int(n_disease * 0.05)  # Cap at 5% of disease sample
-max_normal = int(n_disease * 0.70)  # Allow up to 70% normal cells
-max_per_disease = int(n_disease * 0.03)  # Cap other diseases at 3% each
-
-# Initialize list to hold disease samples
-disease_samples = []
-
-# Handle COVID-19 separately
-covid_cells = filtered[filtered['disease'] == 'COVID-19']
-if len(covid_cells) > 0:
-    n_covid = min(len(covid_cells), max_covid)
-    covid_sample = covid_cells.sample(n=n_covid, random_state=42)
-    disease_samples.append(covid_sample)
-
-# Handle normal cells separately
-normal_cells = filtered[filtered['disease'] == 'normal']
-if len(normal_cells) > 0:
-    n_normal = min(len(normal_cells), max_normal)
-    normal_sample = normal_cells.sample(n=n_normal, random_state=42)
-    disease_samples.append(normal_sample)
-
-# Sample from each other disease, capping at the max per disease
-for disease in disease_counts.index:
-    if disease not in ['COVID-19', 'normal', 'unknown', np.nan]:
-        disease_subset = filtered[filtered['disease'] == disease]
-
-        # Determine how many to sample (capped at our max)
-        n_to_sample = min(len(disease_subset), max_per_disease)
-
-        if n_to_sample > 0:
-            sample = disease_subset.sample(n=n_to_sample, random_state=42)
-            disease_samples.append(sample)
-
-# Combine all the disease samples
-disease_sample = pd.concat(disease_samples, ignore_index=True)
-
-# If we have more than needed, take a random subsample
-if len(disease_sample) > n_disease:
-    disease_sample = disease_sample.sample(n=n_disease, random_state=42)
-# If we have less than needed, sample more from the general population
-elif len(disease_sample) < n_disease:
-    remaining = n_disease - len(disease_sample)
-    remaining_cells = filtered[~filtered.index.isin(disease_sample.index)]
-    additional = remaining_cells.sample(n=remaining, random_state=42)
-    disease_sample = pd.concat([disease_sample, additional], ignore_index=True)
-
-# Part 4: Donor diversity sampling
-# Get donor counts and ensure representation from many donors
-donor_counts = filtered['donor_id'].value_counts()
-
-# Cap cells per donor to ensure diversity (max 2% of donor sample per donor)
-max_per_donor = max(1, int(n_donor * 0.02))
-
-# Initialize list to hold donor samples
-donor_samples = []
-
-# Sample from each donor, capping at the max per donor
-for donor_id in donor_counts.index:
-    donor_subset = filtered[filtered['donor_id'] == donor_id]
-
-    # Determine how many to sample (capped at our max)
-    n_to_sample = min(len(donor_subset), max_per_donor)
-
-    if n_to_sample > 0:
-        sample = donor_subset.sample(n=n_to_sample, random_state=42)
-        donor_samples.append(sample)
-
-# Combine all the donor samples
-donor_sample = pd.concat(donor_samples, ignore_index=True)
-
-# If we have more than needed, take a random subsample
-if len(donor_sample) > n_donor:
-    donor_sample = donor_sample.sample(n=n_donor, random_state=42)
-# If we have less than needed, sample more from the general population
-elif len(donor_sample) < n_donor:
-    remaining = n_donor - len(donor_sample)
-    remaining_cells = filtered[~filtered.index.isin(donor_sample.index)]
-    additional = remaining_cells.sample(n=remaining, random_state=42)
-    donor_sample = pd.concat([donor_sample, additional], ignore_index=True)
-
-# Part 5: Rare tissue and developmental stage representation
-# Define rare tissues (bottom 10% by frequency)
-tissue_counts = filtered['tissue_general'].value_counts()
-rare_threshold = tissue_counts.quantile(0.1)
-rare_tissues = tissue_counts[tissue_counts <= rare_threshold].index
-
-
-# Get cells from rare tissues or rare developmental stages
-rare_tissue_cells = filtered[filtered['tissue_general'].isin(rare_tissues)]
-
-# Combine rare tissue and rare developmental stage cells
-rare_cells = pd.concat([rare_tissue_cells]).drop_duplicates()
-
-if len(rare_cells) > n_rare:
-    n_actual_rare = min(len(rare_cells), n_rare)
-    rare_sample = rare_cells.sample(n=n_actual_rare, random_state=42)
-else:
-    # If we don't have enough rare cells, take from the general population
-    rare_sample = filtered.sample(n=n_rare, random_state=42)
-
-# Add is_disease column for later analysis
-filtered['is_disease'] = ~filtered['disease'].isin(['normal', 'unknown', np.nan])
-
-# Combine all samples
-final_samples = [distribution_sample, cell_type_sample, disease_sample, donor_sample, rare_sample]
-final_sample = pd.concat(final_samples, ignore_index=True)
-
-# Add is_disease column for analysis
-final_sample['is_disease'] = ~final_sample['disease'].isin(['normal', 'unknown', np.nan])
-
-# Remove potential duplicates
-final_sample = final_sample.drop_duplicates()
-
-# Adjust to target size
-if len(final_sample) > target_total:
-    final_sample = final_sample.sample(n=target_total, random_state=42)
-elif len(final_sample) < target_total:
-    remaining = target_total - len(final_sample)
-    remaining_cells = filtered[~filtered.index.isin(final_sample.index)]
-    if len(remaining_cells) >= remaining:
-        additional = remaining_cells.sample(n=remaining, random_state=42)
-        final_sample = pd.concat([final_sample, additional], ignore_index=True)
-    else:
-        additional = filtered.sample(n=remaining, replace=True, random_state=42)
-        final_sample = pd.concat([final_sample, additional], ignore_index=True)
-
-# Final analysis of our sample
-print(f"Final dataset size: {len(final_sample)} cells")
-
-# Measure diversity
-variables = ['tissue_general', 'dev_stage_group', 'cell_type', 'sex', 'is_disease', 'disease', 'donor_id']
-
-def shannon_diversity(series):
-    proportions = series.value_counts(normalize = True)
-    shannon_index = - (proportions * np.log2(proportions)).sum()
-    return shannon_index
-
-def normalized_shannon_diversity(series):
-    num_categories = series.nunique()
-    if num_categories <= 1:
-        return 0.0
-    
-    raw_shannon = shannon_diversity(series)
-    max_shannon = np.log2(num_categories)
-    
-    return raw_shannon / max_shannon
-
-diversity_scores = {}
-old_diversity_scores = {}
-for col in variables:
-    diversity_scores[col] = normalized_shannon_diversity(final_sample[col])
-    old_diversity_scores[col] = normalized_shannon_diversity(filtered[col])
-    print(f"Normalized Shannon for '{col}': {old_diversity_scores[col]:.4f} -> {diversity_scores[col]:.4f} ")
-
-# Calculate the overall average diversity
-average_diversity = np.mean(list(diversity_scores.values()))
-old_average_diversity = np.mean(list(old_diversity_scores.values()))
-print(f"\nAverage Normalized Diversity: {old_average_diversity:.4f} -> {average_diversity:.4f}")
-
-
-join_ids = final_sample["soma_joinid"].tolist()
-sorted_join_ids = sorted(final_sample['soma_joinid'].unique())
-
-print("\n--- Preparing for Robust 95/2.5/2.5 Split ---")
-
-# Define the columns for which we must ensure category representation
-stratification_cols = ['disease', 'cell_type', 'tissue_general', 'dev_stage_group']
-
-# Get cell counts for each donor, which helps in making smart choices
-donor_cell_counts = final_sample['donor_id'].value_counts()
-
-# --- Step 1: Guarantee representation for every category in the training set ---
-
-train_donors = set()
-unassigned_donors = set(final_sample['donor_id'].unique())
-
-print("Ensuring all metadata categories are represented in the training set...")
-
-for col in stratification_cols:
-    # Group donors by the categories they belong to in the current column
-    category_to_donors = final_sample.groupby(col)['donor_id'].unique().apply(set)
-    
-    for category, donors_with_category in category_to_donors.items():
-        # Check if this category is already represented by a donor in our training set
-        if train_donors.isdisjoint(donors_with_category):
-            # This category is NOT represented yet. We must add one of its donors.
-            
-            # Find which of the potential donors are still available to be assigned
-            available_donors = donors_with_category.intersection(unassigned_donors)
-            
-            if not available_donors:
-                # This should not happen if logic is correct, but as a safeguard:
-                # It means all donors for this category were already assigned to train_donors
-                # in a previous step. We can continue.
-                continue
-
-            # Heuristic: Pick the smallest available donor to fulfill the requirement.
-            # This leaves larger donors for the flexible greedy assignment later.
-            chosen_donor = min(available_donors, key=lambda d: donor_cell_counts[d])
-            
-            # Reserve this donor for the training set
-            train_donors.add(chosen_donor)
-            unassigned_donors.remove(chosen_donor)
-
-print(f"Reserved {len(train_donors)} donors to guarantee category coverage in the training set.")
-
-
-# --- Step 2: Greedily assign remaining donors to validation and test sets ---
-
-# Calculate target cell counts
-total_cells = len(final_sample)
-val_target_size = int(total_cells * 0.025)
-test_target_size = int(total_cells * 0.025)
-
-# The pool for assignment is the set of donors not already reserved for training
-assignment_pool = list(unassigned_donors)
+# Get unique donors and shuffle
+unique_donors = full_data.obs['donor_id'].unique()
 np.random.seed(42)
-np.random.shuffle(assignment_pool)
+np.random.shuffle(unique_donors)
 
-val_donors = set()
-test_donors = set()
-val_current_size = 0
-test_current_size = 0
+# Calculate split sizes (80/10/10)
+n_donors = len(unique_donors)
+n_train = int(n_donors * 0.8)
+n_val = int(n_donors * 0.1)
 
-for donor_id in assignment_pool:
-    donor_size = donor_cell_counts[donor_id]
-    
-    # Decide which set is "emptier" proportionally
-    val_fullness = val_current_size / val_target_size if val_target_size > 0 else 1
-    test_fullness = test_current_size / test_target_size if test_target_size > 0 else 1
-    
-    # Assign to the less full set, as long as it's not over its target
-    if val_fullness <= test_fullness and val_current_size + donor_size < val_target_size * 1.001: # Allow going slightly over
-        val_donors.add(donor_id)
-        val_current_size += donor_size
-    elif test_current_size + donor_size < test_target_size * 1.001:
-        test_donors.add(donor_id)
-        test_current_size += donor_size
-    else:
-        # If both are full enough, add the remainder to the training set pool
-        pass 
+# Split donors
+train_donors = set(unique_donors[:n_train])
+val_donors = set(unique_donors[n_train:n_train + n_val])
+test_donors = set(unique_donors[n_train + n_val:])
 
-# --- Step 3: Finalize the splits ---
+print(f"Split donors: Train={len(train_donors)}, Val={len(val_donors)}, Test={len(test_donors)}")
 
-# The training set consists of the initially reserved donors plus any unassigned ones
-final_train_donors = train_donors.union(set(assignment_pool) - val_donors - test_donors)
+# Create masks for splitting
+train_mask = full_data.obs['donor_id'].isin(train_donors)
+val_mask = full_data.obs['donor_id'].isin(val_donors)  
+test_mask = full_data.obs['donor_id'].isin(test_donors)
 
-# Create the final DataFrames
-train_df = final_sample[final_sample['donor_id'].isin(final_train_donors)]
-val_df = final_sample[final_sample['donor_id'].isin(val_donors)]
-test_df = final_sample[final_sample['donor_id'].isin(test_donors)]
+# Get cell counts per split
+train_cells = train_mask.sum()
+val_cells = val_mask.sum()
+test_cells = test_mask.sum()
 
-
-# --- Step 4: Verification and Analysis ---
-
-print("\n--- Final Split Analysis ---")
-
-# Check for donor overlap
-assert len(final_train_donors.intersection(val_donors)) == 0, "FATAL: Overlap between train and val!"
-assert len(final_train_donors.intersection(test_donors)) == 0, "FATAL: Overlap between train and test!"
-assert len(val_donors.intersection(test_donors)) == 0, "FATAL: Overlap between val and test!"
-print("✅ No donor overlap between sets.")
-
-# Check for category coverage
-for col in stratification_cols:
-    train_categories = set(train_df[col].unique())
-    val_categories = set(val_df[col].unique())
-    test_categories = set(test_df[col].unique())
-    
-    assert val_categories.issubset(train_categories), f"FATAL: Column '{col}' in validation has categories not in train!"
-    assert test_categories.issubset(train_categories), f"FATAL: Column '{col}' in test has categories not in train!"
-print(f"✅ All categories in {stratification_cols} for val/test are present in train.")
-
-# Report on sizes
-print("\n--- Dataset Sizes ---")
-print(f"{'Set':<12} | {'Donors':>10} | {'Cells':>12} | {'% of Total Cells':>18}")
-print("-" * 68)
-print(f"{'Training':<12} | {len(final_train_donors):>10} | {len(train_df):>12,} | {len(train_df)/total_cells:>17.2%}")
-print(f"{'Validation':<12} | {len(val_donors):>10} | {len(val_df):>12,} | {len(val_df)/total_cells:>17.2%}")
-print(f"{'Test':<12} | {len(test_donors):>10} | {len(test_df):>12,} | {len(test_df)/total_cells:>17.2%}")
-
-# Report on diversity preservation
-print("\n--- Diversity Preservation (Normalized Shannon Index) ---")
-diversity_results = []
-for col in ['tissue_general', 'dev_stage_group', 'cell_type', 'is_disease']:
-    train_div = normalized_shannon_diversity(train_df[col])
-    val_div = normalized_shannon_diversity(val_df[col])
-    test_div = normalized_shannon_diversity(test_df[col])
-    diversity_results.append({
-        "Variable": col,
-        "Train": f"{train_div:.3f}",
-        "Validation": f"{val_div:.3f}",
-        "Test": f"{test_div:.3f}"
-    })
-
-print(pd.DataFrame(diversity_results).to_string(index=False))
-
-join_ids = train_df["soma_joinid"].tolist()
-train_join_ids = sorted(train_df['soma_joinid'].unique())
-test_join_ids = sorted(test_df['soma_joinid'].unique())
-val_join_ids = sorted(val_df['soma_joinid'].unique())
-
-
+print(f"Cell distribution: Train={train_cells}, Val={val_cells}, Test={test_cells}")
 # Clear variables from memory
 
 for name in list(globals()):
@@ -660,64 +168,27 @@ def _save_adata_in_batches(adata, dataset_type, base_output_dir, batch_size):
         
     print(f"Finished saving {dataset_type} data.")
 
-def process_anndata_and_split(
-    sorted_join_ids,
-    train_ids,
-    test_ids,
-    val_ids,
+def process_and_save_splits(
+    full_data,
+    train_mask, 
+    val_mask,
+    test_mask,
     batch_size,
     data_dir,
-    census,
-    organism="Homo sapiens",
     gmt_path=None,
     output_dir=None,
     chunk_size=1000,
 ):
     """
-    Fetches a full dataset, processes it globally with HVG selection and normalization,
-    then calculates pathway scores in batches and splits into train/test/val sets.
-
-    Args:
-        sorted_join_ids (list): A sorted list of ALL soma_joinids to process.
-        train_ids (list): A list of soma_joinids for the training set.
-        test_ids (list): A list of soma_joinids for the test set.
-        val_ids (list): A list of soma_joinids for the validation set.
-        batch_size (int): The number of cells to save in each output file (batch).
-        data_dir (pathlib.Path or str): The base directory for data.
-        census: The cellxgene_census object.
-        organism (str, optional): The organism to query. Defaults to "Homo sapiens".
-        gmt_path (str, optional): Path to the GMT file for gene signatures.
-        output_dir (str, optional): Directory to save the output h5ad files.
-        chunk_size (int, optional): Chunk size for AUCell calculation.
+    Processes the full dataset and saves train/test/val splits.
     """
     if gmt_path is None:
-        gmt_path = os.path.join(data_dir,"h.all.v2025.1.Hs.symbols.gmt")
+        gmt_path = os.path.join(data_dir, "h.all.v2025.1.Hs.symbols.gmt")
     if output_dir is None:
         output_dir = os.path.join(data_dir, 'input_data')
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # --- 1. Fetch ALL data at once ---
-    print("--- Starting to fetch the entire AnnData object ---")
-    if not sorted_join_ids:
-        print("Warning: sorted_join_ids is empty. Nothing to do.")
-        return
-        
-    join_ids_str = ",".join(map(str, sorted_join_ids))
-
-    full_data = cellxgene_census.get_anndata(
-        census=census,
-        organism=organism,
-        obs_value_filter=f"soma_joinid in [{join_ids_str}]",
-        obs_column_names=[
-            "soma_joinid", "sex", "tissue", "donor_id", "dataset_id",
-            "tissue_ontology_term_id", "tissue_general", 'tissue_general_ontology_term_id',
-            "cell_type", "cell_type_ontology_term_id", "disease_ontology_term_id",
-            "assay", "assay_ontology_term_id", "disease", "development_stage"
-        ],
-        X_name="raw"
-    )
-    print(f"Successfully fetched {full_data.n_obs} cells.")
 
     # --- 2. Initial processing and gene annotation ---
     print("--- Adding basic annotations ---")
@@ -765,19 +236,69 @@ def process_anndata_and_split(
     del global_data
     gc.collect()
 
-    # --- 5. Load gene signatures ---
-    print("--- Loading gene signatures ---")
-    signatures = GeneSignature.from_gmt(str(gmt_path), field_separator="\t")
+    # --- 5. Load specific Hallmark pathways ---
+    print("--- Loading specific Hallmark pathways ---")
+
+    # Define the specific pathways you want
+    target_pathways = [
+        "HALLMARK_ANDROGEN_RESPONSE",
+        "HALLMARK_APOPTOSIS", 
+        "HALLMARK_UV_RESPONSE_DN",
+        "HALLMARK_INTERFERON_GAMMA_RESPONSE",
+        "HALLMARK_HEDGEHOG_SIGNALING",
+        "HALLMARK_TNFA_SIGNALING_VIA_NFKB",
+        "HALLMARK_ALLOGRAFT_REJECTION",
+        "HALLMARK_INTERFERON_ALPHA_RESPONSE",
+        "HALLMARK_CHOLESTEROL_HOMEOSTASIS",
+        "HALLMARK_ANGIOGENESIS",
+        "HALLMARK_NOTCH_SIGNALING",
+        "HALLMARK_MYC_TARGETS_V2",
+        "HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION",
+        "HALLMARK_P53_PATHWAY",
+        "HALLMARK_PANCREAS_BETA_CELLS",
+        "HALLMARK_HYPOXIA",
+        "HALLMARK_WNT_BETA_CATENIN_SIGNALING",
+        "HALLMARK_APICAL_SURFACE",
+        "HALLMARK_IL6_JAK_STAT3_SIGNALING",
+        "HALLMARK_MYOGENESIS",
+        "HALLMARK_COMPLEMENT",
+        "HALLMARK_ESTROGEN_RESPONSE_LATE",
+        "HALLMARK_HEME_METABOLISM",
+        "HALLMARK_ESTROGEN_RESPONSE_EARLY",
+        "HALLMARK_APICAL_JUNCTION",
+        "HALLMARK_XENOBIOTIC_METABOLISM",
+        "HALLMARK_COAGULATION",
+        "HALLMARK_INFLAMMATORY_RESPONSE",
+        "HALLMARK_GLYCOLYSIS",
+        "HALLMARK_BILE_ACID_METABOLISM",
+        "HALLMARK_KRAS_SIGNALING_UP",
+        "HALLMARK_SPERMATOGENESIS",
+        "HALLMARK_IL2_STAT5_SIGNALING",
+        "HALLMARK_KRAS_SIGNALING_DN"
+    ]
+
+    # Load all signatures from GMT file
+    all_signatures = GeneSignature.from_gmt(str(gmt_path), field_separator="\t")
+
+    # Filter to keep only the target pathways
+    signatures = [sig for sig in all_signatures if sig.name in target_pathways]
     signature_names = [sig.name for sig in signatures]
-    print(f"Loaded {len(signatures)} gene signatures.")
+
+    print(f"Loaded {len(signatures)} specific Hallmark pathways out of {len(all_signatures)} total signatures.")
+
+    # Verify all target pathways were found
+    found_pathways = set(signature_names)
+    missing_pathways = set(target_pathways) - found_pathways
+    if missing_pathways:
+        print(f"Warning: {len(missing_pathways)} pathways not found in GMT file: {missing_pathways}")
 
     # --- 6. Calculate AUCell scores in batches ---
     print("--- Calculating AUCell scores in batches ---")
-    
+        
     # Convert to CSR for efficient row slicing
     ex_matrix = global_data_hvg.X.tocsr() if sparse.issparse(global_data_hvg.X) else global_data_hvg.X
     n_chunks = int(np.ceil(global_data_hvg.n_obs / chunk_size))
-    
+        
     # Initialize storage for all AUC scores
     all_aucs = []
     
@@ -834,25 +355,24 @@ def process_anndata_and_split(
     del all_aucs, final_auc_array, ex_matrix, global_data_hvg
     gc.collect()
 
-    # --- 8. Filter pathways and calculate top pathways ---
-    print("--- Filtering pathways and calculating top pathways ---")
-    
-    # Pathway filtering (keep pathways active in >0.5% of cells)
-    top5_percentile_mask = aucs_df.apply(lambda row: row >= np.percentile(row, 95), axis=1)
-    pathway_frequencies = top5_percentile_mask.sum(axis=0) / top5_percentile_mask.shape[0]
-    selected_pathways = pathway_frequencies[pathway_frequencies > 0.005].index
-    filtered_aucs = aucs_df[selected_pathways]
-    
-    print(f"Kept {len(selected_pathways)} pathways out of {len(signature_names)} after filtering.")
-    
-    # Calculate top 2 pathways for each cell
+   # --- 8. Calculate top pathways (no filtering needed since we only have target pathways) ---
+    print("--- Calculating top pathways ---")
+
+    # Calculate top 2 pathways for each cell (from our specific set only)
     pathway1 = aucs_df.idxmax(axis=1)
-    
+
     def get_second_largest_pathway_name(row):
         sorted_pathways = row.sort_values(ascending=False).index
         return sorted_pathways[1] if len(sorted_pathways) >= 2 else np.nan
-    
+
     pathway2 = aucs_df.apply(get_second_largest_pathway_name, axis=1).fillna("No_Second_Pathway")
+
+    print(f"Calculated pathway scores for {len(signature_names)} Hallmark pathways.")
+
+    # Optional: Save the AUC scores as well since you have a focused set
+    aucs_output_path = os.path.join(output_dir, "hallmark_pathway_scores.csv")
+    aucs_df.to_csv(aucs_output_path)
+    print(f"Saved pathway scores to {aucs_output_path}")
     
     # --- 9. Add pathway information to original data ---
     print("--- Adding pathway information to original data ---")
@@ -879,38 +399,27 @@ def process_anndata_and_split(
     # --- 10. Split the data ---
     print("--- Splitting data into train, test, and validation sets ---")
     
-    train_mask = full_data.obs['soma_joinid'].isin(set(train_ids))
-    test_mask = full_data.obs['soma_joinid'].isin(set(test_ids))
-    val_mask = full_data.obs['soma_joinid'].isin(set(val_ids))
-
+    # Split the processed data using the pre-computed masks
     train_adata = full_data[train_mask, :].copy()
     test_adata = full_data[test_mask, :].copy()
     val_adata = full_data[val_mask, :].copy()
     
     print(f"Split complete. Train: {train_adata.n_obs}, Test: {test_adata.n_obs}, Val: {val_adata.n_obs} cells.")
     
-    del full_data
-    gc.collect()
-    
-    # --- 11. Save each split in batches ---
+    # Save splits
     _save_adata_in_batches(train_adata, 'train', output_dir, batch_size)
     _save_adata_in_batches(test_adata, 'test', output_dir, batch_size)
     _save_adata_in_batches(val_adata, 'val', output_dir, batch_size)
-    
-    print("\n--- All processing and saving complete. ---")
 
-process_anndata_and_split(
-    sorted_join_ids,
-    train_join_ids,
-    test_join_ids,
-    val_join_ids,
+process_and_save_splits(
+    full_data,
+    train_mask,
+    val_mask, 
+    test_mask,
     args.BS,
     DATA_DIR,
-    census,
-    organism="Homo sapiens",
     chunk_size=args.CS,
 )
-
 
 def get_webpage_content(url):
     """
