@@ -1,0 +1,17 @@
+model:
+  geneformer_model_path: "/home/arism/cell2text/Geneformer/"
+  freeze_geneformer: true
+  
+data:
+  base_data_path: "/home/arism/datasets/zip_dataset"
+  
+training:
+  batch_size: 32
+  learning_rate: 1e-4
+  num_epochs: 3
+  gradient_accumulation_steps: 4
+  
+optimization:
+  use_mixed_precision: true
+  gradient_clip_norm: 1.0
+  weight_decay: 0.01
