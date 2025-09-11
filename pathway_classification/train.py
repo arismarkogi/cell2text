@@ -17,10 +17,10 @@ def main():
     
     config = load_config(args.config)
     
-    # Create datasets
+    # After creating datasets, before creating trainer:
     train_dataset = MultiDatasetPathwayDataset(config['data']['base_data_path'], split='train')
     val_dataset = MultiDatasetPathwayDataset(config['data']['base_data_path'], split='val')
-    
+
     # Create model
     model = GeneformerPathwayClassifier(
         config['model']['geneformer_model_path'],
@@ -28,14 +28,12 @@ def main():
         freeze_geneformer=config['model']['freeze_geneformer']
     )
 
-   
-    
     # Create trainer
     trainer = PathwayTrainer(
         model=model,
         train_dataset=train_dataset,
         val_dataset=val_dataset,
-        **config['training']  # unpack training config
+        **config['training']
     )
     
     # Train

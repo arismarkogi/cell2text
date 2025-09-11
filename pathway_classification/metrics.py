@@ -18,9 +18,12 @@ warnings.filterwarnings('ignore')
 class ComprehensiveMetrics:
     """Class to calculate comprehensive metrics for binary classification"""
     
-    def __init__(self, pathway_names=['pathway1', 'pathway2']):
-        self.pathway_names = pathway_names
-    
+    def __init__(self, pathway_names=None):
+        if pathway_names is None:
+            self.pathway_names = [f'pathway_{i}' for i in range(34)]
+        else:
+            self.pathway_names = pathway_names
+        
     def calculate_all_metrics(self, y_true, y_pred_proba, y_pred_binary=None, threshold=0.5):
         """
         Calculate comprehensive metrics for binary classification
