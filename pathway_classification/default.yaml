@@ -6,12 +6,10 @@ data:
   base_data_path: "/home/arism/datasets/zip_dataset"
   
 training:
-  batch_size: 32
   learning_rate: 1e-4
-  num_epochs: 3
-  gradient_accumulation_steps: 4
+  batch_size: 256
+  num_epochs: 2
+  gradient_accumulation_steps: 1
+  k_pathways: 2
+  device: "cuda"
   
-optimization:
-  use_mixed_precision: true
-  gradient_clip_norm: 1.0
-  weight_decay: 0.01

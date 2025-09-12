@@ -51,7 +51,7 @@ class PathwayTrainer:
     """Enhanced trainer for multi-label pathway classification with top-k predictions"""
     
     def __init__(self, model, train_dataset, val_dataset, 
-                 learning_rate=1e-4, batch_size=16, num_epochs=50,
+                 learning_rate=1e-4, batch_size=128, num_epochs=2,
                  gradient_accumulation_steps=4, device='cuda', k_pathways=2):
         
         self.model = model.to(device)
@@ -443,8 +443,7 @@ class PathwayTrainer:
                 all_dataset_ids.extend(batch['dataset_ids'])
                 all_cell_ids.extend(batch['cell_ids'])
                 
-                if batch_idx % 10 == 0:
-                    print(f"  Processed {batch_idx + 1}/{len(test_loader)} batches")
+                
         
         # Process results
         all_logits = np.vstack(all_logits)
@@ -590,11 +589,11 @@ class PathwayTrainer:
         print(f"  {save_path}_metrics.json")
         print(f"  {save_path}_predictions.csv")
     
-    def load_model(self, load_path):
+    def load_model(self, load_path, weights_only=True):
         """Load model checkpoint"""
-        checkpoint = torch.load(load_path, map_location=self.device)
+        checkpoint = torch.load(load_path, map_location=self.device, weights_only=weights_only)
         
-        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.model.load_state_dict(checkpoint['model_state_dict'], )
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         self.best_val_acc = checkpoint['best_val_acc']

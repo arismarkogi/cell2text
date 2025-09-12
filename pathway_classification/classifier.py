@@ -12,7 +12,6 @@ class GeneformerPathwayClassifier(nn.Module):
         self.num_pathways = num_pathways
         self.geneformer_model_path = geneformer_model_path
         
-        # Load two separate models for pathway1 and pathway2
         self.model = BertForSequenceClassification.from_pretrained(
                 geneformer_model_path,
                 num_labels=num_pathways,

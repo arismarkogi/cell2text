@@ -108,11 +108,7 @@ class MultiDatasetPathwayDataset(Dataset):
             valid_samples = 0
             
             for idx, sample in enumerate(dataset):
-
-                if idx > 1000:
-                    break  # Limit to first 10 samples for debugging
-
-               
+              
                 # Extract data
                 input_ids = sample['input_ids']
                 attention_mask = sample.get('attention_mask', [1] * len(input_ids))
