@@ -1064,6 +1064,7 @@ def tokenize_with_geneformer(input_dir, output_dir, dataset_name):
         "disease": "disease",
         "disease_ontology_term_id": "disease_ontology_term_id",
         "sex": "sex",
+        "donor_id": "donor_id",
         "assay": "assay",
         "assay_ontology_term_id": "assay_ontology_term_id",
         "tissue": "tissue",
