@@ -84,7 +84,8 @@ class MultiDatasetPathwayDataset(Dataset):
         for ds_idx, dataset_folder in enumerate(dataset_folders):
             dataset_path = os.path.join(split_path, dataset_folder)
             try:
-                ds = load_from_disk(dataset_path)
+                ds = load_from_disk(dataset_path)  
+                
             except Exception as e:
                 print(f"Error loading {dataset_folder}: {e}")
                 continue
