@@ -1,7 +1,0 @@
-CUDA_VISIBLE_DEVICES=1  python3 /home/arism/cell2text/celltype_classification/train.py \
-  --base_path /home/arism//datasets/zip_dataset \
-  --geneformer_path /home/arism/cell2text/geneformer \
-  --output_dir /home/arism/results_celltype \
-  --batch_size 128 \
-  --num_epochs 2 \
-  --device cuda 

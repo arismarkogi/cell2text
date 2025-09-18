@@ -12,9 +12,38 @@ from tqdm import tqdm
 import argparse
 import warnings
 warnings.filterwarnings('ignore')
+from sklearn.metrics import roc_auc_score, average_precision_score
 
 from dataset import MultiDatasetPathwayDataset
 from classifier import GeneformerPathwayClassifier
+
+def compute_avg_auc(labels: np.ndarray, preds: np.ndarray):
+    """Compute AUROC and AUPRC per pathway, then average (macro style)."""
+    n_pathways = labels.shape[1]
+    aurocs, auprcs = [], []
+    for i in range(n_pathways):
+        y_true = labels[:, i]
+        y_pred = preds[:, i]
+        # Skip if a pathway has only one class present (undefined AUROC/AUPRC)
+        if len(np.unique(y_true)) < 2:
+            continue
+        aurocs.append(roc_auc_score(y_true, y_pred))
+        auprcs.append(average_precision_score(y_true, y_pred))
+    return (np.mean(aurocs) if aurocs else 0.0,
+            np.mean(auprcs) if auprcs else 0.0)
+
+
+def compute_flatten_auc(labels: np.ndarray, preds: np.ndarray):
+    """Flatten all sample–pathway pairs into one vector (micro style)."""
+    y_true = labels.ravel()
+    y_pred = preds.ravel()
+    # Handle degenerate case where all labels are 0/1
+    if len(np.unique(y_true)) < 2:
+        return 0.0, 0.0
+    auroc = roc_auc_score(y_true, y_pred)
+    auprc = average_precision_score(y_true, y_pred)
+    return auroc, auprc
+
 
 
 def setup_ddp(rank, world_size):
@@ -212,6 +241,7 @@ def calculate_metrics(results, k_pathways=2):
         'hamming_loss': hamming_loss(labels, preds_threshold),
         'micro_f1': f1_score(labels, preds_threshold, average="micro", zero_division=0),
         'macro_f1': f1_score(labels, preds_threshold, average="macro", zero_division=0),
+        'weighted_f1': f1_score(labels, preds_threshold, average="weighted", zero_division=0),
     }
     
     # Top-k metrics
@@ -220,6 +250,7 @@ def calculate_metrics(results, k_pathways=2):
         'hamming_loss': hamming_loss(labels, preds_topk),
         'micro_f1': f1_score(labels, preds_topk, average="micro", zero_division=0),
         'macro_f1': f1_score(labels, preds_topk, average="macro", zero_division=0),
+        'weighted_f1': f1_score(labels, preds_topk, average="weighted", zero_division=0),
     }
     
     # ROC AUC
