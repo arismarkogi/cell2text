@@ -380,7 +380,7 @@ def main(rank, world_size, config_path, checkpoint_path, output_dir, label_mappi
         
         test_dataset = MultiDatasetTissueDataset(
             config['data']['base_data_path'], 
-            split='train',
+            split='test',
             target_tissues=target_tissues,  # ← This was missing!
             label_key=config['data'].get('label_key', 'tissue')
         )

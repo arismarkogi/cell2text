@@ -280,7 +280,7 @@ def main(rank, world_size, config_path):
         )
         val_dataset = MultiDatasetTissueDataset(
             config['data']['base_data_path'], 
-            split='train',
+            split='val',
             target_tissues=train_dataset.target_tissues,  # ← ensure same mapping
             label_key=config['data'].get('label_key', 'tissue')
         )
