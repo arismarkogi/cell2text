@@ -14,9 +14,9 @@ import numpy as np
 import pandas as pd
 warnings.filterwarnings('ignore')
 
-from classifier import GeneformerCellTypeClassifier
+from classifier import GeneformerTissueClassifier   
 
-from dataset import MultiDatasetCellTypeDataset
+from dataset import MultiDatasetTissueDataset
 
 
 import json
@@ -33,22 +33,22 @@ def save_label_mapping(label_to_idx, save_path):
     print(f"Label mapping saved to: {save_path}")
 
 
-def load_cell_types_from_csv(csv_path, sort=True):
+def load_tissues_from_csv(csv_path, sort=True):
     """
-    Load cell types from CSV with format:
-        cell_type_name, count, weight
-    Returns sorted list of unique cell type names.
+    Load tissue types from CSV with format:
+        tissue_name, count, weight
+    Returns sorted list of unique tissue type names.
     """
-    df = pd.read_csv(csv_path, header=None, names=['cell_type', 'count', 'weight'])
-    cell_types = df['cell_type'].dropna().str.strip().tolist()
+    df = pd.read_csv(csv_path, header=None, names=['tissue', 'count', 'weight'])
+    tissues = df['tissue'].dropna().str.strip().tolist()
     
     if sort:
-        cell_types.sort()
+        tissues.sort()
     
-    print(f"Loaded {len(cell_types)} cell types from {csv_path}")
-    print(f"First 5: {cell_types[:5]}")
+    print(f"Loaded {len(tissues)} tissue types from {csv_path}")
+    print(f"First 5: {tissues[:5]}")
     
-    return cell_types
+    return tissues
 
 
 def setup_ddp(rank, world_size):
@@ -94,7 +94,7 @@ def load_checkpoint(checkpoint_path, model, optimizer, scheduler):
     print(f"Resuming training from epoch {start_epoch}")
     
     if label_mapping:
-        print(f"Loaded label mapping with {len(label_mapping)} cell types")
+        print(f"Loaded label mapping with {len(label_mapping)} tissue types")
     else:
         print("Warning: No label mapping found in checkpoint")
     
@@ -109,7 +109,7 @@ def collate_fn(batch):
     labels = torch.zeros(batch_size, dtype=torch.long)  # ← single label per sample
 
     dataset_ids = []
-    cell_ids = []
+    tissue_ids = []
 
     for i, item in enumerate(batch):
         seq_len = len(item['input_ids'])
@@ -117,14 +117,14 @@ def collate_fn(batch):
         attention_masks[i, :seq_len] = item['attention_mask']
         labels[i] = item['labels']
         dataset_ids.append(item['dataset_id'])
-        cell_ids.append(item['cell_id'])
+        tissue_ids.append(item['tissue_id'])
 
     return {
         'input_ids': input_ids,
         'attention_mask': attention_masks,
         'labels': labels,
         'dataset_ids': dataset_ids,
-        'cell_ids': cell_ids
+        'tissue_ids': tissue_ids
     }
 
 def get_topk_predictions(logits, k=1):
@@ -315,40 +315,40 @@ def main(rank, world_size, config_path, checkpoint_path=None, label_mapping_json
             idx_to_label = json.load(f)
             idx_to_label = {int(k): v for k, v in idx_to_label.items()}
 
-        target_cell_types = [idx_to_label[i] for i in range(len(idx_to_label))]
-        cell_type_names = target_cell_types.copy()
+        target_tissues = [idx_to_label[i] for i in range(len(idx_to_label))]
+        tissue_names = target_tissues.copy()
 
         if rank == 0:
-            print(f"Loaded {len(target_cell_types)} cell type names")
+            print(f"Loaded {len(target_tissues)} tissue type names")
 
         # -------------------------
         # Step 2: Create datasets
         # -------------------------
-        train_dataset = MultiDatasetCellTypeDataset(
+        train_dataset = MultiDatasetTissueDataset(
             config["data"]["base_data_path"],
             split="train",
-            target_cell_types=target_cell_types,
-            label_key=config["data"].get("label_key", "cell_type"),
+            target_tissues=target_tissues,
+            label_key=config["data"].get("label_key", "tissue"),
         )
 
-        val_dataset = MultiDatasetCellTypeDataset(
+        val_dataset = MultiDatasetTissueDataset(
             config["data"]["base_data_path"],
             split="val",
-            target_cell_types=target_cell_types,
-            label_key=config["data"].get("label_key", "cell_type"),
+            target_tissues=target_tissues,
+            label_key=config["data"].get("label_key", "tissue"),
         )
 
         if rank == 0:
             print(f"Training samples: {len(train_dataset)}")
             print(f"Validation samples: {len(val_dataset)}")
-            print(f"Number of cell types: {train_dataset.num_cell_types}")
+            print(f"Number of tissue types: {train_dataset.num_tissues}")
 
         # -------------------------
         # Step 3: Create model
         # -------------------------
-        model = GeneformerCellTypeClassifier(
+        model = GeneformerTissueClassifier(
             config["model"]["geneformer_model_path"],
-            num_cell_types=train_dataset.num_cell_types,
+            num_tissues=train_dataset.num_tissues,
             freeze_geneformer=config["model"]["freeze_geneformer"],
         ).to(rank)
         model = DDP(model, device_ids=[rank])
@@ -430,10 +430,10 @@ def main(rank, world_size, config_path, checkpoint_path=None, label_mapping_json
                         print(f"  New best validation Macro F1: {current_f1:.4f}")
 
                     save_path = os.path.join(
-                        "/home/arism/celltype_results_fromcheckpoint",
+                        "/home/arism/tissue_results_fromcheckpoint",
                         f"best_model.pt"
                     )
-                    save_model(model, optimizer, scheduler, epoch, val_metrics, best_val_f1, save_path, train_dataset.cell_type_to_idx)
+                    save_model(model, optimizer, scheduler, epoch, val_metrics, best_val_f1, save_path, train_dataset.tissue_to_idx)
 
                 scheduler.step(val_metrics.get("macro_f1", 0.0))
 
@@ -445,11 +445,11 @@ def main(rank, world_size, config_path, checkpoint_path=None, label_mapping_json
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', default='/home/arism/cell2text/celltype_classification/default.yaml', help='Config file path')
+    parser.add_argument('--config', default='/home/arism/tissue_classification/default.yaml', help='Config file path')
     parser.add_argument('--checkpoint', type=str, help='Path to checkpoint file to resume from')
     parser.add_argument('--world-size', type=int, default=torch.cuda.device_count(), 
                         help='Number of GPUs to use')
-    parser.add_argument('--label-mapping', help='Path to idx_to_label.json for cell type names')
+    parser.add_argument('--label-mapping', help='Path to idx_to_label.json for tissue type names')
 
     args = parser.parse_args()
     

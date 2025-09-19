@@ -1,0 +1,13 @@
+data:
+  base_data_path: "/home/arism/datasets/zip_dataset" # the ones that contains the subfolders "train", "test", "val"
+  label_key: "tissue"
+  tissue_csv: "/home/arism/analysis_output/final_combined/final_combined_tissue_top_values.csv"
+
+model:
+  geneformer_model_path: "/home/arism/cell2text/Geneformer"
+  freeze_geneformer: true
+
+training:
+  batch_size: 64
+  learning_rate: 5e-5
+  num_epochs: 40

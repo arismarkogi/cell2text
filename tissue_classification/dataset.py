@@ -9,8 +9,8 @@ import pandas as pd
 
 
 
-class MultiDatasetCellTypeDataset(Dataset):
-    def __init__(self, base_path: str, split: str = 'train', target_cell_types=None, max_samples_per_dataset=None, label_key='cell_type'):
+class MultiDatasetTissueDataset(Dataset):
+    def __init__(self, base_path: str, split: str = 'train', target_tissues=None, max_samples_per_dataset=None, label_key='tissue'):
         self.base_path = base_path
         self.split = split
         self.datasets = []         # hold Arrow dataset objects
@@ -19,12 +19,12 @@ class MultiDatasetCellTypeDataset(Dataset):
         self.label_key = label_key
 
         
-        self.target_cell_types = target_cell_types
+        self.target_tissues = target_tissues
 
-        self.cell_type_to_idx = {ct: i for i, ct in enumerate(self.target_cell_types)}
-        self.num_cell_types = len(self.target_cell_types)
+        self.tissue_to_idx = {ct: i for i, ct in enumerate(self.target_tissues)}
+        self.num_tissues = len(self.target_tissues)
 
-        print(f"Target cell types ({self.num_cell_types}): {self.target_cell_types[:5]}... (showing first 5)")
+        print(f"Target tissue types ({self.num_tissues}): {self.target_tissues[:5]}... (showing first 5)")
         self._discover_and_index(max_samples_per_dataset)
 
     def _discover_and_index(self, max_samples_per_dataset=None):
@@ -40,7 +40,7 @@ class MultiDatasetCellTypeDataset(Dataset):
         for ds_idx, dataset_folder in enumerate(dataset_folders):
             dataset_path = os.path.join(split_path, dataset_folder)
             try:
-                ds = load_from_disk(dataset_path)
+                ds = load_from_disk(dataset_path).select(range(20))
             except Exception as e:
                 print(f"Error loading {dataset_folder}: {e}")
                 continue
@@ -54,8 +54,8 @@ class MultiDatasetCellTypeDataset(Dataset):
 
             for local_idx in range(scan_limit):
                 sample = ds[local_idx]
-                cell_type = sample.get(self.label_key, '').strip()
-                if cell_type in self.cell_type_to_idx:
+                tissue = sample.get(self.label_key, '').strip()
+                if tissue in self.tissue_to_idx:
                     self.index_map.append((ds_idx, local_idx))
                     valid_in_dataset += 1
 
@@ -72,8 +72,8 @@ class MultiDatasetCellTypeDataset(Dataset):
         input_ids = torch.tensor(sample['input_ids'], dtype=torch.long)
         attention_mask = torch.tensor(sample.get('attention_mask', [1] * len(input_ids)), dtype=torch.long)
 
-        cell_type = sample.get(self.label_key, '').strip()
-        label_idx = self.cell_type_to_idx.get(cell_type, -1)
+        tissue = sample.get(self.label_key, '').strip()
+        label_idx = self.tissue_to_idx.get(tissue, -1)
 
         if label_idx == -1:
             # Should not happen if _discover_and_index worked correctly
@@ -87,7 +87,7 @@ class MultiDatasetCellTypeDataset(Dataset):
             'attention_mask': attention_mask,
             'labels': labels,
             'dataset_id': self.dataset_names[ds_idx],
-            'cell_id': f"{self.dataset_names[ds_idx]}_{local_idx}"
+            'tissue_id': f"{self.dataset_names[ds_idx]}_{local_idx}"
         }
 
     
