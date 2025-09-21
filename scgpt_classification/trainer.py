@@ -8,11 +8,13 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, List
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import os
+from tqdm import tqdm
 
 
 class ClassificationTrainer:
@@ -22,6 +24,9 @@ class ClassificationTrainer:
         self.vocab = vocab
         self.device = device
         self.logger = logger
+        
+        # Move model to device
+        self.model = self.model.to(self.device)
         
         # Training components
         self.optimizer = None
@@ -37,7 +42,7 @@ class ClassificationTrainer:
         
         # Setup
         self.pad_token = "<pad>"
-        
+    
     def setup_training(self):
         """Setup optimizer, scheduler, and other training components"""
         self.optimizer = torch.optim.Adam(
@@ -63,7 +68,16 @@ class ClassificationTrainer:
         
         start_time = time.time()
         
-        for batch_idx, batch_data in enumerate(train_loader):
+        # Create progress bar
+        pbar = tqdm(
+            enumerate(train_loader),
+            total=len(train_loader),
+            desc=f"Epoch {self.current_epoch} [Train]",
+            leave=False,
+            ncols=100
+        )
+        
+        for batch_idx, batch_data in pbar:
             # Move data to device
             gene_ids = batch_data["gene_ids"].to(self.device)
             values = batch_data["values"].to(self.device)
@@ -72,6 +86,16 @@ class ClassificationTrainer:
             
             # Create padding mask
             src_key_padding_mask = gene_ids.eq(self.vocab[self.pad_token])
+
+            # Check for NaN/Inf values
+            for k, v in batch_data.items():
+                if isinstance(v, torch.Tensor):
+                    if torch.isnan(v).any() or torch.isinf(v).any():
+                        print(f"⚠️ NaN or Inf detected in {k}")
+                        print("Tensor stats:", v.shape, v.dtype)
+                        print("NaN count:", torch.isnan(v).sum().item())
+                        print("Inf count:", torch.isinf(v).sum().item())
+                        raise ValueError(f"Invalid values in {k}")
             
             # Forward pass with mixed precision
             with torch.cuda.amp.autocast(enabled=self.config.amp):
@@ -80,14 +104,13 @@ class ClassificationTrainer:
                     values,
                     src_key_padding_mask=src_key_padding_mask,
                     batch_labels=batch_labels if self.config.DSBN else None,
-                    CLS=True,  # Enable classification
+                    CLS=True,
                     CCE=False,
                     MVC=False,
                     ECS=False,
                     do_sample=False,
                 )
                 
-                # Classification loss
                 cls_output = output_dict["cls_output"]
                 loss = self.criterion(cls_output, labels)
             
@@ -116,18 +139,28 @@ class ClassificationTrainer:
             total_correct += (predictions == labels).sum().item()
             total_samples += labels.size(0)
             
-            # Log progress
-            if batch_idx % 100 == 0 and batch_idx > 0:
-                current_loss = total_loss / (batch_idx + 1)
-                current_acc = total_correct / total_samples
+            # Update progress bar
+            current_loss = total_loss / (batch_idx + 1)
+            current_acc = total_correct / total_samples
+            
+            # Update progress bar description with current metrics
+            pbar.set_postfix({
+                'Loss': f'{current_loss:.4f}',
+                'Acc': f'{current_acc:.4f}',
+                'LR': f'{self.optimizer.param_groups[0]["lr"]:.2e}'
+            })
+            
+            # Log progress less frequently since we have tqdm
+            if batch_idx % 500 == 0 and batch_idx > 0 and self.logger:
                 elapsed = time.time() - start_time
-                
-                if self.logger:
-                    self.logger.info(
-                        f"Epoch {self.current_epoch} | Batch {batch_idx}/{len(train_loader)} | "
-                        f"Loss: {current_loss:.4f} | Acc: {current_acc:.4f} | "
-                        f"Time: {elapsed:.2f}s"
-                    )
+                self.logger.info(
+                    f"Epoch {self.current_epoch} | Batch {batch_idx}/{len(train_loader)} | "
+                    f"Loss: {current_loss:.4f} | Acc: {current_acc:.4f} | "
+                    f"Time: {elapsed:.2f}s"
+                )
+        
+        # Close progress bar
+        pbar.close()
         
         avg_loss = total_loss / len(train_loader)
         avg_acc = total_correct / total_samples
@@ -145,8 +178,17 @@ class ClassificationTrainer:
         all_predictions = []
         all_labels = []
         
+        # Create progress bar for evaluation
+        pbar = tqdm(
+            enumerate(eval_loader),
+            total=len(eval_loader),
+            desc="Evaluating",
+            leave=False,
+            ncols=100
+        )
+        
         with torch.no_grad():
-            for batch_data in eval_loader:
+            for batch_idx, batch_data in pbar:
                 # Move data to device
                 gene_ids = batch_data["gene_ids"].to(self.device)
                 values = batch_data["values"].to(self.device)
@@ -180,6 +222,16 @@ class ClassificationTrainer:
                 
                 all_predictions.extend(predictions)
                 all_labels.extend(labels_np)
+                
+                # Update progress bar with current metrics
+                current_loss = total_loss / (batch_idx + 1)
+                pbar.set_postfix({
+                    'Loss': f'{current_loss:.4f}',
+                    'Batches': f'{batch_idx + 1}/{len(eval_loader)}'
+                })
+        
+        # Close progress bar
+        pbar.close()
         
         # Calculate metrics
         all_predictions = np.array(all_predictions)
@@ -190,13 +242,15 @@ class ClassificationTrainer:
         precision = precision_score(all_labels, all_predictions, average="macro", zero_division=0)
         recall = recall_score(all_labels, all_predictions, average="macro", zero_division=0)
         f1 = f1_score(all_labels, all_predictions, average="macro", zero_division=0)
+        weighted_f1 = f1_score(all_labels, all_predictions, average="weighted", zero_division=0)
         
         metrics = {
             "val_loss": avg_loss,
             "val_acc": accuracy,
             "val_precision": precision,
             "val_recall": recall,
-            "val_f1": f1
+            "val_f1": f1,
+            "val_weighted_f1": weighted_f1
         }
         
         if return_predictions:
@@ -205,35 +259,32 @@ class ClassificationTrainer:
         
         return metrics
     
-    def train(self, train_loader: DataLoader, val_loader: DataLoader, epochs: int):
-        """Complete training loop"""
+    def train(self, train_loader: DataLoader, val_loader: DataLoader, epochs: int, save_dir: str = None):
+        """Complete training loop - skips validation and saves model after each epoch"""
         self.setup_training()
         
         for epoch in range(1, epochs + 1):
             self.current_epoch = epoch
             epoch_start = time.time()
             
-            # Training
+            # Training only - skip validation
             train_metrics = self.train_epoch(train_loader)
-            
-            # Validation
-            val_metrics = self.evaluate(val_loader)
             
             # Update learning rate
             self.scheduler.step()
             
-            # Track best model
-            if val_metrics["val_loss"] < self.best_val_loss:
-                self.best_val_loss = val_metrics["val_loss"]
-                self.best_model = copy.deepcopy(self.model.state_dict())
-                
+            # Save model after each epoch if save_dir is provided
+            if save_dir:
+                epoch_model_path = os.path.join(save_dir, f"model_epoch_{epoch}.pt")
+                torch.save(self.model.state_dict(), epoch_model_path)
                 if self.logger:
-                    self.logger.info(f"New best model at epoch {epoch} with val_loss: {self.best_val_loss:.4f}")
+                    self.logger.info(f"Model saved for epoch {epoch} at {epoch_model_path}")
             
-            # Update history
+            # Update history with training metrics only
             self.training_history["train_loss"].append(train_metrics["train_loss"])
-            self.training_history["val_loss"].append(val_metrics["val_loss"])
-            self.training_history["val_acc"].append(val_metrics["val_acc"])
+            # Keep validation history empty or with default values
+            self.training_history["val_loss"].append(float("inf"))
+            self.training_history["val_acc"].append(0.0)
             
             # Log epoch results
             elapsed = time.time() - epoch_start
@@ -241,9 +292,11 @@ class ClassificationTrainer:
                 self.logger.info(
                     f"Epoch {epoch}/{epochs} | Time: {elapsed:.2f}s | "
                     f"Train Loss: {train_metrics['train_loss']:.4f} | "
-                    f"Val Loss: {val_metrics['val_loss']:.4f} | "
-                    f"Val Acc: {val_metrics['val_acc']:.4f}"
+                    f"Train Acc: {train_metrics['train_acc']:.4f}"
                 )
+        
+        # Set best model to the final model since we're not doing validation
+        self.best_model = copy.deepcopy(self.model.state_dict())
         
         return self.training_history
     
@@ -264,12 +317,49 @@ class ClassificationTrainer:
         
         if self.logger:
             self.logger.info(
-                f"Test Results - Loss: {test_metrics['val_loss']:.4f} | "
-                f"Acc: {test_metrics['val_acc']:.4f} | "
-                f"F1: {test_metrics['val_f1']:.4f}"
+                f"Test Results - Loss: {test_metrics.get('val_loss', float('inf')):.4f} | "
+                f"Acc: {test_metrics.get('val_acc', 0.0):.4f} | "
+                f"F1: {test_metrics.get('val_f1', 0.0):.4f} | "
+                f"Weighted F1: {test_metrics.get('val_weighted_f1', 0.0):.4f}"
             )
         
         return test_metrics
+    
+    def save_checkpoint(self, path: str):
+        """Save training checkpoint"""
+        checkpoint = {
+            'epoch': self.current_epoch,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict(),
+            'scaler_state_dict': self.scaler.state_dict(),
+            'best_val_loss': self.best_val_loss,
+            'best_model': self.best_model,
+            'training_history': self.training_history,
+            'config': self.config,
+            'vocab': self.vocab
+        }
+        
+        torch.save(checkpoint, path)
+        if self.logger:
+            self.logger.info(f"Checkpoint saved to {path}")
+    
+    def load_checkpoint(self, path: str):
+        """Load training checkpoint"""
+        checkpoint = torch.load(path, map_location=self.device)
+        
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        self.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+        
+        self.current_epoch = checkpoint['epoch']
+        self.best_val_loss = checkpoint['best_val_loss']
+        self.best_model = checkpoint['best_model']
+        self.training_history = checkpoint['training_history']
+        
+        if self.logger:
+            self.logger.info(f"Checkpoint loaded from {path}")
     
     def plot_confusion_matrix(self, labels, predictions, class_names=None, save_path=None):
         """Plot confusion matrix"""
@@ -303,7 +393,7 @@ class ClassificationTrainer:
         ax1.legend()
         ax1.grid(True)
         
-        # Accuracy plot
+        # Accuracy plot - only training accuracy since we skip validation
         ax2.plot(self.training_history["val_acc"], label="Val Accuracy")
         ax2.set_xlabel("Epoch")
         ax2.set_ylabel("Accuracy")

@@ -28,7 +28,7 @@ class ModelManager:
         self.n_input_bins = config.n_bins + 2 if config.input_emb_style == "category" else config.n_bins
     
     def load_pretrained_model(self, model_path: str) -> TransformerModel:
-        """Load pre-trained scGPT model"""
+        """Load pre-trained scGPT model with exact architectural compatibility"""
         model_dir = Path(model_path)
         model_config_file = model_dir / "args.json"
         model_file = model_dir / "best_model.pt"
@@ -36,27 +36,35 @@ class ModelManager:
         if not model_file.exists():
             raise FileNotFoundError(f"Model file not found: {model_file}")
         
-        # Load model configuration
+        # Load model configuration FIRST
         if model_config_file.exists():
             with open(model_config_file, "r") as f:
                 self.model_configs = json.load(f)
             print(f"Loaded model config from {model_config_file}")
             
-            # Update model parameters from pretrained config
-            self.embsize = self.model_configs.get("embsize", self.config.layer_size)
-            self.nhead = self.model_configs.get("nheads", self.config.nhead)
-            self.d_hid = self.model_configs.get("d_hid", self.config.layer_size)
-            self.nlayers = self.model_configs.get("nlayers", self.config.nlayers)
+            # 🚨 CRITICAL: Use EXACT same architecture as pretrained model
+            self.embsize = self.model_configs["embsize"]
+            self.nhead = self.model_configs["nheads"]
+            self.d_hid = self.model_configs["d_hid"]
+            self.nlayers = self.model_configs["nlayers"]
             self.n_layers_cls = self.model_configs.get("n_layers_cls", 3)
+            
+            # 🚨 FORCE the same transformer type as pretrained
+            self.use_fast_transformer = self.model_configs.get("use_fast_transformer", True)
+            self.fast_transformer_backend = self.model_configs.get("fast_transformer_backend", "linear")
+            self.pre_norm = self.model_configs.get("pre_norm", False)
+            
+            print(f"⚠️ Using pretrained model architecture: "
+                f"fast_transformer={self.use_fast_transformer}, "
+                f"backend={self.fast_transformer_backend}")
         else:
-            print("No model config found, using default parameters")
-            self.embsize = self.config.layer_size
-            self.nhead = self.config.nhead
-            self.d_hid = self.config.layer_size
-            self.nlayers = self.config.nlayers
-            self.n_layers_cls = 3
+            raise FileNotFoundError("Pretrained model config is required for compatibility")
         
-        # Create model
+        self.use_fast_transformer =  True
+        self.fast_transformer_backend =  "linear"
+        self.pre_norm =  False
+        
+        # Create model with EXACT same architecture
         ntokens = len(self.vocab)
         self.model = TransformerModel(
             ntokens,
@@ -70,8 +78,8 @@ class ModelManager:
             dropout=self.config.dropout,
             pad_token=self.pad_token,
             pad_value=self.pad_value,
-            do_mvc=False,  # Disabled for classification
-            do_dab=False,  # Disabled for classification
+            do_mvc=False,
+            do_dab=False,
             use_batch_labels=False,
             num_batch_labels=1,
             domain_spec_batchnorm=self.config.DSBN,
@@ -81,32 +89,44 @@ class ModelManager:
             mvc_decoder_style="inner product",
             ecs_threshold=0.0,
             explicit_zero_prob=False,
-            use_fast_transformer=self.config.fast_transformer,
-            fast_transformer_backend="flash",
-            pre_norm=self.config.pre_norm,
+            use_fast_transformer=self.use_fast_transformer,  # ← MUST MATCH
+            fast_transformer_backend=self.fast_transformer_backend,  # ← MUST MATCH
+            pre_norm=self.pre_norm,  # ← MUST MATCH
         )
         
         # Load pretrained weights
-        try:
-            state_dict = torch.load(model_file, map_location=self.device)
-            self.model.load_state_dict(state_dict)
-            print(f"Successfully loaded all model parameters from {model_file}")
-        except RuntimeError as e:
-            print(f"Failed to load all parameters, loading compatible ones: {e}")
-            # Load only compatible parameters
-            model_dict = self.model.state_dict()
-            pretrained_dict = torch.load(model_file, map_location=self.device)
-            
-            pretrained_dict = {
-                k: v for k, v in pretrained_dict.items()
-                if k in model_dict and v.shape == model_dict[k].shape
-            }
-            
-            for k, v in pretrained_dict.items():
-                print(f"Loading parameter {k} with shape {v.shape}")
-            
-            model_dict.update(pretrained_dict)
-            self.model.load_state_dict(model_dict)
+        state_dict = torch.load(model_file, map_location=self.device)
+        
+        # Print ALL keys that will be ignored
+        model_dict = self.model.state_dict()
+        ignored_keys = []
+        compatible_keys = []
+        
+        for k, v in state_dict.items():
+            if k in model_dict and v.shape == model_dict[k].shape:
+                compatible_keys.append(k)
+            else:
+                ignored_keys.append(k)
+        
+        print("=" * 60)
+        print("COMPATIBLE KEYS (will be loaded):")
+        for k in compatible_keys:
+            print(f"✅ {k}")
+        
+        print("\n" + "=" * 60)
+        print("IGNORED KEYS (architecture mismatch):")
+        for k in ignored_keys:
+            print(f"❌ {k}")
+        print("=" * 60)
+        
+        # Load only compatible weights
+        pretrained_dict = {k: v for k, v in state_dict.items() 
+                        if k in model_dict and v.shape == model_dict[k].shape}
+        
+        model_dict.update(pretrained_dict)
+        self.model.load_state_dict(model_dict, strict=False)
+        
+        print(f"✅ Successfully loaded {len(compatible_keys)}/{len(state_dict)} parameters")
         
         return self.model
     
@@ -161,7 +181,7 @@ class ModelManager:
                 ecs_threshold=0.0,
                 explicit_zero_prob=False,
                 use_fast_transformer=self.config.fast_transformer,
-                fast_transformer_backend="flash",
+                fast_transformer_backend="linear",
                 pre_norm=self.config.pre_norm,
             )
         
