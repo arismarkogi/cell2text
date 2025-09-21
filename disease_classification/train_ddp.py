@@ -14,15 +14,12 @@ import numpy as np
 import pandas as pd
 warnings.filterwarnings('ignore')
 
-from classifier import GeneformerTissueClassifier   
+from classifier import GeneformerDiseaseClassifier
 
-from dataset import MultiDatasetTissueDataset
+from dataset import MultiDatasetDiseaseDataset
 
 
 import json
-
-
-
 
 def save_label_mapping(label_to_idx, save_path):
     """Save label-to-index mapping to JSON."""
@@ -33,22 +30,22 @@ def save_label_mapping(label_to_idx, save_path):
     print(f"Label mapping saved to: {save_path}")
 
 
-def load_tissues_from_csv(csv_path, sort=True):
+def load_diseases_from_csv(csv_path, sort=True):
     """
-    Load tissue types from CSV with format:
-        tissue_name, count, weight
-    Returns sorted list of unique tissue type names.
+    Load disease types from CSV with format:
+        disease_name, count, weight
+    Returns sorted list of unique disease type names.
     """
-    df = pd.read_csv(csv_path, header=None, names=['tissue', 'count', 'weight'])
-    tissues = df['tissue'].dropna().str.strip().tolist()
+    df = pd.read_csv(csv_path, header=None, names=['disease', 'count', 'weight'])
+    diseases = df['disease'].dropna().str.strip().tolist()
     
     if sort:
-        tissues.sort()
+        diseases.sort()
     
-    print(f"Loaded {len(tissues)} tissue types from {csv_path}")
-    print(f"First 5: {tissues[:5]}")
+    print(f"Loaded {len(diseases)} disease types from {csv_path}")
+    print(f"First 5: {diseases[:5]}")
     
-    return tissues
+    return diseases
 
 
 def setup_ddp(rank, world_size):
@@ -65,41 +62,6 @@ def load_config(config_path):
         config = yaml.safe_load(f)
     return config
 
-def load_checkpoint(checkpoint_path, model, optimizer, scheduler):
-    """Load checkpoint and return epoch, best_val_f1, and label mapping"""
-    if not os.path.exists(checkpoint_path):
-        raise FileNotFoundError(f"Checkpoint not found at {checkpoint_path}")
-    
-    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
-    
-    # Load model state dict
-    model.module.load_state_dict(checkpoint['model_state_dict'])
-    
-    # Load optimizer state dict
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    
-    # Load scheduler state dict
-    if 'scheduler_state_dict' in checkpoint:
-        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-    
-    # Get epoch and best metrics
-    start_epoch = checkpoint.get('epoch', 0) + 1  # Start from next epoch
-    best_val_f1 = checkpoint.get('best_val_f1', 0.0)
-    
-    # Get label mapping if available
-    label_mapping = checkpoint.get('label_mapping', None)
-    
-    print(f"Loaded checkpoint from epoch {checkpoint.get('epoch', 0)}")
-    print(f"Best validation Macro F1 so far: {best_val_f1:.4f}")
-    print(f"Resuming training from epoch {start_epoch}")
-    
-    if label_mapping:
-        print(f"Loaded label mapping with {len(label_mapping)} tissue types")
-    else:
-        print("Warning: No label mapping found in checkpoint")
-    
-    return start_epoch, best_val_f1, label_mapping
-
 def collate_fn(batch):
     max_len = max(len(item['input_ids']) for item in batch)
     batch_size = len(batch)
@@ -109,7 +71,7 @@ def collate_fn(batch):
     labels = torch.zeros(batch_size, dtype=torch.long)  # ← single label per sample
 
     dataset_ids = []
-    tissue_ids = []
+    disease_ids = []
 
     for i, item in enumerate(batch):
         seq_len = len(item['input_ids'])
@@ -117,14 +79,14 @@ def collate_fn(batch):
         attention_masks[i, :seq_len] = item['attention_mask']
         labels[i] = item['labels']
         dataset_ids.append(item['dataset_id'])
-        tissue_ids.append(item['tissue_id'])
+        disease_ids.append(item['disease_id'])
 
     return {
         'input_ids': input_ids,
         'attention_mask': attention_masks,
         'labels': labels,
         'dataset_ids': dataset_ids,
-        'tissue_ids': tissue_ids
+        'disease_ids': disease_ids
     }
 
 def get_topk_predictions(logits, k=1):
@@ -275,8 +237,13 @@ def validate(model, val_loader, criterion, rank, world_size, k=1):
     avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
     return avg_loss, metrics
 
-def save_model(model, optimizer, scheduler, epoch, metrics, best_val_f1, save_path, label_mapping=None):
+def save_model(model, optimizer, scheduler, epoch, metrics, best_val_f1, save_path):
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+    print(f"Saving model checkpoint to: {save_path}")
+    print(f"  Epoch: {epoch}")
+    print(f"  Best Val Macro F1: {best_val_f1:.4f}")
+    print(f"  Metrics: {metrics}")  
     
     checkpoint = {
         'epoch': epoch,
@@ -285,7 +252,6 @@ def save_model(model, optimizer, scheduler, epoch, metrics, best_val_f1, save_pa
         'scheduler_state_dict': scheduler.state_dict(),
         'best_val_f1': best_val_f1,
         'metrics': metrics,
-        'label_mapping': label_mapping,  # Save the label mapping
     }
     
     torch.save(checkpoint, save_path)
@@ -296,161 +262,158 @@ def save_model(model, optimizer, scheduler, epoch, metrics, best_val_f1, save_pa
 # MAIN
 # ----------------------------
 
-def main(rank, world_size, config_path, checkpoint_path=None, label_mapping_json=None):
+def main(rank, world_size, config_path):
     setup_ddp(rank, world_size)
-
+    
     try:
         config = load_config(config_path)
 
-        # -------------------------
-        # Step 1: Load label mapping
-        # -------------------------
-        if not label_mapping_json:
-            raise ValueError("You must provide --label-mapping JSON file for training")
-
-        if rank == 0:
-            print(f"Loading label mapping from {label_mapping_json}")
-
-        with open(label_mapping_json, "r") as f:
-            idx_to_label = json.load(f)
-            idx_to_label = {int(k): v for k, v in idx_to_label.items()}
-
-        target_tissues = [idx_to_label[i] for i in range(len(idx_to_label))]
-        tissue_names = target_tissues.copy()
-
-        if rank == 0:
-            print(f"Loaded {len(target_tissues)} tissue type names")
-
-        # -------------------------
-        # Step 2: Create datasets
-        # -------------------------
-        train_dataset = MultiDatasetTissueDataset(
-            config["data"]["base_data_path"],
-            split="train",
-            target_tissues=target_tissues,
-            label_key=config["data"].get("label_key", "tissue"),
-        )
-
-        val_dataset = MultiDatasetTissueDataset(
-            config["data"]["base_data_path"],
-            split="val",
-            target_tissues=target_tissues,
-            label_key=config["data"].get("label_key", "tissue"),
-        )
-
-        if rank == 0:
-            print(f"Training samples: {len(train_dataset)}")
-            print(f"Validation samples: {len(val_dataset)}")
-            print(f"Number of tissue types: {train_dataset.num_tissues}")
-
-        # -------------------------
-        # Step 3: Create model
-        # -------------------------
-        model = GeneformerTissueClassifier(
-            config["model"]["geneformer_model_path"],
-            num_tissues=train_dataset.num_tissues,
-            freeze_geneformer=config["model"]["freeze_geneformer"],
-        ).to(rank)
-        model = DDP(model, device_ids=[rank])
-
-        # -------------------------
-        # Step 4: Optimizer / Scheduler
-        # -------------------------
-        criterion = nn.CrossEntropyLoss()
-        optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=float(config["training"]["learning_rate"]),
-            weight_decay=0.01,
-        )
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode="max", factor=0.5, patience=5
-        )
-        scaler = torch.cuda.amp.GradScaler()
-
-        start_epoch = 0
-        best_val_f1 = 0.0
-
-        # -------------------------
-        # Step 5: Resume checkpoint if provided
-        # -------------------------
-        if checkpoint_path:
+        disease_csv = config['data'].get('disease_csv')
+        if disease_csv and os.path.exists(disease_csv):
+            target_diseases = load_diseases_from_csv(disease_csv)
+        else:
             if rank == 0:
-                print(f"Resuming from checkpoint: {checkpoint_path}")
-            start_epoch, best_val_f1, _ = load_checkpoint(
-                checkpoint_path, model, optimizer, scheduler
-            )
+                print("Warning: disease_csv not provided or not found. Using default disease types.")
+            target_diseases = None  # will use default in dataset class
+        
+        # Create datasets
+        train_dataset = MultiDatasetDiseaseDataset(
+            config['data']['base_data_path'], 
+            split='train',
+            target_diseases=target_diseases,  # ← pass loaded list
+            label_key=config['data'].get('label_key', 'disease')
+        )
+        val_dataset = MultiDatasetDiseaseDataset(
+            config['data']['base_data_path'], 
+            split='val',
+            target_diseases=train_dataset.target_diseases,  # ← ensure same mapping
+            label_key=config['data'].get('label_key', 'disease')
+        )
+        if rank == 0:
+            mapping_save_dir = "/home/arism/disease_results" # CHNAGE THIS PATH
+            os.makedirs(mapping_save_dir, exist_ok=True)
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            mapping_save_path = os.path.join(mapping_save_dir, f"{current_date}_label_mapping.json")
+            
+            # Get mapping from dataset
+            label_to_idx = train_dataset.disease_to_idx  # dict: disease → index
+            save_label_mapping(label_to_idx, mapping_save_path)
+            
+            # Also save reverse mapping for convenience (index → disease)
+            idx_to_label = {idx: label for label, idx in label_to_idx.items()}
+            reverse_mapping_path = os.path.join(mapping_save_dir, f"{current_date}_idx_to_label.json")
+            with open(reverse_mapping_path, 'w', encoding='utf-8') as f:
+                json.dump(idx_to_label, f, indent=2, ensure_ascii=False)
+            print(f"Reverse label mapping saved to: {reverse_mapping_path}")
+        
 
-        # -------------------------
-        # Step 6: Data loaders
-        # -------------------------
+        
+        # Create model
+        model = GeneformerDiseaseClassifier(
+            config['model']['geneformer_model_path'],
+            num_diseases=train_dataset.num_diseases,
+            freeze_geneformer=config['model']['freeze_geneformer']
+        )
+        model = model.to(rank)
+        model = DDP(model, device_ids=[rank])
+        
+        # Samplers & Loaders
         train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank, shuffle=True)
         val_sampler = DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False)
-
+        
         train_loader = DataLoader(
             train_dataset,
-            batch_size=config["training"]["batch_size"],
+            batch_size=config['training']['batch_size'],
             sampler=train_sampler,
             collate_fn=collate_fn,
             num_workers=4,
-            pin_memory=True,
+            pin_memory=True
         )
-
+        
         val_loader = DataLoader(
             val_dataset,
-            batch_size=config["training"]["batch_size"],
+            batch_size=config['training']['batch_size'],
             sampler=val_sampler,
             collate_fn=collate_fn,
             num_workers=2,
-            pin_memory=True,
+            pin_memory=True
         )
-
-        # -------------------------
-        # Step 7: Training loop (simplified, just one epoch shown)
-        # -------------------------
-        num_epochs = config["training"].get("epochs", 1)  # fallback default
-        for epoch in range(start_epoch, start_epoch + num_epochs):
         
+        # Loss
+        criterion = nn.CrossEntropyLoss()
+        
+        # Optimizer & Scheduler
+        optimizer = torch.optim.AdamW(
+            model.parameters(), 
+            lr=float(config['training']['learning_rate']), 
+            weight_decay=0.01
+        )
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='max', factor=0.5, patience=5
+        )
+        
+        scaler = torch.cuda.amp.GradScaler()
+        best_val_f1 = 0.0
+        
+        if rank == 0:
+            print("Starting DDP training...")
+            print(f"World size: {world_size}")
+            print(f"Training samples: {len(train_dataset)}")
+            print(f"Validation samples: {len(val_dataset)}")
+            print(f"Number of disease types: {train_dataset.num_diseases}")
+        
+        # Save path
+        if rank == 0:
+            current_date = datetime.now()
+            date_str = current_date.strftime("%Y-%m-%d_%H-%M")
+            save_dir = "/home/arism/disease_results"
+            os.makedirs(save_dir, exist_ok=True)
+            save_path = os.path.join(save_dir, f"{date_str}_ddp_best_model")
+            print(f"Model will be saved to: {save_path}")
+        
+        # Training Loop
+        num_epochs = config['training']['num_epochs']
+        for epoch in range(num_epochs):
             train_sampler.set_epoch(epoch)
-
+            
             train_loss = train_epoch(model, train_loader, criterion, optimizer, scaler, rank, epoch)
-            val_loss, val_metrics = validate(model, val_loader, criterion, rank, world_size)
-
+            # if epoch % 10 == 0:  # validate every 10 epochs
+            #     val_loss, val_metrics = validate(model, val_loader, criterion, rank, world_size)
+            
             if rank == 0:
-                print(f"\nEpoch {epoch+1}")
+                print(f"\nEpoch {epoch+1}/{num_epochs}")
                 print(f"  Train Loss: {train_loss:.4f}")
-                print(f"  Val Loss: {val_loss:.4f}")
-
-                if val_metrics:
-                    for k, v in val_metrics.items():
-                        print(f"  {k}: {v:.4f}")
-
-                    current_f1 = val_metrics.get("macro_f1", 0.0)
-                    if current_f1 > best_val_f1:
-                        best_val_f1 = current_f1
-                        print(f"  New best validation Macro F1: {current_f1:.4f}")
-
-                    save_path = os.path.join(
-                        "/home/arism/tissue_results_fromcheckpoint",
-                        f"best_model.pt"
-                    )
-                    save_model(model, optimizer, scheduler, epoch, val_metrics, best_val_f1, save_path, train_dataset.tissue_to_idx)
-
+                #print(f"  Val Loss: {val_loss:.4f}")
+                # if val_metrics:
+                #     for k, v in val_metrics.items():
+                #         print(f"  {k}: {v:.4f}")
+                    
+                #     current_f1 = val_metrics["macro_f1"]
+                #     if current_f1 > best_val_f1:
+                #         best_val_f1 = current_f1
+                #         #save_model(model, optimizer, scheduler, epoch, val_metrics, best_val_f1, save_path)
+                #         print(f"  New best validation Macro F1: {current_f1:.4f}")
+            
+            val_metrics = {}
+            best_val_f1 = 0.0
+            if rank == 0:
+                save_model(model, optimizer, scheduler, epoch, val_metrics, best_val_f1, f"{save_path}_epoch{epoch+1}.pt")
+            if val_metrics and rank == 0:
                 scheduler.step(val_metrics.get("macro_f1", 0.0))
-
+            
+        
         if rank == 0:
             print(f"Training completed. Best validation Macro F1: {best_val_f1:.4f}")
-
+        
     finally:
         cleanup_ddp()
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', default='/home/arism/tissue_classification/default.yaml', help='Config file path')
-    parser.add_argument('--checkpoint', type=str, help='Path to checkpoint file to resume from')
+    parser.add_argument('--config', default='/home/arism/cell2text/disease_classification/default.yaml', help='Config file path')
     parser.add_argument('--world-size', type=int, default=torch.cuda.device_count(), 
                         help='Number of GPUs to use')
-    parser.add_argument('--label-mapping', help='Path to idx_to_label.json for tissue type names')
-
     args = parser.parse_args()
     
     if args.world_size < 2:
@@ -458,7 +421,7 @@ if __name__ == "__main__":
     
     torch.multiprocessing.spawn(
         main,
-        args=(args.world_size, args.config, args.checkpoint, args.label_mapping),
+        args=(args.world_size, args.config),
         nprocs=args.world_size,
         join=True
-        )
+    )

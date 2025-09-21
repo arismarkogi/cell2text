@@ -14,8 +14,8 @@ import warnings
 import json
 warnings.filterwarnings('ignore')
 
-from dataset import MultiDatasetTissueDataset
-from classifier import GeneformerTissueClassifier
+from dataset import MultiDatasetDiseaseDataset
+from classifier import GeneformerDiseaseClassifier
 
 
 import pickle
@@ -52,7 +52,7 @@ def load_config(config_path):
 
 
 def collate_fn(batch):
-    """Collate function for batching (single-label tissue type)"""
+    """Collate function for batching (single-label disease type)"""
     max_len = max(len(item['input_ids']) for item in batch)
     batch_size = len(batch)
 
@@ -61,7 +61,7 @@ def collate_fn(batch):
     labels = torch.zeros(batch_size, dtype=torch.long)  # ← single label per sample
 
     dataset_ids = []
-    tissue_ids = []
+    disease_ids = []
 
     for i, item in enumerate(batch):
         seq_len = len(item['input_ids'])
@@ -69,14 +69,14 @@ def collate_fn(batch):
         attention_masks[i, :seq_len] = item['attention_mask']
         labels[i] = item['labels']  # scalar
         dataset_ids.append(item['dataset_id'])
-        tissue_ids.append(item['tissue_id'])
+        disease_ids.append(item['disease_id'])
 
     return {
         'input_ids': input_ids,
         'attention_mask': attention_masks,
         'labels': labels,
         'dataset_ids': dataset_ids,
-        'tissue_ids': tissue_ids
+        'disease_ids': disease_ids
     }
 
 
@@ -140,14 +140,14 @@ def gather_lists_from_all_processes(data_list, world_size, rank):
     return result
 
 
-def evaluate_ddp(model, test_loader, rank, world_size, num_tissues):
-    """Evaluate model with DDP for tissue type classification"""
+def evaluate_ddp(model, test_loader, rank, world_size, num_diseases):
+    """Evaluate model with DDP for disease type classification"""
     model.eval()
     
     local_logits = []
     local_labels = []
     local_dataset_ids = []
-    local_tissue_ids = []
+    local_disease_ids = []
     
     if rank == 0:
         pbar = tqdm(test_loader, desc="Evaluating")
@@ -165,32 +165,32 @@ def evaluate_ddp(model, test_loader, rank, world_size, num_tissues):
             local_logits.append(logits)
             local_labels.append(labels)
             local_dataset_ids.extend(batch['dataset_ids'])
-            local_tissue_ids.extend(batch['tissue_ids'])
+            local_disease_ids.extend(batch['disease_ids'])
     
     # Handle empty process
     if len(local_logits) > 0:
         local_logits_tensor = torch.cat(local_logits, dim=0)  # (N_local, C)
         local_labels_tensor = torch.cat(local_labels, dim=0)  # (N_local,)
     else:
-        local_logits_tensor = torch.empty(0, num_tissues, device=f'cuda:{rank}', dtype=torch.float32)
+        local_logits_tensor = torch.empty(0, num_diseases, device=f'cuda:{rank}', dtype=torch.float32)
         local_labels_tensor = torch.empty(0, device=f'cuda:{rank}', dtype=torch.long)
     
     # Gather
     all_logits = gather_from_all_processes(local_logits_tensor, world_size, rank)
     all_labels = gather_from_all_processes(local_labels_tensor.unsqueeze(1), world_size, rank).squeeze(1)  # ensure 1D
     all_dataset_ids = gather_lists_from_all_processes(local_dataset_ids, world_size, rank)
-    all_tissue_ids = gather_lists_from_all_processes(local_tissue_ids, world_size, rank)
+    all_disease_ids = gather_lists_from_all_processes(local_disease_ids, world_size, rank)
     
     return {
         'logits': all_logits,        # (N, C)
         'labels': all_labels,        # (N,)
         'dataset_ids': all_dataset_ids,
-        'tissue_ids': all_tissue_ids
+        'disease_ids': all_disease_ids
     }
 
 
 
-def calculate_metrics(results,  tissue_names=None):
+def calculate_metrics(results,  disease_names=None):
     """Calculate metrics with enhanced analysis of wrong predictions"""
     logits = results['logits']      # (N, C)
     labels = results['labels']      # (N,)
@@ -233,7 +233,7 @@ def calculate_metrics(results,  tissue_names=None):
     
     return metrics
 
-def save_results(results, metrics, save_dir, rank, tissue_names=None):
+def save_results(results, metrics, save_dir, rank, disease_names=None):
     """Save enhanced results with more detailed analysis"""
     if rank != 0:
         return
@@ -242,7 +242,7 @@ def save_results(results, metrics, save_dir, rank, tissue_names=None):
     
     # Enhanced predictions CSV
     predictions_df = pd.DataFrame({
-        'tissue_id': results['tissue_ids'],
+        'disease_id': results['disease_ids'],
         'dataset_id': results['dataset_ids'],
         'true_label_idx': results['labels'],
         'pred_label_idx': results['predictions'],
@@ -250,10 +250,10 @@ def save_results(results, metrics, save_dir, rank, tissue_names=None):
         'is_correct': results['is_correct']
     })
     
-    # Add tissue type names if available
-    if tissue_names is not None:
-        predictions_df['true_tissue'] = [tissue_names[i] for i in results['labels']]
-        predictions_df['pred_tissue'] = [tissue_names[i] for i in results['predictions']]
+    # Add disease type names if available
+    if disease_names is not None:
+        predictions_df['true_disease'] = [disease_names[i] for i in results['labels']]
+        predictions_df['pred_disease'] = [disease_names[i] for i in results['predictions']]
     
     
     
@@ -266,14 +266,14 @@ def save_results(results, metrics, save_dir, rank, tissue_names=None):
         wrong_predictions.to_csv(f"{save_dir}/wrong_predictions.csv", index=False)
         
         # Summary of most common wrong prediction patterns
-        if tissue_names is not None:
-            confusion_summary = wrong_predictions.groupby(['true_tissue', 'pred_tissue']).size().reset_index(name='count')
+        if disease_names is not None:
+            confusion_summary = wrong_predictions.groupby(['true_disease', 'pred_disease']).size().reset_index(name='count')
             confusion_summary = confusion_summary.sort_values('count', ascending=False)
             confusion_summary.to_csv(f"{save_dir}/confusion_patterns.csv", index=False)
     
     # Enhanced metrics file
     with open(f"{save_dir}/metrics.txt", "w") as f:
-        f.write("ENHANCED tissue TYPE CLASSIFICATION METRICS\n")
+        f.write("ENHANCED disease TYPE CLASSIFICATION METRICS\n")
         f.write("=" * 50 + "\n\n")
         
         f.write("STANDARD METRICS:\n")
@@ -320,7 +320,7 @@ def print_results(metrics, num_samples, rank):
         return
         
     print("\n" + "="*70)
-    print("ENHANCED tissue TYPE CLASSIFICATION RESULTS")
+    print("ENHANCED disease TYPE CLASSIFICATION RESULTS")
     print("="*70)
     print(f"Total samples: {num_samples}")
     
@@ -347,9 +347,9 @@ def main(rank, world_size, config_path, checkpoint_path, output_dir, label_mappi
         
         config = load_config(config_path)
         
-        # Load label mapping and create target_tissues list
-        tissue_names = None
-        target_tissues = None
+        # Load label mapping and create target_diseases list
+        disease_names = None
+        target_diseases = None
         
         if label_mapping_json:
             if rank == 0:
@@ -359,18 +359,18 @@ def main(rank, world_size, config_path, checkpoint_path, output_dir, label_mappi
                 idx_to_label = json.load(f)
                 # Convert keys to int and sort by index
                 idx_to_label = {int(k): v for k, v in idx_to_label.items()}
-                # Create ordered list of tissue types
-                target_tissues = [idx_to_label[i] for i in range(len(idx_to_label))]
-                tissue_names = target_tissues.copy()
+                # Create ordered list of disease types
+                target_diseases = [idx_to_label[i] for i in range(len(idx_to_label))]
+                disease_names = target_diseases.copy()
                 
             if rank == 0:
-                print(f"Loaded {len(target_tissues)} tissue type names")
+                print(f"Loaded {len(target_diseases)} disease type names")
         else:
             # If no label mapping provided, you might need to load from config or elsewhere
             # This is a fallback - you should ideally always provide the label mapping
             if rank == 0:
                 print("Warning: No label mapping provided, this might cause issues")
-            target_tissues = config.get('target_tissues', None)
+            target_diseases = config.get('target_diseases', None)
         
         # Synchronize after loading config/labels
         dist.barrier()
@@ -378,21 +378,21 @@ def main(rank, world_size, config_path, checkpoint_path, output_dir, label_mappi
         if rank == 0:
             print("Loading test dataset...")
         
-        test_dataset = MultiDatasetTissueDataset(
+        test_dataset = MultiDatasetDiseaseDataset(
             config['data']['base_data_path'], 
             split='test',
-            target_tissues=target_tissues,  # ← This was missing!
-            label_key=config['data'].get('label_key', 'tissue')
+            target_diseases=target_diseases,  # ← This was missing!
+            label_key=config['data'].get('label_key', 'disease')
         )
         
         if rank == 0:
             print(f"Test dataset size: {len(test_dataset)}")
-            print(f"Number of tissue types: {test_dataset.num_tissues}")
+            print(f"Number of disease types: {test_dataset.num_diseases}")
         
         # Create model
-        model = GeneformerTissueClassifier(
+        model = GeneformerDiseaseClassifier(
             config['model']['geneformer_model_path'],
-            num_tissues=test_dataset.num_tissues,
+            num_diseases=test_dataset.num_diseases,
             freeze_geneformer=config['model']['freeze_geneformer']
         )
         
@@ -463,16 +463,16 @@ def main(rank, world_size, config_path, checkpoint_path, output_dir, label_mappi
         if rank == 0:
             print("Starting evaluation...")
             
-        results = evaluate_ddp(model, test_loader, rank, world_size, test_dataset.num_tissues)
+        results = evaluate_ddp(model, test_loader, rank, world_size, test_dataset.num_diseases)
         
         if rank == 0:
             print("Calculating metrics...")
-            metrics = calculate_metrics(results, tissue_names)
+            metrics = calculate_metrics(results, disease_names)
             
            
             
             print_results(metrics, len(test_dataset), rank)
-            save_results(results, metrics, output_dir, rank, tissue_names)
+            save_results(results, metrics, output_dir, rank, disease_names)
             
             print("\nDDP evaluation completed successfully!")
         
@@ -493,10 +493,10 @@ def main(rank, world_size, config_path, checkpoint_path, output_dir, label_mappi
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', default='/home/arism/cell2text/tissue_classification/default.yaml', help='Config file path')
+    parser.add_argument('--config', default='/home/arism/cell2text/disease_classification/default.yaml', help='Config file path')
     parser.add_argument('--checkpoint', required=True, help='Path to model checkpoint')
-    parser.add_argument('--output-dir', default='test_results_ddp_tissue', help='Output directory for results')
-    parser.add_argument('--label-mapping', help='Path to idx_to_label.json for tissue type names')
+    parser.add_argument('--output-dir', default='test_results_ddp_disease', help='Output directory for results')
+    parser.add_argument('--label-mapping', help='Path to idx_to_label.json for disease type names')
     parser.add_argument('--world-size', type=int, default=torch.cuda.device_count(), 
                         help='Number of GPUs to use')
     args = parser.parse_args()

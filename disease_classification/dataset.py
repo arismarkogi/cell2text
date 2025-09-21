@@ -9,8 +9,8 @@ import pandas as pd
 
 
 
-class MultiDatasetTissueDataset(Dataset):
-    def __init__(self, base_path: str, split: str = 'train', target_tissues=None, max_samples_per_dataset=None, label_key='tissue'):
+class MultiDatasetDiseaseDataset(Dataset):
+    def __init__(self, base_path: str, split: str = 'train', target_diseases=None, max_samples_per_dataset=None, label_key='disease'):
         self.base_path = base_path
         self.split = split
         self.datasets = []         # hold Arrow dataset objects
@@ -19,12 +19,12 @@ class MultiDatasetTissueDataset(Dataset):
         self.label_key = label_key
 
         
-        self.target_tissues = target_tissues
+        self.target_diseases = target_diseases
 
-        self.tissue_to_idx = {ct: i for i, ct in enumerate(self.target_tissues)}
-        self.num_tissues = len(self.target_tissues)
+        self.disease_to_idx = {ct: i for i, ct in enumerate(self.target_diseases)}
+        self.num_diseases = len(self.target_diseases)
 
-        print(f"Target tissue types ({self.num_tissues}): {self.target_tissues[:5]}... (showing first 5)")
+        print(f"Target disease types ({self.num_diseases}): {self.target_diseases[:5]}... (showing first 5)")
         self._discover_and_index(max_samples_per_dataset)
 
     def _discover_and_index(self, max_samples_per_dataset=None):
@@ -54,8 +54,8 @@ class MultiDatasetTissueDataset(Dataset):
 
             for local_idx in range(scan_limit):
                 sample = ds[local_idx]
-                tissue = sample.get(self.label_key, '').strip()
-                if tissue in self.tissue_to_idx:
+                disease = sample.get(self.label_key, '').strip()
+                if disease in self.disease_to_idx:
                     self.index_map.append((ds_idx, local_idx))
                     valid_in_dataset += 1
 
@@ -72,8 +72,8 @@ class MultiDatasetTissueDataset(Dataset):
         input_ids = torch.tensor(sample['input_ids'], dtype=torch.long)
         attention_mask = torch.tensor(sample.get('attention_mask', [1] * len(input_ids)), dtype=torch.long)
 
-        tissue = sample.get(self.label_key, '').strip()
-        label_idx = self.tissue_to_idx.get(tissue, -1)
+        disease = sample.get(self.label_key, '').strip()
+        label_idx = self.disease_to_idx.get(disease, -1)
 
         if label_idx == -1:
             # Should not happen if _discover_and_index worked correctly
@@ -87,7 +87,7 @@ class MultiDatasetTissueDataset(Dataset):
             'attention_mask': attention_mask,
             'labels': labels,
             'dataset_id': self.dataset_names[ds_idx],
-            'tissue_id': f"{self.dataset_names[ds_idx]}_{local_idx}"
+            'disease_id': f"{self.dataset_names[ds_idx]}_{local_idx}"
         }
 
     
