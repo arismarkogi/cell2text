@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import os
 from tqdm import tqdm
+import torch.distributed as dist
 
 
 class ClassificationTrainer:
@@ -40,6 +41,10 @@ class ClassificationTrainer:
         self.best_model = None
         self.training_history = {"train_loss": [], "val_loss": [], "val_acc": []}
         
+        self.rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+        self.world_size = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
+
+        
         # Setup
         self.pad_token = "<pad>"
     
@@ -60,44 +65,42 @@ class ClassificationTrainer:
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.config.amp)
     
     def train_epoch(self, train_loader: DataLoader) -> Dict[str, float]:
-        """Train for one epoch"""
+        """Train for one epoch (DDP-safe)"""
         self.model.train()
         total_loss = 0.0
         total_correct = 0
         total_samples = 0
-        
+
         start_time = time.time()
-        
-        # Create progress bar
-        pbar = tqdm(
-            enumerate(train_loader),
-            total=len(train_loader),
-            desc=f"Epoch {self.current_epoch} [Train]",
-            leave=False,
-            ncols=100
-        )
-        
+
+        # Set epoch for DistributedSampler (important for shuffling)
+        if hasattr(train_loader, 'sampler') and hasattr(train_loader.sampler, 'set_epoch'):
+            train_loader.sampler.set_epoch(self.current_epoch)
+    
+    # Rest of your training code...
+
+        # tqdm only on rank 0
+        if hasattr(self, "rank") and self.rank == 0:
+            pbar = tqdm(
+                enumerate(train_loader),
+                total=len(train_loader),
+                desc=f"Epoch {self.current_epoch} [Train]",
+                leave=False,
+                ncols=100
+            )
+        else:
+            pbar = enumerate(train_loader)
+
         for batch_idx, batch_data in pbar:
             # Move data to device
             gene_ids = batch_data["gene_ids"].to(self.device)
             values = batch_data["values"].to(self.device)
             labels = batch_data["labels"].to(self.device)
             batch_labels = batch_data.get("batch_labels", torch.zeros(len(labels))).to(self.device)
-            
+
             # Create padding mask
             src_key_padding_mask = gene_ids.eq(self.vocab[self.pad_token])
 
-            # Check for NaN/Inf values
-            for k, v in batch_data.items():
-                if isinstance(v, torch.Tensor):
-                    if torch.isnan(v).any() or torch.isinf(v).any():
-                        print(f"⚠️ NaN or Inf detected in {k}")
-                        print("Tensor stats:", v.shape, v.dtype)
-                        print("NaN count:", torch.isnan(v).sum().item())
-                        print("Inf count:", torch.isinf(v).sum().item())
-                        raise ValueError(f"Invalid values in {k}")
-            
-            # Forward pass with mixed precision
             with torch.cuda.amp.autocast(enabled=self.config.amp):
                 output_dict = self.model(
                     gene_ids,
@@ -110,95 +113,82 @@ class ClassificationTrainer:
                     ECS=False,
                     do_sample=False,
                 )
-                
                 cls_output = output_dict["cls_output"]
                 loss = self.criterion(cls_output, labels)
-            
+
             # Backward pass
             self.optimizer.zero_grad()
             self.scaler.scale(loss).backward()
-            
-            # Gradient clipping
             self.scaler.unscale_(self.optimizer)
-            with warnings.catch_warnings(record=True) as w:
-                warnings.filterwarnings("always")
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(),
-                    1.0,
-                    error_if_nonfinite=False if self.scaler.is_enabled() else True,
-                )
-                if len(w) > 0 and self.logger:
-                    self.logger.warning(f"Found infinite gradient at batch {batch_idx}")
-            
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.scaler.step(self.optimizer)
             self.scaler.update()
-            
-            # Statistics
+
+            # Local stats
             total_loss += loss.item()
             predictions = cls_output.argmax(1)
             total_correct += (predictions == labels).sum().item()
             total_samples += labels.size(0)
-            
-            # Update progress bar
-            current_loss = total_loss / (batch_idx + 1)
-            current_acc = total_correct / total_samples
-            
-            # Update progress bar description with current metrics
-            pbar.set_postfix({
-                'Loss': f'{current_loss:.4f}',
-                'Acc': f'{current_acc:.4f}',
-                'LR': f'{self.optimizer.param_groups[0]["lr"]:.2e}'
-            })
-            
-            # Log progress less frequently since we have tqdm
-            if batch_idx % 500 == 0 and batch_idx > 0 and self.logger:
-                elapsed = time.time() - start_time
-                self.logger.info(
-                    f"Epoch {self.current_epoch} | Batch {batch_idx}/{len(train_loader)} | "
-                    f"Loss: {current_loss:.4f} | Acc: {current_acc:.4f} | "
-                    f"Time: {elapsed:.2f}s"
-                )
-        
-        # Close progress bar
-        pbar.close()
-        
-        avg_loss = total_loss / len(train_loader)
-        avg_acc = total_correct / total_samples
-        
+
+            # Update tqdm only on rank 0
+            if hasattr(self, "rank") and self.rank == 0:
+                current_loss = total_loss / (batch_idx + 1)
+                current_acc = total_correct / total_samples
+                pbar.set_postfix({
+                    'Loss': f'{current_loss:.4f}',
+                    'Acc': f'{current_acc:.4f}',
+                    'LR': f'{self.optimizer.param_groups[0]["lr"]:.2e}'
+                })
+
+        if hasattr(self, "rank") and self.rank == 0:
+            pbar.close()
+
+        # ---- 🔑 Reduce across processes ----
+        loss_tensor = torch.tensor(total_loss, device=self.device)
+        correct_tensor = torch.tensor(total_correct, device=self.device)
+        samples_tensor = torch.tensor(total_samples, device=self.device)
+
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            torch.distributed.all_reduce(loss_tensor, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(correct_tensor, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.all_reduce(samples_tensor, op=torch.distributed.ReduceOp.SUM)
+
+        avg_loss = loss_tensor.item() / (samples_tensor.item() / self.config.batch_size)  
+        avg_acc = correct_tensor.item() / samples_tensor.item()
+
         return {
             "train_loss": avg_loss,
             "train_acc": avg_acc,
-            "train_samples": total_samples
+            "train_samples": samples_tensor.item()
         }
+
     
     def evaluate(self, eval_loader: DataLoader, return_predictions: bool = False) -> Dict[str, float]:
-        """Evaluate model on validation/test set"""
+        """Evaluate model on validation/test set (DDP-safe)"""
         self.model.eval()
         total_loss = 0.0
-        all_predictions = []
-        all_labels = []
-        
-        # Create progress bar for evaluation
-        pbar = tqdm(
-            enumerate(eval_loader),
-            total=len(eval_loader),
-            desc="Evaluating",
-            leave=False,
-            ncols=100
-        )
-        
+        all_predictions, all_labels = [], []
+
+        # tqdm only on rank 0
+        if hasattr(self, "rank") and self.rank == 0:
+            pbar = tqdm(
+                enumerate(eval_loader),
+                total=len(eval_loader),
+                desc="Evaluating",
+                leave=False,
+                ncols=100
+            )
+        else:
+            pbar = enumerate(eval_loader)
+
         with torch.no_grad():
             for batch_idx, batch_data in pbar:
-                # Move data to device
                 gene_ids = batch_data["gene_ids"].to(self.device)
                 values = batch_data["values"].to(self.device)
                 labels = batch_data["labels"].to(self.device)
                 batch_labels = batch_data.get("batch_labels", torch.zeros(len(labels))).to(self.device)
-                
-                # Create padding mask
                 src_key_padding_mask = gene_ids.eq(self.vocab[self.pad_token])
-                
-                # Forward pass
+
                 with torch.cuda.amp.autocast(enabled=self.config.amp):
                     output_dict = self.model(
                         gene_ids,
@@ -211,53 +201,80 @@ class ClassificationTrainer:
                         ECS=False,
                         do_sample=False,
                     )
-                    
                     cls_output = output_dict["cls_output"]
                     loss = self.criterion(cls_output, labels)
-                
-                # Collect results
+
                 total_loss += loss.item()
-                predictions = cls_output.argmax(1).cpu().numpy()
+                preds = cls_output.argmax(1).cpu().numpy()
                 labels_np = labels.cpu().numpy()
-                
-                all_predictions.extend(predictions)
+                all_predictions.extend(preds)
                 all_labels.extend(labels_np)
-                
-                # Update progress bar with current metrics
-                current_loss = total_loss / (batch_idx + 1)
-                pbar.set_postfix({
-                    'Loss': f'{current_loss:.4f}',
-                    'Batches': f'{batch_idx + 1}/{len(eval_loader)}'
-                })
-        
-        # Close progress bar
-        pbar.close()
-        
-        # Calculate metrics
-        all_predictions = np.array(all_predictions)
-        all_labels = np.array(all_labels)
-        
-        avg_loss = total_loss / len(eval_loader)
-        accuracy = accuracy_score(all_labels, all_predictions)
-        precision = precision_score(all_labels, all_predictions, average="macro", zero_division=0)
-        recall = recall_score(all_labels, all_predictions, average="macro", zero_division=0)
-        f1 = f1_score(all_labels, all_predictions, average="macro", zero_division=0)
-        weighted_f1 = f1_score(all_labels, all_predictions, average="weighted", zero_division=0)
-        
-        metrics = {
-            "val_loss": avg_loss,
-            "val_acc": accuracy,
-            "val_precision": precision,
-            "val_recall": recall,
-            "val_f1": f1,
-            "val_weighted_f1": weighted_f1
-        }
-        
-        if return_predictions:
-            metrics["predictions"] = all_predictions
-            metrics["labels"] = all_labels
-        
+
+                if hasattr(self, "rank") and self.rank == 0:
+                    current_loss = total_loss / (batch_idx + 1)
+                    pbar.set_postfix({'Loss': f'{current_loss:.4f}'})
+
+        if hasattr(self, "rank") and self.rank == 0:
+            pbar.close()
+
+        # ---- 🔑 Gather predictions/labels ----
+        def gather_numpy_array(np_array):
+            tensor = torch.tensor(np_array, device=self.device, dtype=torch.long)
+            length = torch.tensor([tensor.numel()], device=self.device)
+            lengths = [torch.zeros(1, device=self.device, dtype=torch.long) for _ in range(self.world_size)]
+            torch.distributed.all_gather(lengths, length)
+            max_len = max([l.item() for l in lengths])
+
+            if tensor.numel() < max_len:
+                pad = torch.zeros(max_len - tensor.numel(), device=self.device, dtype=tensor.dtype)
+                tensor = torch.cat([tensor, pad], dim=0)
+
+            gathered = [torch.zeros(max_len, device=self.device, dtype=tensor.dtype) for _ in range(self.world_size)]
+            torch.distributed.all_gather(gathered, tensor)
+
+            result = []
+            for i, g in enumerate(gathered):
+                n = lengths[i].item()
+                result.extend(g[:n].cpu().numpy().tolist())
+            return np.array(result)
+
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            loss_tensor = torch.tensor(total_loss, device=self.device)
+            torch.distributed.all_reduce(loss_tensor, op=torch.distributed.ReduceOp.SUM)
+            total_loss = loss_tensor.item() / self.world_size
+
+            preds_all = gather_numpy_array(all_predictions)
+            labels_all = gather_numpy_array(all_labels)
+        else:
+            preds_all = np.array(all_predictions)
+            labels_all = np.array(all_labels)
+
+        # ---- 🔑 Metrics only on rank 0 ----
+        if not torch.distributed.is_available() or not torch.distributed.is_initialized() or self.rank == 0:
+            avg_loss = total_loss / len(eval_loader)
+            accuracy = accuracy_score(labels_all, preds_all)
+            precision = precision_score(labels_all, preds_all, average="macro", zero_division=0)
+            recall = recall_score(labels_all, preds_all, average="macro", zero_division=0)
+            f1 = f1_score(labels_all, preds_all, average="macro", zero_division=0)
+            weighted_f1 = f1_score(labels_all, preds_all, average="weighted", zero_division=0)
+
+            metrics = {
+                "val_loss": avg_loss,
+                "val_acc": accuracy,
+                "val_precision": precision,
+                "val_recall": recall,
+                "val_f1": f1,
+                "val_weighted_f1": weighted_f1
+            }
+            if return_predictions:
+                metrics["predictions"] = preds_all
+                metrics["labels"] = labels_all
+        else:
+            metrics = None
+
         return metrics
+
+
     
     def train(self, train_loader: DataLoader, val_loader: DataLoader, epochs: int, save_dir: str = None):
         """Complete training loop - skips validation and saves model after each epoch"""
@@ -274,11 +291,20 @@ class ClassificationTrainer:
             self.scheduler.step()
             
             # Save model after each epoch if save_dir is provided
-            if save_dir:
+            # if save_dir:
+            #     epoch_model_path = os.path.join(save_dir, f"model_epoch_{epoch}.pt")
+            #     torch.save(self.model.state_dict(), epoch_model_path)
+            #     if self.logger:
+            #         self.logger.info(f"Model saved for epoch {epoch} at {epoch_model_path}")
+            
+            if save_dir and self.rank == 0:
                 epoch_model_path = os.path.join(save_dir, f"model_epoch_{epoch}.pt")
-                torch.save(self.model.state_dict(), epoch_model_path)
+                # if DDP, save module state_dict
+                state = self.model.module.state_dict() if hasattr(self.model, "module") else self.model.state_dict()
+                torch.save(state, epoch_model_path)
                 if self.logger:
                     self.logger.info(f"Model saved for epoch {epoch} at {epoch_model_path}")
+
             
             # Update history with training metrics only
             self.training_history["train_loss"].append(train_metrics["train_loss"])
@@ -317,10 +343,10 @@ class ClassificationTrainer:
         
         if self.logger:
             self.logger.info(
-                f"Test Results - Loss: {test_metrics.get('val_loss', float('inf')):.4f} | "
-                f"Acc: {test_metrics.get('val_acc', 0.0):.4f} | "
-                f"F1: {test_metrics.get('val_f1', 0.0):.4f} | "
-                f"Weighted F1: {test_metrics.get('val_weighted_f1', 0.0):.4f}"
+                f"Test Results - Loss: {test_metrics.get('loss', float('inf')):.4f} | "
+                f"Acc: {test_metrics.get('acc', 0.0):.4f} | "
+                f"F1: {test_metrics.get('f1', 0.0):.4f} | "
+                f"Weighted F1: {test_metrics.get('weighted_f1', 0.0):.4f}"
             )
         
         return test_metrics

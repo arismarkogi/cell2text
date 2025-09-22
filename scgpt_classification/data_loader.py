@@ -93,9 +93,9 @@ class ScGPTDataLoader:
                 print(f"Loading {split_name} batch {i+1}/{len(files)}: {file_path}")
                 adata_batch = sc.read(file_path)
 
-                # limit to 100 samples for
-                # if adata_batch.n_obs > 100:
-                #     adata_batch = adata_batch[:100, :].copy()
+                #limit to 100 samples for debugging
+                if adata_batch.n_obs > 100:
+                    adata_batch = adata_batch[:100, :].copy()
                 
 
 

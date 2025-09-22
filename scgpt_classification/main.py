@@ -24,6 +24,8 @@ import torch
 import scanpy as sc
 import matplotlib.pyplot as plt
 import seaborn as sns
+import torch.nn as nn
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 # Add paths (adjust according to your directory structure)
 sys.path.insert(0, "../")
@@ -34,8 +36,21 @@ from model_setup import ModelManager
 from data_loader import ScGPTDataLoader, create_dataloader
 from trainer import ClassificationTrainer
 
+
+from torch.utils.data import DistributedSampler, DataLoader
+
+
+
+
+
+
 # Suppress warnings
 warnings.filterwarnings("ignore")
+
+
+import torch.distributed as dist
+import os
+
 
 
 def parse_arguments():
@@ -226,18 +241,18 @@ def _get_metric(results: dict, *candidates: str, default: float = 0.0) -> float:
     return default
 
 
-def main():
-    """Main training function"""
+def main(local_rank=0, world_size=1, args=None):
+    use_ddp = world_size > 1
+    rank = local_rank
+
+    device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
+    torch.cuda.set_device(device)
+    ...
+    print(f"[rank {rank}/{world_size}] using device: {device}")
+    set_seed(args.seed + rank)
     
     # Parse command line arguments
     args = parse_arguments()
-    
-    # Set device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-
-    # Set seed
-    set_seed(args.seed)
 
     # Get configuration and override with CLI args
     config = get_task_specific_config(args.task)
@@ -264,7 +279,6 @@ def main():
         save_dir = Path(f"./save/scGPT_finetune_{config.classification_task}_{config.dataset_name}")
     
     save_dir.mkdir(parents=True, exist_ok=True)
-
     # Setup logger
     logger = setup_logger(save_dir)
     
@@ -278,6 +292,83 @@ def main():
         # Fallback: dump __dict__ if no to_json method
         with open(save_dir / "config.json", "w") as f:
             json.dump(vars(config), f, default=str, indent=2)
+    
+
+    
+    # Set device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
+    # after args = parse_arguments()
+    use_ddp = int(os.environ.get("WORLD_SIZE", "1")) > 1  # torchrun sets WORLD_SIZE env var
+
+    print(f"DDP enabled: {use_ddp}")
+
+    def rebuild_dataloader_for_ddp(old_loader, batch_size, shuffle, rank, world_size, eval=False):
+        dataset = old_loader.dataset
+        
+        if world_size > 1:  # DDP is enabled
+            sampler = DistributedSampler(
+                dataset, 
+                num_replicas=world_size, 
+                rank=rank, 
+                shuffle=shuffle,
+                drop_last=False  # Important: don't drop last to avoid missing data
+            )
+            
+            # Determine num_workers
+            try:
+                num_workers = min(len(os.sched_getaffinity(0)), batch_size // 2)
+            except AttributeError:
+                num_workers = min(4, batch_size // 2)
+                
+            return DataLoader(
+                dataset=dataset,
+                batch_size=batch_size,
+                sampler=sampler,  # Use sampler instead of shuffle
+                drop_last=False,
+                num_workers=num_workers,
+                pin_memory=True
+            )
+        else:
+            # For non-DDP, return original or create new with proper shuffle
+            return DataLoader(
+                dataset=dataset,
+                batch_size=batch_size,
+                shuffle=shuffle,
+                drop_last=False,
+                num_workers=num_workers if 'num_workers' in locals() else 0,
+                pin_memory=True
+            )
+
+    if use_ddp:
+        # Initialize distributed process group (env:// works with torchrun)
+        dist.init_process_group(backend="nccl", init_method="env://")
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        # Set device for this process
+        device = torch.device(f"cuda:{local_rank}")
+        torch.cuda.set_device(device)
+    else:
+        rank = 0
+        world_size = 1
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    print(f"[rank {rank}/{world_size}] using device: {device}")
+    set_seed(args.seed + rank)
+
+    # create logger only on rank 0 (so only rank 0 writes to file)
+    if rank == 0:
+        logger = setup_logger(save_dir)
+    else:
+        logger = setup_logger(save_dir)  # optional: or a no-op logger; but ensure console spam is minimal
+        # If you want zero file logging on workers, comment file handler or set level to WARNING
+        for h in list(logger.handlers):
+            # keep only console handler on non-zero ranks
+            if isinstance(h, logging.FileHandler):
+                logger.removeHandler(h)
+
 
     # Collect batch file paths from your directory structure
     split_prefixes = ["train", "val", "test"]
@@ -333,6 +424,10 @@ def main():
         config.classification_task, config
     )
 
+    train_loader = rebuild_dataloader_for_ddp(train_loader, config.batch_size, shuffle=True, rank=rank, world_size=world_size)
+    val_loader   = rebuild_dataloader_for_ddp(val_loader, config.eval_batch_size, shuffle=False, rank=rank, world_size=world_size, eval=True)
+    test_loader  = rebuild_dataloader_for_ddp(test_loader, config.eval_batch_size, shuffle=False, rank=rank, world_size=world_size, eval=True)
+
     logger.info(f"Created dataloaders: Train={len(train_loader)}, Val={len(val_loader)}, Test={len(test_loader)}")
 
     # Save label mappings
@@ -349,6 +444,11 @@ def main():
     else:
         logger.info("Creating new model")
         model = model_manager.setup_model()
+    
+    if use_ddp:
+        # wrap with DDP; set device_ids to local GPU index (LOCAL_RANK)
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False)
+
 
     # Log number of trainable parameters
     try:
@@ -357,10 +457,24 @@ def main():
     except Exception as e:
         logger.warning(f"Could not compute model parameter count: {e}")
 
-    # Initialize trainer
-    trainer = ClassificationTrainer(
-        model, config, vocab, device, logger
-    )
+    trainer = ClassificationTrainer(model, config, vocab, device, logger)
+    # set trainer.rank/world_size inside trainer (or assign attributes)
+    if dist.is_available() and dist.is_initialized():
+        trainer.rank = dist.get_rank()
+        trainer.world_size = dist.get_world_size()
+    else:
+        trainer.rank = 0
+        trainer.world_size = 1
+
+    if getattr(config, "do_train", False):
+        results = trainer.train(
+            train_loader=train_loader,
+            val_loader=val_loader,
+            epochs=config.epochs,
+            save_dir=save_dir,
+        )
+
+
 
     # Training
     if getattr(config, "do_train", False):
@@ -393,11 +507,11 @@ def main():
     # Process and save results
     if test_results:
         # Print results
-        acc = _get_metric(test_results, "val_acc", "accuracy", "acc")
-        prec = _get_metric(test_results, "val_precision", "precision", "prec")
-        rec = _get_metric(test_results, "val_recall", "recall", "rec")
-        f1 = _get_metric(test_results, "val_f1", "f1", "f1_score")
-        weighted_f1 = _get_metric(test_results, "val_weighted_f1", "weighted_f1")
+        acc = _get_metric(test_results, "acc", "accuracy", "acc")
+        prec = _get_metric(test_results, "precision", "precision", "prec")
+        rec = _get_metric(test_results, "recall", "recall", "rec")
+        f1 = _get_metric(test_results, "f1", "f1", "f1_score")
+        weighted_f1 = _get_metric(test_results, "weighted_f1", "weighted_f1")
 
         logger.info("=== Test Results ===")
         logger.info(f"Accuracy: {acc:.4f}")
@@ -486,5 +600,29 @@ def main():
     return {}
 
 
+import torch.multiprocessing as mp
+import torch
+
+def main_worker(local_rank, n_gpus, args):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    
+    if n_gpus > 1:
+        dist.init_process_group(
+            backend="nccl",
+            init_method="env://",  # Use env:// instead of tcp://
+            world_size=n_gpus,
+            rank=local_rank,
+        )
+    torch.cuda.set_device(local_rank)
+    
+    main(local_rank=local_rank, world_size=n_gpus, args=args)
+
 if __name__ == "__main__":
-    results = main()
+    n_gpus = torch.cuda.device_count()
+    args = parse_arguments()  # or however you parse config
+
+    if n_gpus > 1:
+        mp.spawn(main_worker, nprocs=n_gpus, args=(n_gpus, args))
+    else:
+        main(local_rank=0, world_size=1, args=args)
