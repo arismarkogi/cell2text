@@ -259,12 +259,12 @@ class ClassificationTrainer:
             weighted_f1 = f1_score(labels_all, preds_all, average="weighted", zero_division=0)
 
             metrics = {
-                "val_loss": avg_loss,
-                "val_acc": accuracy,
-                "val_precision": precision,
-                "val_recall": recall,
-                "val_f1": f1,
-                "val_weighted_f1": weighted_f1
+                "loss": avg_loss,
+                "acc": accuracy,
+                "precision": precision,
+                "recall": recall,
+                "f1": f1,
+                "weighted_f1": weighted_f1
             }
             if return_predictions:
                 metrics["predictions"] = preds_all
@@ -341,6 +341,10 @@ class ClassificationTrainer:
         # Evaluate
         test_metrics = self.evaluate(test_loader, return_predictions=True)
         
+        # Add this check to handle None metrics in non-rank-0 processes
+        if test_metrics is None:
+            return None  # Return None for non-rank-0 processes
+        
         if self.logger:
             self.logger.info(
                 f"Test Results - Loss: {test_metrics.get('loss', float('inf')):.4f} | "
@@ -348,7 +352,6 @@ class ClassificationTrainer:
                 f"F1: {test_metrics.get('f1', 0.0):.4f} | "
                 f"Weighted F1: {test_metrics.get('weighted_f1', 0.0):.4f}"
             )
-        
         return test_metrics
     
     def save_checkpoint(self, path: str):

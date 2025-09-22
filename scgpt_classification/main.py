@@ -242,17 +242,24 @@ def _get_metric(results: dict, *candidates: str, default: float = 0.0) -> float:
 
 
 def main(local_rank=0, world_size=1, args=None):
-    use_ddp = world_size > 1
-    rank = local_rank
+    # NO arg re-parsing here! Assume args passed in.
+    if args is None:
+        args = parse_arguments()
 
+    # Set rank/world_size from params or env (for torchrun compatibility)
+    if dist.is_initialized():
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+    else:
+        rank = local_rank
+        world_size = 1  # Single GPU fallback
+
+    # Device setup
     device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
-    torch.cuda.set_device(device)
-    ...
+    torch.cuda.set_device(device) if torch.cuda.is_available() else None
     print(f"[rank {rank}/{world_size}] using device: {device}")
+
     set_seed(args.seed + rank)
-    
-    # Parse command line arguments
-    args = parse_arguments()
 
     # Get configuration and override with CLI args
     config = get_task_specific_config(args.task)
@@ -272,18 +279,29 @@ def main(local_rank=0, world_size=1, args=None):
     
     config.validate()
 
-    # Create save directory
+   # Create save_dir (unchanged)
     if args.save_dir:
         save_dir = Path(args.save_dir)
     else:
         save_dir = Path(f"./save/scGPT_finetune_{config.classification_task}_{config.dataset_name}")
-    
     save_dir.mkdir(parents=True, exist_ok=True)
-    # Setup logger
-    logger = setup_logger(save_dir)
-    
-    logger.info(f"Starting fine-tuning for task: {config.classification_task}")
-    logger.info(f"Save directory: {save_dir}")
+
+    # Logger: Only rank 0 writes files; others console-only
+    logger = logging.getLogger("scGPT_finetune")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()  # Clear any existing
+    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
+    if rank == 0:
+        fh = logging.FileHandler(str(save_dir / "training.log"))
+        fh.setLevel(logging.INFO)
+        fh.setFormatter(formatter)
+        logger.addHandler(fh)
+    logger.info(f"[Rank {rank}] Starting fine-tuning for task: {config.classification_task}")
+
 
     # Save configuration
     try:
@@ -294,15 +312,7 @@ def main(local_rank=0, world_size=1, args=None):
             json.dump(vars(config), f, default=str, indent=2)
     
 
-    
-    # Set device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
 
-    # after args = parse_arguments()
-    use_ddp = int(os.environ.get("WORLD_SIZE", "1")) > 1  # torchrun sets WORLD_SIZE env var
-
-    print(f"DDP enabled: {use_ddp}")
 
     def rebuild_dataloader_for_ddp(old_loader, batch_size, shuffle, rank, world_size, eval=False):
         dataset = old_loader.dataset
@@ -341,19 +351,6 @@ def main(local_rank=0, world_size=1, args=None):
                 pin_memory=True
             )
 
-    if use_ddp:
-        # Initialize distributed process group (env:// works with torchrun)
-        dist.init_process_group(backend="nccl", init_method="env://")
-        rank = dist.get_rank()
-        world_size = dist.get_world_size()
-        local_rank = int(os.environ.get("LOCAL_RANK", 0))
-        # Set device for this process
-        device = torch.device(f"cuda:{local_rank}")
-        torch.cuda.set_device(device)
-    else:
-        rank = 0
-        world_size = 1
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print(f"[rank {rank}/{world_size}] using device: {device}")
     set_seed(args.seed + rank)
@@ -445,9 +442,8 @@ def main(local_rank=0, world_size=1, args=None):
         logger.info("Creating new model")
         model = model_manager.setup_model()
     
-    if use_ddp:
-        # wrap with DDP; set device_ids to local GPU index (LOCAL_RANK)
-        model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False)
+    if world_size > 1:
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
 
 
     # Log number of trainable parameters
@@ -465,15 +461,6 @@ def main(local_rank=0, world_size=1, args=None):
     else:
         trainer.rank = 0
         trainer.world_size = 1
-
-    if getattr(config, "do_train", False):
-        results = trainer.train(
-            train_loader=train_loader,
-            val_loader=val_loader,
-            epochs=config.epochs,
-            save_dir=save_dir,
-        )
-
 
 
     # Training
@@ -500,9 +487,15 @@ def main(local_rank=0, world_size=1, args=None):
 
         logger.info("Training completed and model saved")
 
-    # Testing
+   # Testing
     logger.info("Starting testing...")
     test_results = trainer.test(test_loader, id_to_label)
+
+    # Add this check to handle None results from non-rank-0 processes
+    if test_results is None:
+        # For non-rank-0 processes, just return empty dict
+        return {}
+        
 
     # Process and save results
     if test_results:
@@ -610,19 +603,24 @@ def main_worker(local_rank, n_gpus, args):
     if n_gpus > 1:
         dist.init_process_group(
             backend="nccl",
-            init_method="env://",  # Use env:// instead of tcp://
+            init_method="env://",
             world_size=n_gpus,
             rank=local_rank,
         )
     torch.cuda.set_device(local_rank)
     
+    # Initialize distributed training
     main(local_rank=local_rank, world_size=n_gpus, args=args)
+    
+    # Wait for all processes to finish
+    if dist.is_initialized():
+        dist.barrier()
+
 
 if __name__ == "__main__":
+    args = parse_arguments()  # Parse once here
     n_gpus = torch.cuda.device_count()
-    args = parse_arguments()  # or however you parse config
-
     if n_gpus > 1:
-        mp.spawn(main_worker, nprocs=n_gpus, args=(n_gpus, args))
+        mp.spawn(main_worker, nprocs=n_gpus, args=(n_gpus, args), join=True)
     else:
         main(local_rank=0, world_size=1, args=args)
