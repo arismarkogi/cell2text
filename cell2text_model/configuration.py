@@ -23,7 +23,7 @@ class Cell2TextConfig(PretrainedConfig):
         # When useing the "mlp"
         mlp_hidden_size=2048, # projection layer hidden_dim
         mlp_dropout=0.05,
-        top_k=32, # hyperparameter for the top_k selection of genes (tokens) and qformer tokens
+        top_k=512, # hyperparameter for the top_k selection of genes (tokens) and qformer tokens
 
         # When using the "perceiver"
         num_latents = 128,

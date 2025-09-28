@@ -10,13 +10,14 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from scipy.sparse import issparse
 from sklearn.model_selection import train_test_split
-
+import gc
 import sys
 sys.path.insert(0, "../")
 from scgpt.preprocess import Preprocessor
 from scgpt.tokenizer import tokenize_and_pad_batch, random_mask_value
 from scgpt.tokenizer.gene_tokenizer import GeneVocab
 from scgpt import SubsetsBatchSampler
+import anndata as ad
 
 
 class ScGPTDataLoader:
@@ -252,8 +253,10 @@ class ScGPTDataLoader:
         
         return adata[:, adata.var["id_in_vocab"] >= 0]
     
-    def preprocess_data(self, adata, is_raw_data: bool = True):
-        """Preprocess the data"""
+    def preprocess_data(self, adata, is_raw_data: bool = True, chunk_size: int = 10000):
+        """Preprocess the data with chunking to manage memory"""
+        print(f"Preprocessing data with chunk size: {chunk_size}")
+        
         self.preprocessor = Preprocessor(
             use_key="X",
             filter_gene_by_counts=False,
@@ -267,8 +270,57 @@ class ScGPTDataLoader:
             result_binned_key="X_binned",
         )
         
-        self.preprocessor(adata, batch_key=None)
-        return adata
+        n_cells = adata.n_obs
+        
+        # If data is small enough, process all at once
+        if n_cells <= chunk_size:
+            print(f"Processing all {n_cells} cells at once")
+            self.preprocessor(adata, batch_key=None)
+            return adata
+        
+        # Strategy 1: Process in place with temporary files (most memory efficient)
+        # You can switch strategies by changing this line:
+        return self._preprocess_with_temp_files(adata, chunk_size)
+        
+    
+    def _preprocess_with_temp_files(self, adata, chunk_size):
+        import tempfile
+        import os
+
+        n_cells = adata.n_obs
+        print(f"Processing {n_cells} cells in chunks of {chunk_size} using temporary files")
+
+        temp_dir = tempfile.mkdtemp(prefix="scgpt_preprocess_")
+        temp_files = []
+
+        try:
+            for start_idx in range(0, n_cells, chunk_size):
+                end_idx = min(start_idx + chunk_size, n_cells)
+                chunk_adata = adata[start_idx:end_idx, :].copy()
+
+                print(f"Processing chunk {start_idx//chunk_size + 1}/{(n_cells + chunk_size - 1)//chunk_size} "
+                    f"({end_idx - start_idx} cells)")
+
+                self.preprocessor(chunk_adata, batch_key=None)
+
+                temp_file = os.path.join(temp_dir, f"chunk_{start_idx//chunk_size}.h5ad")
+                chunk_adata.write(temp_file)
+                temp_files.append(temp_file)
+
+                del chunk_adata
+                gc.collect()
+
+            # RETURN TEMP FILE PATHS, NOT LOADED OBJECTS
+            return temp_files  # ⬅️ Critical change!
+
+        except Exception as e:
+            print(f"Error during preprocessing: {e}")
+            raise
+        finally:
+            # DO NOT CLEAN UP HERE — clean up after tokenization!
+            pass  # We'll clean up later
+            
+    
     
     def prepare_labels(self, adata, task: str):
         """Prepare labels for classification task"""
@@ -294,9 +346,9 @@ class ScGPTDataLoader:
         
         return adata, len(label_to_id), id_to_label
     
-    def prepare_dataset_splits_from_batches(self, task: str):
-        """Prepare train/val/test splits from batch lists"""
-        print("Preparing dataset splits from batches...")
+    def prepare_dataset_splits_from_batches(self, task: str, chunk_size: int = 10000):
+        """Prepare train/val/test splits from batch lists with chunked preprocessing"""
+        print("Preparing dataset splits from batches with chunked preprocessing...")
         
         # Process each split separately to avoid memory issues
         def process_split_batches(batch_list, split_name):
@@ -306,11 +358,23 @@ class ScGPTDataLoader:
             for i, adata_batch in enumerate(batch_list):
                 print(f"Processing {split_name} batch {i+1}/{len(batch_list)}")
                 
-                # Preprocess this batch
-                adata_processed = self.preprocess_data(adata_batch.copy(), is_raw_data=True)
-                processed_batches.append(adata_processed)
+                adata_processed = self.preprocess_data(
+                    adata_batch.copy(), is_raw_data=True, chunk_size=chunk_size
+                )
+
+                # 🔑 If preprocess_data returns a list of file paths, reload them
+                if isinstance(adata_processed, list):
+                    import scanpy as sc
+                    loaded_chunks = [sc.read(f) for f in adata_processed]
+                    processed_batches.extend(loaded_chunks)
+                else:
+                    processed_batches.append(adata_processed)
+                
+                del adata_batch
+                gc.collect()
             
             return processed_batches
+
         
         # Process all splits
         train_processed = process_split_batches(self.train_batches, "train")
@@ -373,7 +437,7 @@ class ScGPTDataLoader:
         return len(all_labels), id_to_label
     
     def tokenize_data(self, adata, subset_name: str = ""):
-        """Tokenize and prepare data for model input"""
+        """Tokenize and prepare data for model input - no chunking here"""
         input_layer_key = {
             "normed_raw": "X_normed",
             "log1p": "X_normed", 
@@ -390,7 +454,7 @@ class ScGPTDataLoader:
         genes = adata.var_names.tolist()
         gene_ids = np.array(self.vocab(genes), dtype=int)
         
-        # Tokenize
+        # Tokenize all data at once (preprocessing already handled chunking)
         tokenized = tokenize_and_pad_batch(
             expression_data,
             gene_ids,
@@ -408,8 +472,8 @@ class ScGPTDataLoader:
         return tokenized, expression_data, gene_ids
     
     def create_batch_data_loaders(self, task: str, config):
-        """Create data loaders from processed batches"""
-        print("Creating data loaders from batches...")
+        """Create data loaders from processed batches - simplified without tokenization chunking"""
+        print("Creating data loaders from processed batches...")
         
         def process_batches_to_dataloader(batch_list, split_name, mask_ratio=0.0):
             all_data_dicts = []
@@ -417,22 +481,36 @@ class ScGPTDataLoader:
             for i, adata_batch in enumerate(batch_list):
                 print(f"Tokenizing {split_name} batch {i+1}/{len(batch_list)}")
                 
-                # Tokenize this batch
-                tokenized, _, _ = self.tokenize_data(adata_batch, f"{split_name}_batch_{i}")
+                # Tokenize the entire batch (preprocessing already handled memory management)
+                tokenized, _, _ = self.tokenize_data(adata_batch, subset_name=f"{split_name} batch {i+1}")
                 
+                print(f"Tokenized batch {i+1}: {tokenized['genes'].shape[0]} samples")
+
                 # Create data dict for this batch
                 data_dict = self.create_data_dict(
                     tokenized, adata_batch, task, mask_ratio=mask_ratio
                 )
-                
                 all_data_dicts.append(data_dict)
-            
-            # Combine all data dicts
-            combined_dict = {}
-            for key in all_data_dicts[0].keys():
-                combined_dict[key] = torch.cat([d[key] for d in all_data_dicts], dim=0)
-            
-            return combined_dict
+                
+                # Clear memory
+                del tokenized, adata_batch
+                gc.collect()
+
+                print(f"✅ Finished processing {split_name} batch {i+1}")
+    
+            # Combine all batches into final data dict
+            if all_data_dicts:
+                combined_dict = {}
+                for key in all_data_dicts[0].keys():
+                    combined_dict[key] = torch.cat([d[key] for d in all_data_dicts], dim=0)
+                
+                # Clear batch data
+                del all_data_dicts
+                gc.collect()
+                
+                return combined_dict
+            else:
+                return {}  # Return empty dict if no data
         
         # Process each split
         train_data_dict = process_batches_to_dataloader(

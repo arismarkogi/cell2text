@@ -94,11 +94,23 @@ class GeneformerModel(
 
         layer_to_quant = pu.quant_layers(self.geneformer_model) + self.config.emb_layer
         
-        # Create dataset from numpy arrays directly
+        if expression_tokens.dtype != torch.long:
+            expression_tokens = expression_tokens.long()
+        
+        if expression_token_lengths.dtype != torch.long:
+            expression_token_lengths = expression_token_lengths.long()
+        
+         # Create dataset from numpy arrays directly
         filtered_input_data = Dataset.from_dict({
             'input_ids': expression_tokens,
             'length': expression_token_lengths
         })
+        
+        # # Add token_type_ids as zeros if the model expects them
+        # if hasattr(self.geneformer_model.config, 'type_vocab_size') and self.geneformer_model.config.type_vocab_size > 1:
+        #     filtered_input_data['token_type_ids'] = torch.zeros_like(expression_tokens, dtype=torch.long)
+
+       
         
         embs = get_embs(
             model=self.geneformer_model,

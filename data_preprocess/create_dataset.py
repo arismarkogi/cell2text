@@ -520,8 +520,8 @@ print(f"Reserved {len(train_donors)} donors to guarantee category coverage in th
 
 # Calculate target cell counts
 total_cells = len(final_sample)
-val_target_size = int(total_cells * 0.025)
-test_target_size = int(total_cells * 0.025)
+val_target_size = int(total_cells * 0.1)
+test_target_size = int(total_cells * 0.1)
 
 # The pool for assignment is the set of donors not already reserved for training
 assignment_pool = list(unassigned_donors)

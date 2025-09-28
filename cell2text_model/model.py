@@ -51,7 +51,6 @@ class Cell2TextModel(PreTrainedModel):
 
         # Initialize all components in __init__
         self.cell_encoder = GeneformerModel(self.geneformer_config)
-
         self.decoder = Cell2TextLlamaModel(self.cell2text_llama_config)
         
         self.projector = config.projector

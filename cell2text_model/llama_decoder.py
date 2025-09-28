@@ -10,6 +10,8 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers import Cache
 import os 
 
+
+
 def resolve_device() -> torch.device:
     """
     Decide which torch.device to use, with minimal fuss.
@@ -66,237 +68,35 @@ class Cell2TextLlamaModel(PreTrainedModel, GenerationMixin):
     
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path: str, config=None, torch_dtype=None, **kwargs):
-        if "config" in kwargs:
-            config = kwargs.pop("config")
-            if isinstance(config, dict):
-                config = Cell2TextLlamaConfig(**config)
-            elif not isinstance(config, Cell2TextLlamaConfig):
-                raise ValueError("Parameter `config` must be a dictionary or an instance of `Cell2TextLlamaConfig`.")
-        else:
+        print(f"🔍 Loading LLaMA from: {pretrained_model_name_or_path}")
+        print(f"🔍 Path exists: {os.path.exists(pretrained_model_name_or_path)}")
+        
+        if config is None:
             config = Cell2TextLlamaConfig()
 
         model = cls(config, **kwargs)
-                
+        
         if torch_dtype is None:
             torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
         
-        # Load the LLaMA model
-        model.llama = LlamaForCausalLM.from_pretrained(
-            pretrained_model_name_or_path,
-            torch_dtype=torch_dtype,
-            **kwargs
-        )
-        model.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
-        
-        
+        try:
+            # Load the LLaMA model
+            model.llama = LlamaForCausalLM.from_pretrained(
+                pretrained_model_name_or_path,
+                torch_dtype=torch_dtype,
+                **kwargs
+            )
+            model.tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
+            
+            print(f"✅ LLaMA loaded successfully!")
+            print(f"✅ LLaMA parameters: {sum(p.numel() for p in model.llama.parameters()):,}")
+            
+        except Exception as e:
+            print(f"❌ Failed to load LLaMA: {e}")
+            print(f"❌ model.llama is None: {model.llama is None}")
+            
         return model
     
-    # def load_from_state_dict(self, state_dict, strict=True):
-    #     """
-    #     Generalized loader that inspects state dict and handles any model configuration
-    #     """
-    #     # Initialize the LLaMA model if it doesn't exist
-    #     if self.llama is None:
-    #         # Replace with your actual model path
-    #         default_llama_path = "meta-llama/Llama-3.2-3B-Instruct"
-            
-    #         # First, initialize the base model to avoid NoneType errors
-    #         torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-            
-    #         # Extract llama-related keys first - FIX THE PREFIX HERE
-    #         llama_state_dict = {}
-    #         prefix = "decoder.base_model.model.llama.model"  # Changed from "decoder.base_model.model.llama.model"
-            
-    #         for key, value in state_dict.items():
-    #             if key.startswith(prefix):
-    #                 model_key = key[len(prefix):]
-    #                 llama_state_dict[model_key] = value
-            
-    #         if not llama_state_dict:
-    #             print("Warning: No llama weights found in state dict, initializing with default weights")
-    #             # Initialize with default weights if no state dict found
-    #             self.llama = LlamaForCausalLM.from_pretrained(
-    #                 default_llama_path,
-    #                 torch_dtype=torch_dtype,
-    #             )
-    #             self.tokenizer = AutoTokenizer.from_pretrained(default_llama_path)
-    #             return
-            
-    #         # Inspect the state dict structure to determine model type
-    #         has_lora = any('lora_A' in key or 'lora_B' in key for key in llama_state_dict.keys())
-    #         has_base_model = any(key.startswith('base_model.') for key in llama_state_dict.keys())
-            
-    #         if has_lora or has_base_model:
-    #             print("Detected LoRA/PEFT model structure, loading with PEFT...")
-    #             self._load_peft_model(default_llama_path, llama_state_dict)
-    #         else:
-    #             print("Standard model structure detected, loading normally...")
-    #             self._load_standard_model(default_llama_path, llama_state_dict)
-            
-    #         # Load tokenizer
-    #         self.tokenizer = AutoTokenizer.from_pretrained(default_llama_path)
-    #         print("Model loaded successfully!")
-            
-    # def _load_peft_model_direct(self, model_path, llama_state_dict):
-    #     """Alternative method to load PEFT model with direct state dict manipulation"""
-    #     try:
-    #         from peft import PeftModel, LoraConfig, get_peft_model
-            
-    #         # Load base model first
-    #         base_model = LlamaForCausalLM.from_pretrained(
-    #             model_path,
-    #             torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-    #         )
-            
-    #         # Auto-detect LoRA configuration
-    #         lora_config = self._detect_lora_config(llama_state_dict)
-            
-    #         # Create PEFT model
-    #         self.llama = get_peft_model(base_model, lora_config)
-            
-    #         # Get the expected state dict structure from the created model
-    #         expected_keys = set(self.llama.state_dict().keys())
-            
-    #         # Create a mapping from loaded keys to expected keys
-    #         key_mapping = {}
-    #         for loaded_key in llama_state_dict.keys():
-    #             # Try different transformations to match expected keys
-    #             candidates = [
-    #                 loaded_key,
-    #                 loaded_key.replace('base_model.model.model.', 'base_model.model.'),
-    #                 loaded_key.replace('base_model.model.', ''),
-    #                 loaded_key.replace('model.', ''),
-    #             ]
-                
-    #             for candidate in candidates:
-    #                 if candidate in expected_keys:
-    #                     key_mapping[loaded_key] = candidate
-    #                     break
-            
-    #         # Apply the mapping and load
-    #         mapped_state_dict = {}
-    #         for loaded_key, value in llama_state_dict.items():
-    #             if loaded_key in key_mapping:
-    #                 mapped_state_dict[key_mapping[loaded_key]] = value
-    #             else:
-    #                 print(f"Warning: Could not map key {loaded_key}")
-            
-    #         # Load the mapped state dict
-    #         missing_keys, unexpected_keys = self.llama.load_state_dict(mapped_state_dict, strict=False)
-    #         print(f"Direct PEFT loading - Missing keys: {len(missing_keys)}, Unexpected keys: {len(unexpected_keys)}")
-            
-    #     except Exception as e:
-    #         print(f"Direct PEFT loading failed: {e}")
-    #         print("Falling back to standard loading...")
-    #         self._load_standard_model(model_path, llama_state_dict)
-    
-    
-    
-    # def _load_standard_model(self, model_path, llama_state_dict):
-    #     """Load standard LLaMA model"""
-    #     self.llama = LlamaForCausalLM.from_pretrained(
-    #         model_path,
-    #         torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-    #     )
-        
-    #     # Load weights
-    #     missing_keys, unexpected_keys = self.llama.load_state_dict(llama_state_dict, strict=False)
-    #     if missing_keys:
-    #         print(f"Missing keys: {len(missing_keys)} keys")
-    #     if unexpected_keys:
-    #         print(f"Unexpected keys: {len(unexpected_keys)} keys")
-
-    # def _load_peft_model(self, model_path, llama_state_dict):
-    #     """Load PEFT/LoRA model by inspecting the state dict structure"""
-    #     try:
-    #         from peft import PeftModel, LoraConfig, get_peft_model
-            
-    #         # Load base model first
-    #         base_model = LlamaForCausalLM.from_pretrained(
-    #             model_path,
-    #             torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-    #         )
-            
-    #         # Auto-detect LoRA configuration from state dict
-    #         lora_config = self._detect_lora_config(llama_state_dict)
-            
-    #         # Create PEFT model
-    #         self.llama = get_peft_model(base_model, lora_config)
-            
-    #         # Transform state dict keys to match expected format
-    #         # NO TRANSFORMATION NEEDED since we already extracted the right keys
-    #         transformed_state_dict = llama_state_dict
-            
-    #         # Load weights
-    #         missing_keys, unexpected_keys = self.llama.load_state_dict(transformed_state_dict, strict=False)
-    #         print(f"Loaded PEFT model - Missing keys: {len(missing_keys)}, Unexpected keys: {len(unexpected_keys)}")
-            
-    #         # If there are still many missing/unexpected keys, try direct loading
-    #         if len(missing_keys) > 50 or len(unexpected_keys) > 50:
-    #             print("Many missing/unexpected keys detected, attempting direct state dict mapping...")
-    #             self._load_peft_model_direct(model_path, llama_state_dict)
-                
-    #     except ImportError:
-    #         print("PEFT not installed. Installing: pip install peft")
-    #         raise
-    #     except Exception as e:
-    #         print(f"Error loading PEFT model: {e}")
-    #         print("Falling back to standard loading...")
-    #         self._load_standard_model(model_path, llama_state_dict)
-
-    # def _detect_lora_config(self, state_dict):
-    #         """Automatically detect LoRA configuration from state dict"""
-    #         from peft import LoraConfig
-            
-    #         # Find LoRA modules and extract config
-    #         lora_keys = [k for k in state_dict.keys() if 'lora_A' in k or 'lora_B' in k]
-            
-    #         if not lora_keys:
-    #             # Default config if no LoRA keys found
-    #             return LoraConfig(
-    #                 r=16,
-    #                 lora_alpha=32,
-    #                 target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
-    #                 lora_dropout=0.1,
-    #                 bias="none",
-    #                 task_type="CAUSAL_LM",
-    #             )
-            
-    #         # Extract target modules
-    #         target_modules = set()
-    #         r_value = None
-            
-    #         for key in lora_keys:
-    #             # Extract module name from complex paths like:
-    #             # base_model.model.model.layers.0.self_attn.q_proj.lora_A.default.weight
-    #             # or base_model.model.model.layers.0.mlp.gate_proj.lora_A.default.weight
-    #             parts = key.split('.')
-    #             for i, part in enumerate(parts):
-    #                 if 'lora_A' in part or 'lora_B' in part:
-    #                     if i > 0:
-    #                         target_modules.add(parts[i-1])
-    #                     break
-                
-    #             # Extract rank from lora_A weight shape
-    #             if 'lora_A' in key and r_value is None:
-    #                 tensor = state_dict[key]
-    #                 if tensor.dim() == 2:
-    #                     r_value = tensor.shape[0]
-            
-    #         target_modules = list(target_modules) if target_modules else ["q_proj", "v_proj"]
-    #         r_value = r_value if r_value else 16
-            
-    #         print(f"Auto-detected LoRA config: r={r_value}, target_modules={target_modules}")
-            
-    #         return LoraConfig(
-    #             r=r_value,
-    #             lora_alpha=r_value * 2,  # Common convention
-    #             target_modules=target_modules,
-    #             lora_dropout=0.1,
-    #             bias="none",
-    #             task_type="CAUSAL_LM",
-    #         )
-        
     
     def prepare_decoder_inputs(
         self,

@@ -81,7 +81,7 @@ def create_argument_parser():
                         help="Dropout probability at MLP projector")
     parser.add_argument("--decoder_hidden_size", type=int, default=2048,
                         help="Hidden size of the decoder")
-    parser.add_argument("--top_k", type=int, default=32,
+    parser.add_argument("--top_k", type=int, default=512,
                         help="select the top_k most expressed genes after the Geneformer encoder")
     parser.add_argument("--geneformer_path", type=str, required=True,
                         help="Path to pretrained Geneformer model")
@@ -127,7 +127,7 @@ def create_argument_parser():
                         help="Number of gradient accumulation steps")
     parser.add_argument("--zero_stage", type=int, default=2, choices=[0, 1, 2, 3],
                         help="DeepSpeed ZeRO optimization stage")
-    parser.add_argument("--fp16", type=bool, default=False,
+    parser.add_argument("--fp16", type=bool, default=True,
                         help="Enable FP16 mixed precision training")
     parser.add_argument("--bf16", type=bool, default=False,
                         help="Enable BF16 mixed precision training")

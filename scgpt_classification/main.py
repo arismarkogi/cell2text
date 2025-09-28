@@ -40,6 +40,18 @@ from trainer import ClassificationTrainer
 from torch.utils.data import DistributedSampler, DataLoader
 
 
+# Add this class definition after imports but before parse_arguments()
+class SeqDataset(torch.utils.data.Dataset):
+    """Dataset class for scGPT sequences"""
+    def __init__(self, data: Dict[str, torch.Tensor]):
+        self.data = data
+
+    def __len__(self):
+        return self.data["gene_ids"].shape[0]
+
+    def __getitem__(self, idx):
+        return {k: v[idx] for k, v in self.data.items()}
+
 
 
 
@@ -242,29 +254,24 @@ def _get_metric(results: dict, *candidates: str, default: float = 0.0) -> float:
 
 
 def main(local_rank=0, world_size=1, args=None):
-    # NO arg re-parsing here! Assume args passed in.
     if args is None:
         args = parse_arguments()
 
-    # Set rank/world_size from params or env (for torchrun compatibility)
+    # Set rank/world_size
     if dist.is_initialized():
         rank = dist.get_rank()
         world_size = dist.get_world_size()
     else:
         rank = local_rank
-        world_size = 1  # Single GPU fallback
+        world_size = 1
 
-    # Device setup
     device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
     torch.cuda.set_device(device) if torch.cuda.is_available() else None
-    print(f"[rank {rank}/{world_size}] using device: {device}")
-
+    
     set_seed(args.seed + rank)
 
-    # Get configuration and override with CLI args
+    # Get configuration
     config = get_task_specific_config(args.task)
-    
-    # Override config with command line arguments
     config.classification_task = args.task
     config.dataset_name = args.dataset_name
     config.epochs = args.epochs
@@ -276,165 +283,199 @@ def main(local_rank=0, world_size=1, args=None):
     config.do_train = args.do_train
     if args.load_model:
         config.load_model = args.load_model
-    
     config.validate()
 
-   # Create save_dir (unchanged)
+    # Create save_dir
     if args.save_dir:
         save_dir = Path(args.save_dir)
     else:
         save_dir = Path(f"./save/scGPT_finetune_{config.classification_task}_{config.dataset_name}")
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    # Logger: Only rank 0 writes files; others console-only
-    logger = logging.getLogger("scGPT_finetune")
-    logger.setLevel(logging.INFO)
-    logger.handlers.clear()  # Clear any existing
-    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
-    ch.setFormatter(formatter)
-    logger.addHandler(ch)
+    # Setup logger
+    logger = setup_logger(save_dir)
+    if rank > 0:
+        # Remove file handler for non-rank-0 to avoid duplicate logs
+        for handler in logger.handlers[:]:
+            if isinstance(handler, logging.FileHandler):
+                logger.removeHandler(handler)
+
+    logger.info(f"[Rank {rank}] Starting fine-tuning")
+
+    # Save configuration (only rank 0)
     if rank == 0:
-        fh = logging.FileHandler(str(save_dir / "training.log"))
-        fh.setLevel(logging.INFO)
-        fh.setFormatter(formatter)
-        logger.addHandler(fh)
-    logger.info(f"[Rank {rank}] Starting fine-tuning for task: {config.classification_task}")
+        try:
+            config.to_json(save_dir / "config.json")
+        except Exception:
+            with open(save_dir / "config.json", "w") as f:
+                json.dump(vars(config), f, default=str, indent=2)
 
+    # Synchronize before data processing
+    if world_size > 1:
+        dist.barrier()
 
-    # Save configuration
-    try:
-        config.to_json(save_dir / "config.json")
-    except Exception:
-        # Fallback: dump __dict__ if no to_json method
-        with open(save_dir / "config.json", "w") as f:
-            json.dump(vars(config), f, default=str, indent=2)
+    # DATA PROCESSING: Only rank 0 does preprocessing
+    processed_data_dir = save_dir / "processed_data"
     
-
-
-
-    def rebuild_dataloader_for_ddp(old_loader, batch_size, shuffle, rank, world_size, eval=False):
-        dataset = old_loader.dataset
+    if rank == 0:
+        logger.info("Rank 0: Starting data preprocessing...")
+        processed_data_dir.mkdir(exist_ok=True)
         
-        if world_size > 1:  # DDP is enabled
+        # Check if processed data already exists
+        processed_flag = processed_data_dir / "processing_complete.flag"
+        if processed_flag.exists():
+            logger.info("Found existing processed data, skipping preprocessing")
+        else:
+            # Your existing data processing logic here
+            split_prefixes = ["train", "val", "test"]
+            split_files = collect_batch_files(args.data_dir, split_prefixes)
+            train_files = split_files["train"]
+            val_files = split_files["val"]
+            test_files = split_files["test"]
+
+            data_loader = ScGPTDataLoader(config)
+            
+            # Load and process data
+            sample_adata, train_batches, val_batches, test_batches = data_loader.load_data_from_files(
+                train_files, val_files, test_files
+            )
+
+            if args.debug:
+                train_batches = train_batches[:2]
+                val_batches = val_batches[:1]  
+                test_batches = test_batches[:1]
+
+            # Setup vocabulary
+            vocab_path = None
+            if getattr(config, "load_model", None):
+                potential_vocab_path = Path(config.load_model) / "vocab.json"
+                if potential_vocab_path.exists():
+                    vocab_path = str(potential_vocab_path)
+
+            vocab = data_loader.setup_vocabulary(sample_adata, vocab_path)
+            sample_adata = data_loader.filter_genes_by_vocab(sample_adata)
+
+            # Prepare dataset splits
+            num_classes, id_to_label = data_loader.prepare_dataset_splits_from_batches(
+                config.classification_task
+            )
+
+            # Create data loaders
+            train_loader, val_loader, test_loader = data_loader.create_batch_data_loaders(
+                config.classification_task, config
+            )
+
+            # Save processed data efficiently
+            def save_processed_dataloader(loader, name):
+                dataset = loader.dataset
+                data_dict = dataset.data
+                
+                # Save as memory-mapped numpy arrays
+                for key, tensor in data_dict.items():
+                    if tensor.is_cuda:
+                        tensor = tensor.cpu()
+                    
+                    # Save as numpy array
+                    array = tensor.numpy()
+                    np.save(processed_data_dir / f"{name}_{key}.npy", array)
+                    
+                    # Also save metadata
+                    with open(processed_data_dir / f"{name}_{key}_meta.json", "w") as f:
+                        json.dump({
+                            "shape": array.shape,
+                            "dtype": str(array.dtype),
+                            "device": "cpu"
+                        }, f)
+
+            # Save each dataloader
+            save_processed_dataloader(train_loader, "train")
+            save_processed_dataloader(val_loader, "val")
+            save_processed_dataloader(test_loader, "test")
+
+            # Save vocabulary and metadata
+            with open(processed_data_dir / "vocab.pkl", "wb") as f:
+                pickle.dump(vocab, f)
+            
+            with open(processed_data_dir / "metadata.pkl", "wb") as f:
+                pickle.dump({
+                    "num_classes": num_classes,
+                    "id_to_label": id_to_label,
+                    "all_genes_list": getattr(data_loader, "all_genes_list", []),
+                }, f)
+
+            # Create completion flag
+            processed_flag.touch()
+            logger.info("Rank 0: Data preprocessing completed and saved")
+
+    # Synchronize - wait for rank 0 to finish preprocessing
+    if world_size > 1:
+        dist.barrier()
+
+    # ALL RANKS: Load preprocessed data
+    logger.info(f"Rank {rank}: Loading preprocessed data...")
+    
+    def load_processed_dataloader(name, batch_size, shuffle, rank, world_size):
+        # Load all arrays for this dataset
+        data_dict = {}
+        pattern = processed_data_dir / f"{name}_*.npy"
+        
+        for file_path in processed_data_dir.glob(f"{name}_*.npy"):
+            if file_path.name.endswith("_meta.json"):
+                continue
+                
+            key = file_path.stem.replace(f"{name}_", "")
+            # Use memory mapping for large arrays
+            array = np.load(file_path, mmap_mode='r')
+            tensor = torch.from_numpy(array.copy())  # Copy to avoid mmap issues during training
+            
+            data_dict[key] = tensor
+
+        # Create dataset and dataloader
+        dataset = SeqDataset(data_dict)
+        
+        if world_size > 1:
             sampler = DistributedSampler(
                 dataset, 
                 num_replicas=world_size, 
                 rank=rank, 
                 shuffle=shuffle,
-                drop_last=False  # Important: don't drop last to avoid missing data
+                drop_last=False
             )
-            
-            # Determine num_workers
-            try:
-                num_workers = min(len(os.sched_getaffinity(0)), batch_size // 2)
-            except AttributeError:
-                num_workers = min(4, batch_size // 2)
-                
             return DataLoader(
                 dataset=dataset,
                 batch_size=batch_size,
-                sampler=sampler,  # Use sampler instead of shuffle
-                drop_last=False,
-                num_workers=num_workers,
+                sampler=sampler,
+                num_workers=min(4, batch_size // 2),
                 pin_memory=True
             )
         else:
-            # For non-DDP, return original or create new with proper shuffle
             return DataLoader(
                 dataset=dataset,
                 batch_size=batch_size,
                 shuffle=shuffle,
-                drop_last=False,
-                num_workers=num_workers if 'num_workers' in locals() else 0,
+                num_workers=min(4, batch_size // 2),
                 pin_memory=True
             )
 
+    # Load dataloaders
+    train_loader = load_processed_dataloader("train", config.batch_size, True, rank, world_size)
+    val_loader = load_processed_dataloader("val", config.eval_batch_size, False, rank, world_size)
+    test_loader = load_processed_dataloader("test", config.eval_batch_size, False, rank, world_size)
 
-    print(f"[rank {rank}/{world_size}] using device: {device}")
-    set_seed(args.seed + rank)
+    # Load metadata
+    with open(processed_data_dir / "vocab.pkl", "rb") as f:
+        vocab = pickle.load(f)
+    
+    with open(processed_data_dir / "metadata.pkl", "rb") as f:
+        metadata = pickle.load(f)
+        num_classes = metadata["num_classes"]
+        id_to_label = metadata["id_to_label"]
 
-    # create logger only on rank 0 (so only rank 0 writes to file)
-    if rank == 0:
-        logger = setup_logger(save_dir)
-    else:
-        logger = setup_logger(save_dir)  # optional: or a no-op logger; but ensure console spam is minimal
-        # If you want zero file logging on workers, comment file handler or set level to WARNING
-        for h in list(logger.handlers):
-            # keep only console handler on non-zero ranks
-            if isinstance(h, logging.FileHandler):
-                logger.removeHandler(h)
+    logger.info(f"Rank {rank}: Loaded preprocessed data")
 
-
-    # Collect batch file paths from your directory structure
-    split_prefixes = ["train", "val", "test"]
-
-    try:
-        split_files = collect_batch_files(args.data_dir, split_prefixes)
-        train_files = split_files["train"]
-        val_files = split_files["val"]
-        test_files = split_files["test"]
-    except Exception as e:
-        logger.error(f"Error collecting data files: {e}")
-        raise
-
-    logger.info(f"Collected files: Train={len(train_files)}, Val={len(val_files)}, Test={len(test_files)}")
-
-    # Initialize data loader with file paths
-    data_loader = ScGPTDataLoader(config)
-    logger.info("Setting up data processing...")
-
-    # Load data in batches and process iteratively
-    sample_adata, train_batches, val_batches, test_batches = data_loader.load_data_from_files(
-        train_files, val_files, test_files
-    )
-
-    # Debug mode: limit data size
-    if args.debug:
-        train_batches = train_batches[:2]
-        val_batches = val_batches[:1]  
-        test_batches = test_batches[:1]
-        logger.info("Debug mode: Using limited data")
-
-    # Setup vocabulary using sample data
-    vocab_path = None
-    if getattr(config, "load_model", None):
-        potential_vocab_path = Path(config.load_model) / "vocab.json"
-        if potential_vocab_path.exists():
-            vocab_path = str(potential_vocab_path)
-
-    vocab = data_loader.setup_vocabulary(sample_adata, vocab_path)
-    logger.info(f"Vocabulary size: {len(vocab)}")
-
-    # Filter genes by vocabulary - this updates the gene list in data_loader
-    sample_adata = data_loader.filter_genes_by_vocab(sample_adata)
-
-    # Prepare dataset splits and labels from batches
-    num_classes, id_to_label = data_loader.prepare_dataset_splits_from_batches(config.classification_task)
-
-    logger.info(f"Number of classes: {num_classes}")
-    logger.info(f"Classes: {list(id_to_label.values())}")
-
-    # Create data loaders from processed batches
-    train_loader, val_loader, test_loader = data_loader.create_batch_data_loaders(
-        config.classification_task, config
-    )
-
-    train_loader = rebuild_dataloader_for_ddp(train_loader, config.batch_size, shuffle=True, rank=rank, world_size=world_size)
-    val_loader   = rebuild_dataloader_for_ddp(val_loader, config.eval_batch_size, shuffle=False, rank=rank, world_size=world_size, eval=True)
-    test_loader  = rebuild_dataloader_for_ddp(test_loader, config.eval_batch_size, shuffle=False, rank=rank, world_size=world_size, eval=True)
-
-    logger.info(f"Created dataloaders: Train={len(train_loader)}, Val={len(val_loader)}, Test={len(test_loader)}")
-
-    # Save label mappings
-    with open(save_dir / "label_mappings.pkl", "wb") as f:
-        pickle.dump({"id_to_label": id_to_label}, f)
-
-    # Setup model manager
+    # Continue with model setup and training...
     model_manager = ModelManager(config, vocab, num_classes, device)
 
-    # Load pretrained model if specified
     if getattr(config, "load_model", None) and Path(config.load_model).exists():
         logger.info(f"Loading pretrained model from: {config.load_model}")
         model = model_manager.setup_model(config.load_model)
@@ -443,18 +484,11 @@ def main(local_rank=0, world_size=1, args=None):
         model = model_manager.setup_model()
     
     if world_size > 1:
-        model = DDP(model, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank, 
+                   find_unused_parameters=True)
 
-
-    # Log number of trainable parameters
-    try:
-        n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        logger.info(f"Model parameters: {n_params:,}")
-    except Exception as e:
-        logger.warning(f"Could not compute model parameter count: {e}")
-
+    # Rest of your training code remains the same...
     trainer = ClassificationTrainer(model, config, vocab, device, logger)
-    # set trainer.rank/world_size inside trainer (or assign attributes)
     if dist.is_available() and dist.is_initialized():
         trainer.rank = dist.get_rank()
         trainer.world_size = dist.get_world_size()
@@ -462,44 +496,39 @@ def main(local_rank=0, world_size=1, args=None):
         trainer.rank = 0
         trainer.world_size = 1
 
-
-    # Training
+    # Training and testing...
     if getattr(config, "do_train", False):
         logger.info("Starting training...")
         training_history = trainer.train(train_loader, val_loader, config.epochs, save_dir)
+        
+        # Only rank 0 saves results
+        if rank == 0:
+            try:
+                trainer.plot_training_history(save_dir / "training_history.png")
+            except Exception as e:
+                logger.warning(f"Could not plot training history: {e}")
 
-        # Plot training history
-        try:
-            trainer.plot_training_history(save_dir / "training_history.png")
-        except Exception as e:
-            logger.warning(f"Could not plot training history: {e}")
+            with open(save_dir / "training_history.pkl", "wb") as f:
+                pickle.dump(training_history, f)
 
-        # Save training history
-        with open(save_dir / "training_history.pkl", "wb") as f:
-            pickle.dump(training_history, f)
+            try:
+                best_model = trainer.get_best_model()
+                torch.save(best_model, save_dir / "best_model.pt")
+            except Exception as e:
+                logger.warning(f"Could not save best model: {e}")
 
-        # Save best model
-        try:
-            best_model = trainer.get_best_model()
-            torch.save(best_model, save_dir / "best_model.pt")
-        except Exception as e:
-            logger.warning(f"Could not save best model: {e}")
-
-        logger.info("Training completed and model saved")
-
-   # Testing
+    # Testing - only rank 0 should do final evaluation and saving
     logger.info("Starting testing...")
     test_results = trainer.test(test_loader, id_to_label)
 
-    # Add this check to handle None results from non-rank-0 processes
-    if test_results is None:
-        # For non-rank-0 processes, just return empty dict
-        return {}
-        
+        # Testing - only rank 0 should do final evaluation and saving
+    logger.info("Starting testing...")
+    test_results = trainer.test(test_loader, id_to_label)
 
-    # Process and save results
-    if test_results:
-        # Print results
+    results_json = {}  
+
+    if rank == 0 and test_results is not None:
+        # Your existing results processing and saving code...
         acc = _get_metric(test_results, "acc", "accuracy", "acc")
         prec = _get_metric(test_results, "precision", "precision", "prec")
         rec = _get_metric(test_results, "recall", "recall", "rec")
@@ -530,18 +559,18 @@ def main(local_rank=0, world_size=1, args=None):
                 },
                 "data_info": {
                     "num_classes": int(num_classes),
-                    "train_files": len(train_files),
-                    "val_files": len(val_files),
-                    "test_files": len(test_files),
+                    "train_files": len(train_files) if 'train_files' in locals() else 0,
+                    "val_files": len(val_files) if 'val_files' in locals() else 0,
+                    "test_files": len(test_files) if 'test_files' in locals() else 0,
                     "train_samples": len(getattr(train_loader, "dataset", [])),
                     "val_samples": len(getattr(val_loader, "dataset", [])),
                     "test_samples": len(getattr(test_loader, "dataset", [])),
-                    "num_genes": len(getattr(data_loader, "all_genes_list", [])),
+                    "num_genes": len(getattr(data_loader, "all_genes_list", [])) if 'data_loader' in locals() else 0,
                     "vocab_size": len(vocab),
                 },
                 "distributed_info": {
-                    "ddp_enabled": False,
-                    "world_size": 1,
+                    "ddp_enabled": world_size > 1,
+                    "world_size": world_size,
                 },
             },
             "test_metrics": {
@@ -587,11 +616,8 @@ def main(local_rank=0, world_size=1, args=None):
             pickle.dump(detailed_results, f)
 
         logger.info("Fine-tuning completed successfully!")
-        
-        return results_json
     
-    return {}
-
+    return results_json  # ✅ Now properly defined
 
 import torch.multiprocessing as mp
 import torch

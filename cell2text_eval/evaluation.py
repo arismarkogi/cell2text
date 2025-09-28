@@ -11,7 +11,9 @@ from torch.utils.data import DataLoader
 from transformers import PreTrainedTokenizer
 from collections import Counter, defaultdict
 import json
-from .celltype_extractor import calculate_cell_type_metrics, CellTypeExtractor
+import os
+from datetime import datetime
+from .celltype_extractor import CellTypeExtractor, calculate_comprehensive_metrics
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import confusion_matrix, classification_report
@@ -38,6 +40,47 @@ try:
     nltk.data.find('corpora/wordnet')
 except LookupError:
     nltk.download('wordnet')
+
+def create_safe_cell_extractor(similarity_file_path=None, 
+                              cell_type_csv_path=None,
+                              disease_csv_path=None,
+                              tissue_csv_path=None,
+                              pathway_descriptions_path=None):
+    """Create CellTypeExtractor with safe file handling"""
+    
+    # Set default paths and check if they exist
+    default_paths = {
+        'similarity_file_path': "/home/arism/datasets/cell_type_similarities.pkl",
+        'cell_type_csv_path': "/home/arism/analysis_output/final_combined/final_combined_cell_type_top_values.csv",
+        'disease_csv_path': "/home/arism/analysis_output/final_combined/final_combined_disease_top_values.csv",
+        'tissue_csv_path': "/home/arism/analysis_output/final_combined/final_combined_tissue_top_values.csv",
+        'pathway_descriptions_path': "pathway_descriptions.json"
+    }
+    
+    # Use provided paths or defaults, but set to None if file doesn't exist
+    safe_paths = {}
+    for key, default_path in default_paths.items():
+        provided_path = locals().get(key)
+        path_to_use = provided_path if provided_path else default_path
+        
+        if path_to_use and os.path.exists(path_to_use):
+            safe_paths[key] = path_to_use
+        else:
+            safe_paths[key] = None
+            print(f"Warning: {key} file not found at {path_to_use}, using None")
+    
+    try:
+        return CellTypeExtractor(**safe_paths)
+    except Exception as e:
+        print(f"Warning: Could not create CellTypeExtractor with provided paths: {e}")
+        # Fallback to basic extractor
+        return CellTypeExtractor(
+            similarity_file_path=None,
+            cell_type_csv_path=None,
+            disease_csv_path=None,
+            tissue_csv_path=None,
+            pathway_descriptions_path=None
+        )
 
 def compute_additional_metrics(predictions, references):
     """Compute BLEU-2, ROUGE-2, METEOR, MMD, and EMD metrics"""
@@ -170,6 +213,60 @@ def compute_biomedical_bert_score(predictions, references):
         "f1": results["f1"]
     }
 
+def save_predictions_to_json(all_predictions, all_targets, all_pred_cell_types, all_target_cell_types, 
+                           examples, global_metrics, save_path):
+    """Save all predictions and targets to a comprehensive JSON file"""
+    
+    # Create comprehensive results dictionary
+    results = {
+        'metadata': {
+            'timestamp': datetime.now().isoformat(),
+            'total_samples': len(all_predictions),
+            'evaluation_type': 'cell2text_model_evaluation'
+        },
+        'global_metrics': convert_json_compat(global_metrics),
+        'examples': convert_json_compat(examples),
+        'all_predictions': {
+            'text': all_predictions,
+            'cell_types': all_pred_cell_types
+        },
+        'all_targets': {
+            'text': all_targets,
+            'cell_types': all_target_cell_types
+        },
+        'cell_type_distribution': {
+            'target': convert_json_compat(dict(Counter(all_target_cell_types))),
+            'predicted': convert_json_compat(dict(Counter(all_pred_cell_types)))
+        },
+        'detailed_comparisons': []
+    }
+    
+    # Add detailed comparisons for each prediction
+    for i, (pred_text, target_text, pred_cell, target_cell) in enumerate(
+        zip(all_predictions, all_targets, all_pred_cell_types, all_target_cell_types)):
+        
+        comparison = {
+            'sample_id': i,
+            'predicted_text': pred_text,
+            'target_text': target_text,
+            'predicted_cell_type': pred_cell,
+            'target_cell_type': target_cell,
+            'cell_type_match': pred_cell == target_cell,
+            'text_length_pred': len(pred_text.split()),
+            'text_length_target': len(target_text.split())
+        }
+        results['detailed_comparisons'].append(comparison)
+    
+    # Save to JSON file
+    try:
+        with open(save_path, 'w', encoding='utf-8') as f:
+            json.dump(results, f, indent=2, ensure_ascii=False)
+        print(f"\nDetailed predictions and targets saved to: {save_path}")
+        return True
+    except Exception as e:
+        print(f"Error saving predictions to JSON: {e}")
+        return False
+
 def reduce_all_metrics(local_metrics, world_size, rank):
     """
     Reduce all metrics from all processes at once
@@ -282,12 +379,16 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                            device: str,
                            print_examples: int = 10,
                            save_results: str = None,
+                           save_detailed_json: str = None,  # NEW: Save detailed predictions
                            use_ddp: bool = False,
                            use_bertscore: bool = True,
-                           similarity_file_path: str = "/home/arism/datasets/cell_type_similarities.pkl"):
-    """
-    Simplified evaluation function with proper DDP metric reduction
-    """
+                           use_comprehensive_metrics: bool = False,  # NEW: Enable comprehensive metrics
+                           similarity_file_path: str = "/home/arism/datasets/cell_type_similarities.pkl",
+                           cell_type_csv_path: str = "/home/arism/analysis_output/final_combined/final_combined_cell_type_top_values.csv",
+                           disease_csv_path: str = "/home/arism/analysis_output/final_combined/final_combined_disease_top_values.csv",
+                           tissue_csv_path: str = "/home/arism/analysis_output/final_combined/final_combined_tissue_top_values.csv",
+                           pathway_descriptions_path: str = "pathway_descriptions.json"):
+   
     
     # Setup DDP
     if use_ddp and dist.is_initialized():
@@ -333,7 +434,12 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     examples = []
     
     smooth = SmoothingFunction().method4
-    cell_extractor = CellTypeExtractor(similarity_file_path)
+    
+    # Create safe cell extractor
+    cell_extractor = create_safe_cell_extractor(
+        similarity_file_path, cell_type_csv_path, disease_csv_path, 
+        tissue_csv_path, pathway_descriptions_path
+    )
     
     # Progress bar only on main process
     if is_main_process:
@@ -350,16 +456,21 @@ def evaluate_cell2text_model(model: Cell2TextModel,
             text_attention_mask = batch["attention_mask"].to(device)
             
             # Generate descriptions
-            generated = model.generate_cell_description(
-                expression_tokens=expression_tokens,
-                expression_token_lengths=expression_token_lengths,
-                inputs=text_input_ids,
-                attention_mask=text_attention_mask,
-                device=device
-            )
-            
-            if isinstance(generated, str):
-                generated = [generated]
+            try:
+                generated = model.generate_cell_description(
+                    expression_tokens=expression_tokens,
+                    expression_token_lengths=expression_token_lengths,
+                    inputs=text_input_ids,
+                    attention_mask=text_attention_mask,
+                    device=device
+                )
+                
+                if isinstance(generated, str):
+                    generated = [generated]
+            except Exception as e:
+                if is_main_process:
+                    print(f"Warning: Generation failed for batch {batch_idx}: {e}")
+                continue
             
             # Process each sample in the batch
             for j, gen in enumerate(generated):
@@ -374,46 +485,60 @@ def evaluate_cell2text_model(model: Cell2TextModel,
                     continue
                 
                 # Calculate BLEU score
-                bleu = sentence_bleu(
-                    [target.split()],
-                    decoded_pred.split(),
-                    smoothing_function=smooth
-                )
-                local_metrics['bleu'].append(bleu)
+                try:
+                    bleu = sentence_bleu(
+                        [target.split()],
+                        decoded_pred.split(),
+                        smoothing_function=smooth
+                    )
+                    local_metrics['bleu'].append(bleu)
+                except Exception as e:
+                    if is_main_process:
+                        print(f"Warning: BLEU calculation failed: {e}")
+                    local_metrics['bleu'].append(0.0)
                 
                 # Store for batch processing
                 all_predictions.append(decoded_pred)
                 all_targets.append(target)
                 
                 # Extract and compare cell types
-                pred_cell_type = cell_extractor.extract_cell_type(decoded_pred)
-                target_cell_type = cell_extractor.extract_cell_type(target)
-                
-                pred_cell_type = cell_extractor.normalize_cell_type(pred_cell_type)
-                target_cell_type = cell_extractor.normalize_cell_type(target_cell_type)
-                
-                all_pred_cell_types.append(pred_cell_type)
-                all_target_cell_types.append(target_cell_type)
-                
-                # Calculate ontology similarity
-                ont_similarity = cell_extractor.get_ontology_similarity(pred_cell_type, target_cell_type)
-                local_metrics['ontology_similarities'].append(ont_similarity)
-                
-                # Count cell type matches
-                if pred_cell_type == target_cell_type:
-                    local_metrics['cell_type_matches'] += 1
-                local_metrics['cell_type_total'] += 1
+                try:
+                    pred_cell_type = cell_extractor.extract_cell_type(decoded_pred)
+                    target_cell_type = cell_extractor.extract_cell_type(target)
+                    
+                    pred_cell_type = cell_extractor.normalize_cell_type(pred_cell_type)
+                    target_cell_type = cell_extractor.normalize_cell_type(target_cell_type)
+                    
+                    all_pred_cell_types.append(pred_cell_type)
+                    all_target_cell_types.append(target_cell_type)
+                    
+                    # Calculate ontology similarity
+                    ont_similarity = cell_extractor.get_ontology_similarity(pred_cell_type, target_cell_type)
+                    local_metrics['ontology_similarities'].append(ont_similarity)
+                    
+                    # Count cell type matches
+                    if pred_cell_type == target_cell_type:
+                        local_metrics['cell_type_matches'] += 1
+                    local_metrics['cell_type_total'] += 1
+                    
+                except Exception as e:
+                    if is_main_process:
+                        print(f"Warning: Cell type extraction failed: {e}")
+                    all_pred_cell_types.append("unknown")
+                    all_target_cell_types.append("unknown")
+                    local_metrics['ontology_similarities'].append(0.0)
+                    local_metrics['cell_type_total'] += 1
                 
                 # Store examples (only on main process)
                 if is_main_process and len(examples) < print_examples:
                     examples.append({
                         'generated': decoded_pred,
                         'target': target,
-                        'bleu_score': bleu,
-                        'predicted_cell_type': pred_cell_type,
-                        'target_cell_type': target_cell_type,
-                        'cell_type_match': pred_cell_type == target_cell_type,
-                        'ontology_similarity': ont_similarity
+                        'bleu_score': local_metrics['bleu'][-1],
+                        'predicted_cell_type': all_pred_cell_types[-1],
+                        'target_cell_type': all_target_cell_types[-1],
+                        'cell_type_match': all_pred_cell_types[-1] == all_target_cell_types[-1],
+                        'ontology_similarity': local_metrics['ontology_similarities'][-1]
                     })
     
     # Compute additional metrics on collected data
@@ -421,12 +546,16 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         if is_main_process:
             print("Computing additional metrics...")
         
-        additional_metrics = compute_additional_metrics(all_predictions, all_targets)
-        local_metrics['bleu2'] = additional_metrics['bleu2']
-        local_metrics['rouge2'] = additional_metrics['rouge2'] 
-        local_metrics['meteor'] = additional_metrics['meteor']
-        local_metrics['mmd'] = additional_metrics['mmd']
-        local_metrics['emd'] = additional_metrics['emd']
+        try:
+            additional_metrics = compute_additional_metrics(all_predictions, all_targets)
+            local_metrics['bleu2'] = additional_metrics['bleu2']
+            local_metrics['rouge2'] = additional_metrics['rouge2'] 
+            local_metrics['meteor'] = additional_metrics['meteor']
+            local_metrics['mmd'] = additional_metrics['mmd']
+            local_metrics['emd'] = additional_metrics['emd']
+        except Exception as e:
+            if is_main_process:
+                print(f"Warning: Additional metrics computation failed: {e}")
         
         # Compute BERTScore if requested
         if use_bertscore:
@@ -450,6 +579,21 @@ def evaluate_cell2text_model(model: Cell2TextModel,
     
     global_metrics = reduce_all_metrics(local_metrics, world_size, rank)
     
+    # Compute comprehensive metrics if requested (only on main process)
+    comprehensive_metrics = {}
+    if is_main_process and use_comprehensive_metrics and all_predictions and all_targets:
+        try:
+            print("Computing comprehensive metrics...")
+            comprehensive_metrics = calculate_comprehensive_metrics(
+                all_predictions, all_targets,
+                similarity_file_path, cell_type_csv_path, disease_csv_path,
+                tissue_csv_path, pathway_descriptions_path
+            )
+            if global_metrics:
+                global_metrics.update(comprehensive_metrics)
+        except Exception as e:
+            print(f"Warning: Comprehensive metrics computation failed: {e}")
+    
     # Only main process prints results and saves
     if is_main_process and global_metrics:
         print(f"\n{'='*60}")
@@ -471,6 +615,13 @@ def evaluate_cell2text_model(model: Cell2TextModel,
         print(f"Cell Type Accuracy: {global_metrics['cell_type_accuracy']:.4f}")
         print(f"Ontology Similarity Score: {global_metrics['ontology_similarity']:.4f}")
         
+        # Print comprehensive metrics if available
+        if comprehensive_metrics:
+            print(f"\nCOMPREHENSIVE METRICS:")
+            for key, value in comprehensive_metrics.items():
+                if isinstance(value, (int, float)):
+                    print(f"{key}: {value:.4f}")
+        
         # Print examples
         print(f"\n{'='*60}")
         print(f"EXAMPLE PREDICTIONS")
@@ -486,7 +637,14 @@ def evaluate_cell2text_model(model: Cell2TextModel,
             print(f"Cell Type Match: {'✓' if example['cell_type_match'] else '✗'}")
             print(f"Ontology Similarity: {example['ontology_similarity']:.4f}")
         
-        # Save results if requested
+        # Save detailed JSON if requested
+        if save_detailed_json:
+            save_predictions_to_json(
+                all_predictions, all_targets, all_pred_cell_types, all_target_cell_types,
+                examples, global_metrics, save_detailed_json
+            )
+        
+        # Save standard results if requested
         if save_results:
             results = {
                 'global_metrics': convert_json_compat(global_metrics),
@@ -499,7 +657,7 @@ def evaluate_cell2text_model(model: Cell2TextModel,
             
             with open(save_results, 'w') as f:
                 json.dump(results, f, indent=2)
-            print(f"\nResults saved to: {save_results}")
+            print(f"\nStandard results saved to: {save_results}")
         
         # Return in the format expected by your run_evaluation.py script
         return convert_json_compat({
@@ -521,7 +679,9 @@ def evaluate_cell2text_model(model: Cell2TextModel,
             'validation_loss': None,
             'wrong_predictions_analysis': None,
             'confusion_matrix': None,
-            'classification_report': None
+            'classification_report': None,
+            # Add comprehensive metrics if available
+            **{k: v for k, v in comprehensive_metrics.items() if k not in global_metrics}
         })
     
     return None

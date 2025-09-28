@@ -40,8 +40,8 @@ class QFormerProjector(Blip2Base):
         self,
         input_dim: int,
         output_dim: int,
-        num_query_tokens: int = 32,
-        cross_attention_freq: int = 3,
+        num_query_tokens: int = 512,
+        cross_attention_freq: int = 2,
         use_flash_attn: bool = False,
     ):
         super().__init__()

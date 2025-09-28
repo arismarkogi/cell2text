@@ -157,12 +157,18 @@ def run_evaluation(rank, world_size, args):
         device=rank,
         print_examples=args.print_examples if rank == 0 else 0,
         save_results=args.save_results if rank == 0 else None,
+        save_detailed_json=args.save_detailed_json if rank == 0 else None,  # NEW
         use_ddp=True,
         use_bertscore=args.use_bertscore,
-        similarity_file_path=args.similarity_file_path  # Add this line
+        use_comprehensive_metrics=args.use_comprehensive_metrics,  # NEW
+        similarity_file_path=args.similarity_file_path,
+        cell_type_csv_path=args.cell_type_csv_path,  # NEW
+        disease_csv_path=args.disease_csv_path,  # NEW
+        tissue_csv_path=args.tissue_csv_path,  # NEW
+        pathway_descriptions_path=args.pathway_descriptions_path  # NEW
     )
     
-    # Handle results only on rank 0
+    # Expand the results printing to include comprehensive metrics:
     if rank == 0 and results is not None:
         print(f"\n{'='*60}")
         print(f"FINAL EVALUATION SUMMARY")
@@ -182,9 +188,15 @@ def run_evaluation(rank, world_size, args):
             
         print(f"Cell Type Accuracy: {results['cell_type_accuracy']:.4f}")
         print(f"Ontology Similarity: {results['ontology_similarity_score']:.4f}")
+        
+        # ADD: Print comprehensive metrics if available
+        if args.use_comprehensive_metrics:
+            print(f"\nCOMPREHENSIVE METRICS:")
+            for key, value in results.items():
+                if key.startswith(('disease_', 'tissue_', 'pathway_')):
+                    print(f"{key}: {value:.4f}")
+        
         print(f"{'='*60}")
-    
-    cleanup_ddp()
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate Cell2Text model on test set with DDP")
@@ -300,6 +312,25 @@ def main():
                     default="/home/arism/datasets/cell_type_similarities.pkl",
                     help="Path to precomputed cell type similarities file")
     
+
+    # Add these new arguments for enhanced functionality:
+    parser.add_argument("--save_detailed_json", type=str, default=None,
+                        help="Path to save detailed predictions and targets JSON")
+    parser.add_argument("--use_comprehensive_metrics", type=bool, default=False,
+                        help="Whether to compute comprehensive metrics (disease, tissue, pathways)")
+    parser.add_argument("--cell_type_csv_path", type=str, 
+                        default="/home/arism/analysis_output/final_combined/final_combined_cell_type_top_values.csv",
+                        help="Path to cell type CSV file")
+    parser.add_argument("--disease_csv_path", type=str, 
+                        default="/home/arism/analysis_output/final_combined/final_combined_disease_top_values.csv",
+                        help="Path to disease CSV file")
+    parser.add_argument("--tissue_csv_path", type=str, 
+                        default="/home/arism/analysis_output/final_combined/final_combined_tissue_top_values.csv",
+                        help="Path to tissue CSV file")
+    parser.add_argument("--pathway_descriptions_path", type=str, default="pathway_descriptions.json",
+                        help="Path to pathway descriptions JSON file")
+
+
     args = parser.parse_args()
     
     # Check GPU availability
