@@ -177,10 +177,7 @@ def run_evaluation(rank, world_size, args):
         print(f"BLEU: {results['bleu']:.4f}")
         print(f"BLEU-2: {results['bleu2']:.4f}")
         print(f"ROUGE-2: {results['rouge2']:.4f}")
-        print(f"METEOR: {results['meteor']:.4f}")
-        print(f"MMD (↓): {results['mmd']:.4f}")
-        print(f"EMD (↓): {results['emd']:.4f}")
-            
+
         if results['bert_score_f1'] is not None:
             print(f"BERTScore Precision: {results['bert_score_precision']:.4f}")
             print(f"BERTScore Recall: {results['bert_score_recall']:.4f}")
