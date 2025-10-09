@@ -293,7 +293,7 @@ class Cell2TextDDPTrainer:
             task_type=TaskType.CAUSAL_LM,
             inference_mode=False,
             r=self.args.lora_r_decoder,
-            lora_alpha=self.args.lora_alpha_decoder,
+            lora_alpha=2*self.args.lora_r_decoder,
             lora_dropout=self.args.lora_dropout_decoder,
             target_modules=self.args.lora_target_modules_decoder,
             bias=self.args.lora_bias_decoder,

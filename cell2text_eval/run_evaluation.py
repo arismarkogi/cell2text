@@ -30,15 +30,113 @@ def cleanup_ddp():
     """Cleanup DDP"""
     dist.destroy_process_group()
 
+def load_from_fsdp_checkpoint(model, checkpoint_path, rank=0):
+    """
+    Load model weights from FSDP checkpoint
+    
+    Args:
+        model: The model instance to load weights into
+        checkpoint_path: Path to the FSDP checkpoint directory or file
+        rank: Current process rank
+    
+    Returns:
+        Additional checkpoint state (optimizer, scheduler states, etc.)
+    """
+    if rank == 0:
+        print(f"Loading FSDP checkpoint from: {checkpoint_path}")
+    
+    # Determine checkpoint file path
+    if os.path.isdir(checkpoint_path):
+        checkpoint_file = os.path.join(checkpoint_path, "checkpoint.pt")
+    else:
+        checkpoint_file = checkpoint_path
+    
+    if not os.path.exists(checkpoint_file):
+        raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_file}")
+    
+    # Load checkpoint on CPU first to avoid OOM
+    checkpoint = torch.load(checkpoint_file, map_location='cpu')
+    
+    if rank == 0:
+        print("Checkpoint keys:", checkpoint.keys())
+    
+    # Extract model state dict
+    if 'model_state_dict' in checkpoint:
+        model_state_dict = checkpoint['model_state_dict']
+    else:
+        # Assume the checkpoint is the state dict itself
+        model_state_dict = checkpoint
+    
+    # Check if checkpoint contains LoRA weights
+    has_lora = any('lora' in key.lower() for key in model_state_dict.keys())
+    if rank == 0 and has_lora:
+        print("✓ Detected LoRA weights in FSDP checkpoint")
+    
+    # Load state dict into model
+    # Handle potential key mismatches (FSDP might have different prefixes)
+    try:
+        # Try direct loading first
+        missing_keys, unexpected_keys = model.load_state_dict(model_state_dict, strict=False)
+        
+        if rank == 0:
+            if missing_keys:
+                print(f"Warning: Missing keys in checkpoint: {missing_keys[:10]}...")  # Show first 10
+            if unexpected_keys:
+                print(f"Warning: Unexpected keys in checkpoint: {unexpected_keys[:10]}...")  # Show first 10
+            
+            if not missing_keys and not unexpected_keys:
+                print("✓ All model weights loaded successfully from FSDP checkpoint")
+            else:
+                print(f"✓ Model weights loaded with {len(missing_keys)} missing and {len(unexpected_keys)} unexpected keys")
+    
+    except Exception as e:
+        if rank == 0:
+            print(f"Error loading state dict directly: {e}")
+            print("Attempting to handle key mismatches...")
+        
+        # Try to handle common FSDP wrapper prefixes
+        new_state_dict = {}
+        for key, value in model_state_dict.items():
+            # Remove common FSDP prefixes
+            new_key = key
+            if key.startswith('_fsdp_wrapped_module.'):
+                new_key = key.replace('_fsdp_wrapped_module.', '')
+            elif key.startswith('module.'):
+                new_key = key.replace('module.', '')
+            new_state_dict[new_key] = value
+        
+        missing_keys, unexpected_keys = model.load_state_dict(new_state_dict, strict=False)
+        
+        if rank == 0:
+            if missing_keys:
+                print(f"Warning: Missing keys after prefix removal: {missing_keys[:10]}...")
+            if unexpected_keys:
+                print(f"Warning: Unexpected keys after prefix removal: {unexpected_keys[:10]}...")
+            print("✓ Model weights loaded after handling key mismatches")
+    
+    # Return additional checkpoint information
+    additional_state = {
+        'global_step': checkpoint.get('global_step', None),
+        'epoch': checkpoint.get('epoch', None),
+        'has_lora': has_lora,
+    }
+    
+    if rank == 0 and additional_state['global_step'] is not None:
+        print(f"Checkpoint was saved at global step: {additional_state['global_step']}")
+    
+    return additional_state
+
 def create_model_args(args):
     """Create model arguments dictionary from command line arguments"""
     model_args = {
         # Required paths
         "geneformer_path": args.geneformer_path,
         "llama_path": args.llama_path,
+
+        "skip_lora_init": args.load_from_fsdp,
         
         # Model loading paths
-        "load_model_checkpoint_path": args.checkpoint_path,
+        "load_model_checkpoint_path": args.checkpoint_path if not args.load_from_fsdp else None,
         "load_adapter_checkpoint_dir": args.adapter_checkpoint_dir,
         
         # Model architecture
@@ -49,11 +147,9 @@ def create_model_args(args):
         "mlp_dropout": args.mlp_dropout,
         "top_k": args.top_k,
 
-        #QFormer arguments
-        #"qformer_bert_model": args.qformer_bert_model,
+        # QFormer arguments
         "qformer_cross_attention_freq": args.qformer_cross_attention_freq,
         "qformer_use_flash_attn": args.qformer_use_flash_attn,
-        #"qformer_freeze": args.qformer_freeze,
         
         # Geneformer settings
         "emb_mode": args.emb_mode,
@@ -76,16 +172,15 @@ def create_model_args(args):
         # Training settings
         "lora_rank": args.lora_rank,
     }
-
     
     # Add Perceiver-specific settings if using perceiver projector
     model_args.update({
-            "num_latents": args.num_latents,
-            "perceiver_cross_attn_layers": args.perceiver_cross_attn_layers,
-            "perceiver_num_heads": args.perceiver_num_heads,
-            "ff_mult": args.ff_mult,
-            "perceiver_dropout": args.perceiver_dropout,
-            "use_position_encoding": args.use_position_encoding,
+        "num_latents": args.num_latents,
+        "perceiver_cross_attn_layers": args.perceiver_cross_attn_layers,
+        "perceiver_num_heads": args.perceiver_num_heads,
+        "ff_mult": args.ff_mult,
+        "perceiver_dropout": args.perceiver_dropout,
+        "use_position_encoding": args.use_position_encoding,
     })
     
     return model_args
@@ -106,16 +201,26 @@ def run_evaluation(rank, world_size, args):
     # Create model arguments
     model_args = create_model_args(args)
     
-    # Load model using the proper load_model function
+    # Load model
     if rank == 0:
-        print(f"Loading model from: {args.checkpoint_path}")
-        if args.adapter_checkpoint_dir:
-            print(f"Loading LoRA adapter from: {args.adapter_checkpoint_dir}")
+        if args.load_from_fsdp:
+            print(f"Loading model architecture and then FSDP checkpoint from: {args.checkpoint_path}")
+        else:
+            print(f"Loading model from: {args.checkpoint_path}")
+            if args.adapter_checkpoint_dir:
+                print(f"Loading LoRA adapter from: {args.adapter_checkpoint_dir}")
     
+    # Initialize model
     model = load_model(model_args)
-    model.to(rank)
     
-    # Wrap model with DDP
+    # Load FSDP checkpoint if specified
+    if args.load_from_fsdp:
+        checkpoint_info = load_from_fsdp_checkpoint(model, args.checkpoint_path, rank=rank)
+        if rank == 0 and checkpoint_info['global_step']:
+            print(f"Loaded checkpoint from training step: {checkpoint_info['global_step']}")
+    
+    # Move model to device and wrap with DDP
+    model.to(rank)
     model = DDP(model, device_ids=[rank])
     
     # Load test dataset
@@ -149,7 +254,7 @@ def run_evaluation(rank, world_size, args):
         print(f"Number of test batches: {len(test_loader)}")
         print("Starting evaluation...")
     
-    # Run evaluation with BERTScore
+    # Run evaluation
     results = evaluate_cell2text_model(
         model=model,
         val_loader=test_loader,
@@ -157,50 +262,64 @@ def run_evaluation(rank, world_size, args):
         device=rank,
         print_examples=args.print_examples if rank == 0 else 0,
         save_results=args.save_results if rank == 0 else None,
-        save_detailed_json=args.save_detailed_json if rank == 0 else None,  # NEW
+        save_detailed_json=args.save_detailed_json if rank == 0 else None,
         use_ddp=True,
         use_bertscore=args.use_bertscore,
-        use_comprehensive_metrics=args.use_comprehensive_metrics,  # NEW
+        use_comprehensive_metrics=args.use_comprehensive_metrics,
         similarity_file_path=args.similarity_file_path,
-        cell_type_csv_path=args.cell_type_csv_path,  # NEW
-        disease_csv_path=args.disease_csv_path,  # NEW
-        tissue_csv_path=args.tissue_csv_path,  # NEW
-        pathway_descriptions_path=args.pathway_descriptions_path  # NEW
+        cell_type_csv_path=args.cell_type_csv_path,
+        disease_csv_path=args.disease_csv_path,
+        tissue_csv_path=args.tissue_csv_path,
+        pathway_descriptions_path=args.pathway_descriptions_path
     )
     
-    # Expand the results printing to include comprehensive metrics:
+    # Print results
     if rank == 0 and results is not None:
         print(f"\n{'='*60}")
         print(f"FINAL EVALUATION SUMMARY")
         print(f"{'='*60}")
         print(f"Total Samples: {results['total_samples']}")
-        print(f"BLEU: {results['bleu']:.4f}")
-        print(f"BLEU-2: {results['bleu2']:.4f}")
-        print(f"ROUGE-2: {results['rouge2']:.4f}")
-
-        if results['bert_score_f1'] is not None:
-            print(f"BERTScore Precision: {results['bert_score_precision']:.4f}")
-            print(f"BERTScore Recall: {results['bert_score_recall']:.4f}")
-            print(f"BERTScore F1: {results['bert_score_f1']:.4f}")
-            
-        print(f"Cell Type Accuracy: {results['cell_type_accuracy']:.4f}")
-        print(f"Ontology Similarity: {results['ontology_similarity_score']:.4f}")
+        print(f"\nText Generation Metrics:")
+        print(f"  BLEU-1: {results['bleu']:.4f}")
+        print(f"  BLEU-2 (B-2): {results['bleu2']:.4f}")
+        print(f"  BLEU-4 (B-4): {results['bleu4']:.4f}")
+        print(f"  ROUGE-1 (R-1): {results['rouge1']:.4f}")
+        print(f"  ROUGE-2 (R-2): {results['rouge2']:.4f}")
+        print(f"  ROUGE-L (R-L): {results['rougeL']:.4f}")
         
-        # ADD: Print comprehensive metrics if available
+        
+        if results.get('biobert_f1') is not None:
+            print(f"\nBERTScore Metrics:")
+            print(f"  BioBERT (BBT-f1):")
+            print(f"    Precision: {results['biobert_precision']:.4f}")
+            print(f"    Recall: {results['biobert_recall']:.4f}")
+            print(f"    F1: {results['biobert_f1']:.4f}")
+            print(f"  RoBERTa (RBT-f1):")
+            print(f"    Precision: {results['roberta_precision']:.4f}")
+            print(f"    Recall: {results['roberta_recall']:.4f}")
+            print(f"    F1: {results['roberta_f1']:.4f}")
+        
+        print(f"\nCell Type Metrics:")
+        print(f"  Cell Type Accuracy: {results['cell_type_accuracy']:.4f}")
+        print(f"  Ontology Similarity: {results['ontology_similarity_score']:.4f}")
+        
         if args.use_comprehensive_metrics:
-            print(f"\nCOMPREHENSIVE METRICS:")
+            print(f"\nComprehensive Metrics:")
             for key, value in results.items():
-                if key.startswith(('disease_', 'tissue_', 'pathway_')):
-                    print(f"{key}: {value:.4f}")
+                if key.startswith(('disease_', 'tissue_', 'pathway_', 'cell_type_precision', 'cell_type_recall', 'cell_type_f1')):
+                    if isinstance(value, (int, float)):
+                        print(f"  {key}: {value:.4f}")
         
         print(f"{'='*60}")
+    
+    cleanup_ddp()
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate Cell2Text model on test set with DDP")
     
     # Required arguments
     parser.add_argument("--checkpoint_path", type=str, required=True,
-                        help="Path to pretrained model checkpoint")
+                        help="Path to model checkpoint (standard checkpoint or FSDP checkpoint dir)")
     parser.add_argument("--test_data_path", type=str, required=True,
                         help="Path to test dataset")
     parser.add_argument("--tokenizer_path", type=str, required=True,
@@ -210,9 +329,11 @@ def main():
     parser.add_argument("--llama_path", type=str, required=True,
                         help="Path to pretrained LLaMA model")
     
-    # Optional model loading arguments
+    # Checkpoint loading options
+    parser.add_argument("--load_from_fsdp", action="store_true",
+                        help="Load checkpoint from FSDP training (handles FSDP-specific state dict)")
     parser.add_argument("--adapter_checkpoint_dir", type=str, default=None,
-                        help="Path to LoRA adapter checkpoint directory")
+                        help="Path to LoRA adapter checkpoint directory (not used with FSDP checkpoints)")
     
     # Model architecture arguments
     parser.add_argument("--cell_encoder_hidden_size", type=int, default=1152,
@@ -265,7 +386,7 @@ def main():
     parser.add_argument("--lora_rank", type=int, default=16,
                         help="LoRA rank")
     
-    # Perceiver arguments (only used if projector == "perceiver")
+    # Perceiver arguments
     parser.add_argument("--num_latents", type=int, default=128,
                         help="Number of latent tokens for Perceiver")
     parser.add_argument("--perceiver_cross_attn_layers", type=int, default=1,
@@ -279,16 +400,11 @@ def main():
     parser.add_argument("--use_position_encoding", type=bool, default=False,
                         help="Use position encoding in Perceiver")
     
-     # QFormer arguments
-    # parser.add_argument("--qformer_bert_model", type=str, default="dmis-lab/biobert-base-cased-v1.2", 
-    #                    help="BERT model to use in QFormer")
+    # QFormer arguments
     parser.add_argument("--qformer_cross_attention_freq", type=int, default=2,
-                       help="Cross-attention frequency in QFormer")
+                        help="Cross-attention frequency in QFormer")
     parser.add_argument("--qformer_use_flash_attn", type=bool, default=True,
-                       help="Use flash attention in QFormer")
-    # parser.add_argument("--qformer_freeze", type=bool, default=True,
-    #                    help="Freeze QFormer parameters")
-
+                        help="Use flash attention in QFormer")
     
     # Evaluation arguments
     parser.add_argument("--batch_size", type=int, default=8,
@@ -306,11 +422,10 @@ def main():
     parser.add_argument("--use_bertscore", type=bool, default=True,
                         help="Whether to compute BERTScore")
     parser.add_argument("--similarity_file_path", type=str, 
-                    default="/home/arism/datasets/cell_type_similarities.pkl",
-                    help="Path to precomputed cell type similarities file")
+                        default="/home/arism/datasets/cell_type_similarities.pkl",
+                        help="Path to precomputed cell type similarities file")
     
-
-    # Add these new arguments for enhanced functionality:
+    # Comprehensive metrics arguments
     parser.add_argument("--save_detailed_json", type=str, default=None,
                         help="Path to save detailed predictions and targets JSON")
     parser.add_argument("--use_comprehensive_metrics", type=bool, default=False,
@@ -327,7 +442,6 @@ def main():
     parser.add_argument("--pathway_descriptions_path", type=str, default="pathway_descriptions.json",
                         help="Path to pathway descriptions JSON file")
 
-
     args = parser.parse_args()
     
     # Check GPU availability
@@ -338,6 +452,9 @@ def main():
         world_size = 1
     
     print(f"Using {world_size} GPUs for evaluation")
+    
+    if args.load_from_fsdp:
+        print("Loading from FSDP checkpoint format")
     
     # Spawn processes for DDP
     mp.spawn(run_evaluation, args=(world_size, args), nprocs=world_size, join=True)

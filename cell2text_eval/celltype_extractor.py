@@ -200,7 +200,7 @@ class CellTypeExtractor:
 
         return pathway1, pathway2
     
-    def find_best_matching_pathway(self, description, threshold=0.97):
+    def find_best_matching_pathway(self, description, threshold=0.9):
         """Find best matching pathway key"""
         if not self.pathway_data:
             return None

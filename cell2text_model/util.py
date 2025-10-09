@@ -20,6 +20,10 @@ def load_model(args: Dict[str, Any]) -> Cell2TextModel:
     Standard API for Cell2Text model. Used in both `train` and `generate`.
     Load base model components, and load weights from the checkpoint path 
     if provided.
+    
+    Args:
+        args: Dictionary containing model configuration. Special keys:
+            - skip_lora_init: If True, skip LoRA initialization (for FSDP checkpoints)
     """
     
     # Create configuration for the Cell2Text model
@@ -81,10 +85,8 @@ def load_model(args: Dict[str, Any]) -> Cell2TextModel:
         print(f'USE_POSITION_ENCODINGS: {args["use_position_encoding"]}')
     elif args["projector"] == "qformer":
         adapter = QFormerProjector(
-            #bert_model_name=args["qformer_bert_model"],
             cross_attention_freq=args["qformer_cross_attention_freq"],
             use_flash_attn=args["qformer_use_flash_attn"],
-            #freeze_qformer=args["qformer_freeze"],
             input_dim=args["cell_encoder_hidden_size"],
             output_dim=args["decoder_hidden_size"],
         )
@@ -103,22 +105,32 @@ def load_model(args: Dict[str, Any]) -> Cell2TextModel:
     
     # Load projector weights if provided
     if args.get("load_model_checkpoint_path"):
-        load_projector_weights(model, args["load_model_checkpoint_path"],bert_model_name=args.get("qformer_bert_model"))
-    
-    # Apply LoRA to decoder
-    if args.get("load_adapter_checkpoint_dir"):
-        print("Loading existing LoRA adapter...")
-        model.decoder = PeftModel.from_pretrained(
-            model.decoder, 
-            args["load_adapter_checkpoint_dir"]
+        load_projector_weights(
+            model, 
+            args["load_model_checkpoint_path"],
+            bert_model_name=args.get("qformer_bert_model")
         )
+    
+    # Handle LoRA initialization/loading
+    skip_lora = args.get("skip_lora_init", False)
+    
+    if skip_lora:
+        print("Skipping LoRA initialization (weights will be loaded from FSDP checkpoint)")
+        # Don't apply LoRA - the FSDP checkpoint already contains the LoRA-merged weights
+        # or the full model with LoRA layers included
     else:
-        print("Initializing new LoRA adapter...")
-        model.decoder = create_lora_adapter(model.decoder, args)
+        # Normal LoRA handling for non-FSDP checkpoints
+        if args.get("load_adapter_checkpoint_dir"):
+            print("Loading existing LoRA adapter...")
+            model.decoder = PeftModel.from_pretrained(
+                model.decoder, 
+                args["load_adapter_checkpoint_dir"]
+            )
+        else:
+            print("Initializing new LoRA adapter...")
+            model.decoder = create_lora_adapter(model.decoder, args)
     
     return model
-
-
 
 import torch
 

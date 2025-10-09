@@ -22,7 +22,7 @@ class CellPuzzlesDataset(Dataset):
             num_query_tokens: Number of output tokens from projector (32 for qformer)
             pad_cells: Whether to pad sequences to max_cells
         """
-        self.data = load_from_disk(data_path)
+        self.data = load_from_disk(data_path).select(range(20))
         self.tokenizer = tokenizer
         self.placeholder_token = placeholder_token
         self.projector = projector

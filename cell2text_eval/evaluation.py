@@ -16,6 +16,23 @@ from scipy.spatial.distance import cdist
 from scipy.stats import wasserstein_distance
 import nltk
 
+def convert_json_compat(obj):
+    """Convert numpy types to JSON-compatible types"""
+    if isinstance(obj, dict):
+        return {k: convert_json_compat(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_json_compat(v) for v in obj]
+    elif isinstance(obj, (np.float32, np.float64, np.floating)):
+        return float(obj)
+    elif isinstance(obj, (np.int32, np.int64, np.integer)):
+        return int(obj)
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    else:
+        return obj
+
+
+
 # Download required NLTK data
 for resource in ['tokenizers/punkt', 'corpora/wordnet']:
     try:
@@ -170,16 +187,52 @@ def gather_predictions_ddp(local_data, world_size, rank):
     return None
 
 
+
+
+def save_results_json(predictions, targets, pred_cells, target_cells, 
+                     metrics, examples, save_path):
+    """Save comprehensive results to JSON"""
+    results = {
+        'metadata': {
+            'timestamp': datetime.now().isoformat(),
+            'total_samples': len(predictions)
+        },
+        'metrics': convert_json_compat(metrics),
+        'examples': convert_json_compat(examples),
+        'predictions': {
+            'text': predictions,
+            'cell_types': pred_cells
+        },
+        'targets': {
+            'text': targets,
+            'cell_types': target_cells
+        },
+        'distributions': {
+            'target_cells': convert_json_compat(dict(Counter(target_cells))),
+            'pred_cells': convert_json_compat(dict(Counter(pred_cells)))
+        }
+    }
+    
+    with open(save_path, 'w') as f:
+        json.dump(results, f, indent=2)
+    print(f"\nResults saved to: {save_path}")
+
+
 def reduce_metrics_ddp(local_metrics, world_size, rank):
     """Reduce metrics from all processes"""
     if world_size <= 1:
         return {k: np.mean(v) if isinstance(v, list) else v 
                 for k, v in local_metrics.items()}
     
-    # Prepare tensors
-    list_metrics = ['bleu', 'bleu2', 'rouge2',  
-                   'bert_precision', 'bert_recall', 'bert_f1', 'ontology_sim']
-    scalar_metrics = ['mmd', 'emd', 'cell_matches', 'cell_total']
+    # Prepare tensors - ALL metrics that are lists in local_metrics
+    list_metrics = [
+        'bleu', 'bleu2', 'bleu4', 
+        'rouge1', 'rouge2', 'rougeL',
+        'biobert_precision', 'biobert_recall', 'biobert_f1',
+        'roberta_precision', 'roberta_recall', 'roberta_f1',
+        'ontology_sim'
+    ]
+    scalar_metrics = ['cell_matches', 'cell_total']
     
     sums = []
     counts = []
@@ -208,44 +261,13 @@ def reduce_metrics_ddp(local_metrics, world_size, rank):
             result[key] = sums_np[i] / counts_np[i] if counts_np[i] > 0 else 0.0
         
         idx = len(list_metrics)
-        result['mmd'] = sums_np[idx]
-        result['emd'] = sums_np[idx + 1]
-        result['cell_accuracy'] = (sums_np[idx + 2] / sums_np[idx + 3] 
-                                   if sums_np[idx + 3] > 0 else 0.0)
-        result['total_samples'] = int(sums_np[idx + 3])
+        result['cell_accuracy'] = (sums_np[idx] / sums_np[idx + 1] 
+                                   if sums_np[idx + 1] > 0 else 0.0)
+        result['total_samples'] = int(sums_np[idx + 1])
         
         return result
     
     return None
-
-
-def save_results_json(predictions, targets, pred_cells, target_cells, 
-                     metrics, examples, save_path):
-    """Save comprehensive results to JSON"""
-    results = {
-        'metadata': {
-            'timestamp': datetime.now().isoformat(),
-            'total_samples': len(predictions)
-        },
-        'metrics': metrics,
-        'examples': examples,
-        'predictions': {
-            'text': predictions,
-            'cell_types': pred_cells
-        },
-        'targets': {
-            'text': targets,
-            'cell_types': target_cells
-        },
-        'distributions': {
-            'target_cells': dict(Counter(target_cells)),
-            'pred_cells': dict(Counter(pred_cells))
-        }
-    }
-    
-    with open(save_path, 'w') as f:
-        json.dump(results, f, indent=2)
-    print(f"\nResults saved to: {save_path}")
 
 
 def evaluate_cell2text_model(model, val_loader, tokenizer, device,
@@ -280,7 +302,7 @@ def evaluate_cell2text_model(model, val_loader, tokenizer, device,
         'roberta_precision': [], 'roberta_recall': [], 'roberta_f1': [],
         'ontology_sim': [], 
         'cell_matches': 0, 'cell_total': 0
-        }
+    }
     
     local_predictions = []
     local_targets = []
@@ -406,6 +428,11 @@ def evaluate_cell2text_model(model, val_loader, tokenizer, device,
             except Exception as e:
                 if is_main:
                     print(f"BERTScore failed: {e}")
+                # Ensure these keys exist even if BERTScore fails
+                for key in ['biobert_precision', 'biobert_recall', 'biobert_f1',
+                           'roberta_precision', 'roberta_recall', 'roberta_f1']:
+                    if key not in local_metrics or not local_metrics[key]:
+                        local_metrics[key] = [0.0] * len(local_predictions)
     
     # Reduce metrics across processes
     if is_main:
@@ -441,19 +468,28 @@ def evaluate_cell2text_model(model, val_loader, tokenizer, device,
         print(f"\n{'='*60}")
         print("VALIDATION RESULTS")
         print(f"{'='*60}")
-        print(f"Total: {global_metrics['total_samples']}")
-        print(f"BLEU: {global_metrics['bleu']:.4f}")
-        print(f"BLEU-2: {global_metrics['bleu2']:.4f}")
-        print(f"ROUGE-2: {global_metrics['rouge2']:.4f}")
-
+        print(f"Total: {global_metrics.get('total_samples', 0)}")
+        print(f"BLEU: {global_metrics.get('bleu', 0.0):.4f}")
+        print(f"BLEU-2: {global_metrics.get('bleu2', 0.0):.4f}")
+        print(f"BLEU-4: {global_metrics.get('bleu4', 0.0):.4f}")
+        print(f"ROUGE-1: {global_metrics.get('rouge1', 0.0):.4f}")
+        print(f"ROUGE-2: {global_metrics.get('rouge2', 0.0):.4f}")
+        print(f"ROUGE-L: {global_metrics.get('rougeL', 0.0):.4f}")
         
         if use_bertscore:
-            print(f"BERT-P: {global_metrics['bert_precision']:.4f}")
-            print(f"BERT-R: {global_metrics['bert_recall']:.4f}")
-            print(f"BERT-F1: {global_metrics['bert_f1']:.4f}")
+            print(f"\nBioBERT BERTScore:")
+            print(f"  Precision: {global_metrics.get('biobert_precision', 0.0):.4f}")
+            print(f"  Recall: {global_metrics.get('biobert_recall', 0.0):.4f}")
+            print(f"  F1: {global_metrics.get('biobert_f1', 0.0):.4f}")
+            
+            print(f"\nRoBERTa BERTScore:")
+            print(f"  Precision: {global_metrics.get('roberta_precision', 0.0):.4f}")
+            print(f"  Recall: {global_metrics.get('roberta_recall', 0.0):.4f}")
+            print(f"  F1: {global_metrics.get('roberta_f1', 0.0):.4f}")
         
-        print(f"Cell Acc: {global_metrics['cell_accuracy']:.4f}")
-        print(f"Ont Sim: {global_metrics['ontology_sim']:.4f}")
+        print(f"\nCell Type Metrics:")
+        print(f"  Accuracy: {global_metrics.get('cell_accuracy', 0.0):.4f}")
+        print(f"  Ontology Similarity: {global_metrics.get('ontology_sim', 0.0):.4f}")
         
         print(f"\n{'='*60}")
         print("EXAMPLES")
@@ -462,7 +498,7 @@ def evaluate_cell2text_model(model, val_loader, tokenizer, device,
             print(f"\n[{i+1}]")
             print(f"Target: {ex['target']}")
             print(f"Generated: {ex['generated']}")
-            print(f"BLEU: {ex['bleu']:.4f} | Match: {ex['match']}")
+            print(f"BLEU: {ex['bleu']:.4f} | Match: {ex['match']} | Ont Sim: {ex.get('ont_sim', 0.0):.4f}")
         
         # Save results
         if gathered:
@@ -476,28 +512,33 @@ def evaluate_cell2text_model(model, val_loader, tokenizer, device,
             if save_results:
                 with open(save_results, 'w') as f:
                     json.dump({
-                        'metrics': global_metrics,
-                        'examples': examples,
+                        'metrics': convert_json_compat(global_metrics),
+                        'examples': convert_json_compat(examples),
                         'distributions': {
-                            'target': dict(Counter(gathered['target_cells'])),
-                            'predicted': dict(Counter(gathered['pred_cells']))
+                            'target': convert_json_compat(dict(Counter(gathered['target_cells']))),
+                            'predicted': convert_json_compat(dict(Counter(gathered['pred_cells'])))
                         }
                     }, f, indent=2)
                 print(f"Standard results saved to: {save_results}")
         
-        # Return formatted results
+        # Return formatted results with safe .get() access
         return {
-            'bleu': global_metrics['bleu'],
-            'bleu2': global_metrics['bleu2'],
-            'rouge2': global_metrics['rouge2'],
-            'bert_score_precision': global_metrics.get('bert_precision', 0.0),
-            'bert_score_recall': global_metrics.get('bert_recall', 0.0),
-            'bert_score_f1': global_metrics.get('bert_f1', 0.0),
-            'cell_type_accuracy': global_metrics['cell_accuracy'],
-            'ontology_similarity_score': global_metrics['ontology_sim'],
-            'total_samples': global_metrics['total_samples'],
+            'bleu': global_metrics.get('bleu', 0.0),
+            'bleu2': global_metrics.get('bleu2', 0.0),
+            'bleu4': global_metrics.get('bleu4', 0.0),
+            'rouge1': global_metrics.get('rouge1', 0.0),
+            'rouge2': global_metrics.get('rouge2', 0.0),
+            'rougeL': global_metrics.get('rougeL', 0.0),            
+            'biobert_precision': global_metrics.get('biobert_precision', 0.0),
+            'biobert_recall': global_metrics.get('biobert_recall', 0.0),
+            'biobert_f1': global_metrics.get('biobert_f1', 0.0),
+            'roberta_precision': global_metrics.get('roberta_precision', 0.0),
+            'roberta_recall': global_metrics.get('roberta_recall', 0.0),
+            'roberta_f1': global_metrics.get('roberta_f1', 0.0),
+            'cell_type_accuracy': global_metrics.get('cell_accuracy', 0.0),
+            'ontology_similarity_score': global_metrics.get('ontology_sim', 0.0),
+            'total_samples': global_metrics.get('total_samples', 0),
             **{k: v for k, v in global_metrics.items() 
-               if k.startswith(('disease_', 'tissue_', 'pathway_', 'cell_type_'))}
+               if k.startswith(('disease_', 'tissue_', 'pathway_', 'cell_type_precision', 'cell_type_recall', 'cell_type_f1'))}
         }
-    
     return None

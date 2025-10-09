@@ -4,18 +4,19 @@
     --val_data_path /home/arism/dataset_200k/val/dataset_1_with_descriptions \
     --geneformer_path /home/arism/cell2text/Geneformer \
     --decoder_path 'meta-llama/Llama-3.2-3B-Instruct' \
-    --batch_size_per_device 4 \
-    --gradient_accumulation_steps 8 \
-    --top_k 256 \
+    --batch_size_per_device 2 \
+    --gradient_accumulation_steps 16 \
+    --top_k 1024 \
     --epochs 3 \
     --world_size 2 \
     --freeze_decoder True \
     --decoder_hidden_size 3072 \
-    --projector qformer \
-    --qformer_freeze True \
+    --projector mlp \
     --mode full \
     --num_beams 1 \
     --qformer_cross_attention_freq 2 \
-    --experiment_name "qformer_queries256_3_epochs_pubmedbert_qformer_batchsize4_gradacc8_2gpus_200kdataset_lorar512_20250927"\
+    --experiment_name "lora_mlp_topk1024_3epochs_hiddensize2048_batchsize2_gradacc16_2gpus_200kdataset_lorar512_20251009"\
     --vals_per_epoch 1 \
-    --lora_r_decoder 512 \
+    --lora_r_decoder 128 \
+    --lora_alpha_decoder 256 \
+    --mlp_hidden_size 2048 \

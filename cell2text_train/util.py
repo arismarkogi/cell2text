@@ -101,9 +101,9 @@ def create_argument_parser():
                         help="Use LoRA for the text decoder (LLaMA)")
     
     # LoRA parameters for decoder
-    parser.add_argument("--lora_r_decoder", type=int, default=16,
+    parser.add_argument("--lora_r_decoder", type=int, default=512,
                         help="LoRA rank for decoder")
-    parser.add_argument("--lora_alpha_decoder", type=int, default=32,
+    parser.add_argument("--lora_alpha_decoder", type=int, default=1024,
                         help="LoRA alpha for decoder")
     parser.add_argument("--lora_dropout_decoder", type=float, default=0.1,
                         help="LoRA dropout for decoder")
