@@ -242,8 +242,8 @@ def create_lora_adapter(decoder_model, args: Dict[str, Any]) -> PeftModel:
     
     # Configure LoRA
     lora_config = LoraConfig(
-        r=args.get("lora_rank", 8),
-        lora_alpha=args.get("lora_alpha", 16),
+        r=args.get("lora_rank", 128),
+        lora_alpha=args.get("lora_alpha", 256),
         lora_dropout=args.get("lora_dropout", 0.1),
         bias="none",
         target_modules=target_modules,

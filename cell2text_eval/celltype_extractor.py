@@ -29,10 +29,10 @@ class CellTypeExtractor:
             r"located in the ([^,\.]+?)(?:,|\.|$)",
         ]
         
-        self.disease_patterns = [
-            r"of a ([^,\.]*(?:normal|healthy|diseased|tumor|cancer|carcinoma|lymphoma|leukemia)[^,\.]*)",
-            r"from a ([^,\.]*(?:normal|healthy|diseased|tumor|cancer|carcinoma|lymphoma|leukemia)[^,\.]*)",
-        ]
+        # self.disease_patterns = [
+        #     r"of a ([^,\.]*(?:normal|healthy|diseased|tumor|cancer|carcinoma|lymphoma|leukemia)[^,\.]*)",
+        #     r"from a ([^,\.]*(?:normal|healthy|diseased|tumor|cancer|carcinoma|lymphoma|leukemia)[^,\.]*)",
+        # ]
         
         self.cleanup_patterns = [
             r"^(a|an)\s+",
@@ -170,8 +170,37 @@ class CellTypeExtractor:
         return self.extract_with_candidates(description, self.cell_type_patterns, self.cell_type_list)
     
     def extract_disease(self, description):
-        """Extract disease from description"""
-        return self.extract_with_candidates(description, self.disease_patterns, self.disease_list)
+        """Extract disease from description using context-aware pattern + list matching"""
+        if not self.disease_list or not description:
+            return "unknown"
+        
+        description_lower = description.lower()
+        
+        # Pattern 1: "with [disease]" - for diseased samples
+        with_pattern = r"with ([^,\.]+?)(?:\.|\s+during|$)"
+        match = re.search(with_pattern, description_lower, re.IGNORECASE)
+        
+        if match:
+            context = match.group(1).strip()
+            # Check if any disease appears in this context
+            for disease in sorted(self.disease_list, key=len, reverse=True):
+                if disease.lower() in context:
+                    return disease
+        
+        # Pattern 2: Check for "normal" - healthy samples
+        if re.search(r'\bof a normal\b', description_lower):
+            # Look for "normal" in disease list, or return a standard value
+            for disease in self.disease_list:
+                if disease.lower() in ['normal', 'healthy']:
+                    return disease
+            return "normal"  # fallback
+        
+        # Fallback: search entire text for any disease
+        for disease in sorted(self.disease_list, key=len, reverse=True):
+            if disease.lower() in description_lower:
+                return disease
+        
+        return "unknown"
     
     def extract_tissue(self, description):
         """Extract tissue from description"""
@@ -200,7 +229,7 @@ class CellTypeExtractor:
 
         return pathway1, pathway2
     
-    def find_best_matching_pathway(self, description, threshold=0.9):
+    def find_best_matching_pathway(self, description, threshold=0.8):
         """Find best matching pathway key"""
         if not self.pathway_data:
             return None

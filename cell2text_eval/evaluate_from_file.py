@@ -14,14 +14,19 @@ def load_predictions_from_json(json_path):
         data = json.load(f)
     
     # Handle different JSON structures
-    if 'all_predictions' in data and 'all_targets' in data:
+    if 'predictions' in data and 'targets' in data:
+        # New structure: {"predictions": {"text": [...]}, "targets": {"text": [...]}}
+        predictions = data['predictions']['text'] if isinstance(data['predictions'], dict) else data['predictions']
+        targets = data['targets']['text'] if isinstance(data['targets'], dict) else data['targets']
+    elif 'all_predictions' in data and 'all_targets' in data:
+        # Old structure
         predictions = data['all_predictions']['text'] if isinstance(data['all_predictions'], dict) else data['all_predictions']
         targets = data['all_targets']['text'] if isinstance(data['all_targets'], dict) else data['all_targets']
     elif 'detailed_comparisons' in data:
         predictions = [item['predicted_text'] for item in data['detailed_comparisons']]
         targets = [item['target_text'] for item in data['detailed_comparisons']]
     else:
-        raise ValueError("JSON format not recognized. Expected 'all_predictions'/'all_targets' or 'detailed_comparisons'")
+        raise ValueError("JSON format not recognized. Expected 'predictions'/'targets', 'all_predictions'/'all_targets' or 'detailed_comparisons'")
     
     return predictions, targets
 

@@ -1,18 +1,19 @@
 python3 /home/arism/cell2text/cell2text_eval/run_evaluation.py \
-    --checkpoint_path /home/arism/deepspeed_training/qformer_queries256_p3-epochs_ubmedbert_qformer_batchsize4_gradacc8_2gpus_200kdataset_lorar128_20250925/qformer_queries256_p3-epochs_ubmedbert_qformer_batchsize4_gradacc8_2gpus_200kdataset_lorar128_20250925_epoch3/pytorch_model.bin \
-    --adapter_checkpoint_dir /home/arism/deepspeed_training/qformer_queries256_p3-epochs_ubmedbert_qformer_batchsize4_gradacc8_2gpus_200kdataset_lorar128_20250925/qformer_queries256_p3-epochs_ubmedbert_qformer_batchsize4_gradacc8_2gpus_200kdataset_lorar128_20250925_epoch3/adapter \
+    --checkpoint_path /home/arism/deepspeed_training/lora_mlp_topk1024_3epochs_hiddensize2048_batchsize2_gradacc16_2gpus_200kdataset_lorar512_20251009/lora_mlp_topk1024_3epochs_hiddensize2048_batchsize2_gradacc16_2gpus_200kdataset_lorar512_20251009_epoch1/pytorch_model.bin \
+    --adapter_checkpoint_dir /home/arism/deepspeed_training/lora_mlp_topk1024_3epochs_hiddensize2048_batchsize2_gradacc16_2gpus_200kdataset_lorar512_20251009/lora_mlp_topk1024_3epochs_hiddensize2048_batchsize2_gradacc16_2gpus_200kdataset_lorar512_20251009_epoch1/adapter \
     --test_data_path /home/arism/dataset_200k/test/dataset_1_with_descriptions \
     --tokenizer_path meta-llama/Llama-3.2-3B-Instruct \
     --geneformer_path /home/arism/cell2text/Geneformer \
     --llama_path meta-llama/Llama-3.2-3B-Instruct \
     --token_dictionary_path /home/arism/cell2text/Geneformer/geneformer/token_dictionary_gc104M.pkl \
-    --projector qformer \
-    --top_k 256 \
+    --projector mlp \
+    --top_k 1024 \
+    --mlp_hidden_size 2048 \
     --decoder_hidden_size 3072 \
-    --save_results /home/arism/results/deepspeed_training/qformer_queries256_p3-epochs_ubmedbert_qformer_batchsize4_gradacc8_2gpus_200kdataset_lorar128_20250925_v22.json \
+    --save_results /home/arism/results/lora_mlp_topk1024_3epochs_hiddensize2048_batchsize2_gradacc16_2gpus_200kdataset_lorar512_20251009_epoch1.json \
     --num_beams 1 \
     --batch_size 32 \
-    --save_detailed_json /home/arism/results/lora_qformer_detailed_predictions_epoch3.json \
+    --save_detailed_json /home/arism/results/lora_mlp_detailed_predictions_epoch1.json \
     --use_comprehensive_metrics True \
     --similarity_file_path /home/arism/datasets/cell_type_similarities.pkl \
     --cell_type_csv_path /home/arism/analysis_output/final_combined/final_combined_cell_type_top_values.csv \
@@ -20,4 +21,4 @@ python3 /home/arism/cell2text/cell2text_eval/run_evaluation.py \
     --tissue_csv_path /home/arism/analysis_output/final_combined/final_combined_tissue_top_values.csv \
     --pathway_descriptions_path /home/arism/pathway_descriptions.json \
     --print_examples 20 \
-    --lora_rank 128 
+    --lora_rank 128 \
