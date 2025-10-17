@@ -14,6 +14,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import os
+import gc
 from tqdm import tqdm
 import torch.distributed as dist
 
@@ -436,3 +437,91 @@ class ClassificationTrainer:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
         
         plt.show()
+
+    def train_on_chunks(self, data_loader, task, label_to_id, epochs: int, save_dir: str = None):
+        """Train on data chunks sequentially - only rank 0 processes data"""
+        self.setup_training()
+        
+        train_batches = data_loader.train_batches
+        
+        for epoch in range(1, epochs + 1):
+            self.current_epoch = epoch
+            epoch_start = time.time()
+            
+            # Train on each chunk
+            epoch_total_loss = 0.0
+            epoch_total_correct = 0
+            epoch_total_samples = 0
+            
+            for chunk_idx, train_batch in enumerate(train_batches):
+                if self.rank == 0:
+                    print(f"\n[Epoch {epoch}] Processing training chunk {chunk_idx + 1}/{len(train_batches)}")
+                    
+                    # ONLY RANK 0: Create loader
+                    chunk_loader = data_loader.process_and_create_loader(
+                        train_batch, 
+                        task, 
+                        label_to_id, 
+                        self.config.batch_size * self.world_size,  # Bigger batch since only 1 GPU processes
+                        shuffle=True
+                    )
+                    
+                    # Train on this chunk (rank 0 only)
+                    chunk_metrics = self.train_epoch(chunk_loader)
+                    
+                    # Accumulate metrics
+                    epoch_total_loss += chunk_metrics["train_loss"] * chunk_metrics["train_samples"]
+                    epoch_total_correct += chunk_metrics["train_acc"] * chunk_metrics["train_samples"]
+                    epoch_total_samples += chunk_metrics["train_samples"]
+                    
+                    # Clean up
+                    del chunk_loader
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                
+                # Barrier so all ranks wait
+                if torch.distributed.is_available() and torch.distributed.is_initialized():
+                    torch.distributed.barrier()
+            
+            # Sync metrics across ranks (rank 0 has the real values)
+            if torch.distributed.is_available() and torch.distributed.is_initialized():
+                loss_tensor = torch.tensor(epoch_total_loss if self.rank == 0 else 0.0, device=self.device)
+                samples_tensor = torch.tensor(epoch_total_samples if self.rank == 0 else 0, device=self.device)
+                torch.distributed.broadcast(loss_tensor, src=0)
+                torch.distributed.broadcast(samples_tensor, src=0)
+                epoch_total_loss = loss_tensor.item()
+                epoch_total_samples = samples_tensor.item()
+            
+            # Calculate epoch metrics
+            epoch_loss = epoch_total_loss / epoch_total_samples if epoch_total_samples > 0 else 0
+            epoch_acc = epoch_total_correct / epoch_total_samples if epoch_total_samples > 0 else 0
+            
+            # Update learning rate
+            self.scheduler.step()
+            
+            # Save model
+            if save_dir and self.rank == 0:
+                epoch_model_path = os.path.join(save_dir, f"model_epoch_{epoch}.pt")
+                state = self.model.module.state_dict() if hasattr(self.model, "module") else self.model.state_dict()
+                torch.save(state, epoch_model_path)
+                if self.logger:
+                    self.logger.info(f"Model saved for epoch {epoch} at {epoch_model_path}")
+            
+            # Update history
+            self.training_history["train_loss"].append(epoch_loss)
+            self.training_history["val_loss"].append(float("inf"))
+            self.training_history["val_acc"].append(0.0)
+            
+            # Log epoch results
+            elapsed = time.time() - epoch_start
+            if self.logger and self.rank == 0:
+                self.logger.info(
+                    f"Epoch {epoch}/{epochs} | Time: {elapsed:.2f}s | "
+                    f"Train Loss: {epoch_loss:.4f} | "
+                    f"Train Acc: {epoch_acc:.4f}"
+                )
+        
+        # Set best model to final model
+        self.best_model = copy.deepcopy(self.model.state_dict())
+        
+        return self.training_history

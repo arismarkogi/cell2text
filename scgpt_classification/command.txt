@@ -1,0 +1,7 @@
+python3 /home/arism/cell2text/scgpt_classification/main.py \
+  --task cell_type \
+  --data_dir /home/arism/raw_data \
+  --load_model /home/arism/scgpt_model/scGPT_human \
+  --epochs 10 \
+  --batch_size 16 \
+  --lr 1e-4

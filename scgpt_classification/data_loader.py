@@ -1,23 +1,348 @@
-"""
-Data loading and preprocessing utilities for scGPT fine-tuning
-"""
+# """Simplified data loading for scGPT fine-tuning"""
+
+# import numpy as np
+# import pandas as pd
+# import scanpy as sc
+# import torch
+# import gc
+# import sys
+# from pathlib import Path
+# from scipy.sparse import issparse
+# from torch.utils.data import Dataset, DataLoader
+
+# sys.path.insert(0, "../")
+# from scgpt.preprocess import Preprocessor
+# from scgpt.tokenizer import tokenize_and_pad_batch, random_mask_value
+# from scgpt.tokenizer.gene_tokenizer import GeneVocab
+
+
+# class SeqDataset(Dataset):
+#     def __init__(self, data):
+#         self.data = data
+    
+#     def __len__(self):
+#         return self.data["gene_ids"].shape[0]
+    
+#     def __getitem__(self, idx):
+#         return {k: v[idx] for k, v in self.data.items()}
+
+
+# class ScGPTDataLoader:
+#     def __init__(self, config, vocab=None):
+#         self.config = config
+#         self.vocab = vocab
+#         self.preprocessor = None
+#         self.special_tokens = ["<pad>", "<cls>", "<eoc>"]
+        
+#         self.pad_token = "<pad>"
+#         self.mask_value = -1 if config.input_emb_style != "category" else config.n_bins + 1
+#         self.pad_value = -2 if config.input_emb_style != "category" else config.n_bins
+    
+#     def load_data_from_files(self, train_files, val_files, test_files):
+#         """Load and align all data files"""
+#         print("Loading data files...")
+        
+#         # Collect all unique genes
+#         all_genes = set()
+#         for files in [train_files, val_files, test_files]:
+#             for f in files:
+#                 adata = sc.read(f)
+#                 all_genes.update(adata.var_names.tolist())
+#                 del adata
+        
+#         all_genes_list = sorted(list(all_genes))
+#         print(f"Found {len(all_genes_list)} unique genes")
+        
+#         def load_split(files, split_name):
+#             batches = []
+#             for i, fpath in enumerate(files):
+#                 print(f"Loading {split_name} batch {i+1}/{len(files)}")
+#                 adata = sc.read(fpath)
+                
+#                 # Handle duplicate genes by summing
+#                 if adata.var_names.has_duplicates:
+#                     print(f"Aggregating {sum(adata.var_names.duplicated())} duplicate genes")
+#                     unique_genes, inverse = np.unique(adata.var_names, return_inverse=True)
+                    
+#                     from scipy import sparse
+#                     X = adata.X if sparse.issparse(adata.X) else sparse.csr_matrix(adata.X)
+                    
+#                     grouping = sparse.coo_matrix(
+#                         (np.ones(len(inverse)), (np.arange(len(inverse)), inverse)),
+#                         shape=(len(adata.var_names), len(unique_genes))
+#                     ).tocsr()
+                    
+#                     X_dedup = X @ grouping
+#                     adata = sc.AnnData(X=X_dedup, obs=adata.obs.copy(), var=pd.DataFrame(index=unique_genes))
+                
+#                 # Add batch info
+#                 adata.obs['batch_id'] = f"{split_name}_{i}"
+#                 adata.obs['str_batch'] = split_name
+                
+#                 # Add missing genes
+#                 missing = [g for g in all_genes_list if g not in adata.var_names]
+#                 if missing:
+#                     from scipy import sparse
+#                     n_cells, n_missing = adata.shape[0], len(missing)
+                    
+#                     if sparse.issparse(adata.X):
+#                         adata.X = sparse.hstack([adata.X, sparse.csr_matrix((n_cells, n_missing))])
+#                     else:
+#                         adata.X = np.hstack([adata.X, np.zeros((n_cells, n_missing))])
+                    
+#                     adata.var = pd.concat([adata.var, pd.DataFrame(index=missing)])
+                
+#                 # Reorder genes
+#                 adata = adata[:, all_genes_list].copy()
+#                 batches.append(adata)
+            
+#             return batches
+        
+#         train_batches = load_split(train_files, "train")
+#         val_batches = load_split(val_files, "val")
+#         test_batches = load_split(test_files, "test")
+        
+#         self.train_batches = train_batches
+#         self.val_batches = val_batches
+#         self.test_batches = test_batches
+#         self.all_genes_list = all_genes_list
+        
+#         return train_batches[0].copy(), train_batches, val_batches, test_batches
+    
+#     def setup_vocabulary(self, adata, pretrained_vocab_path=None):
+#         """Setup gene vocabulary"""
+#         if pretrained_vocab_path:
+#             self.vocab = GeneVocab.from_file(pretrained_vocab_path)
+#             for token in self.special_tokens:
+#                 if token not in self.vocab:
+#                     self.vocab.append_token(token)
+#         else:
+#             from torchtext.vocab import Vocab
+#             from torchtext._torchtext import Vocab as VocabPybind
+#             genes = adata.var_names.tolist()
+#             self.vocab = Vocab(VocabPybind(genes + self.special_tokens, None))
+        
+#         self.vocab.set_default_index(self.vocab["<pad>"])
+#         return self.vocab
+    
+#     def filter_genes_by_vocab(self, adata):
+#         """Filter genes by vocabulary"""
+#         if not self.vocab:
+#             return adata
+        
+#         adata.var["id_in_vocab"] = [1 if gene in self.vocab else -1 for gene in adata.var_names]
+#         gene_ids_in_vocab = np.array(adata.var["id_in_vocab"])
+#         print(f"Matched {np.sum(gene_ids_in_vocab >= 0)}/{len(gene_ids_in_vocab)} genes")
+        
+#         return adata[:, adata.var["id_in_vocab"] >= 0]
+    
+#     def preprocess_data(self, adata, is_raw=True, chunk_size=100000):
+#         """Preprocess data with chunking"""
+#         print(f"Preprocessing {adata.n_obs} cells...")
+        
+#         self.preprocessor = Preprocessor(
+#             use_key="X",
+#             filter_gene_by_counts=False,
+#             filter_cell_by_counts=False,
+#             normalize_total=1e4,
+#             result_normed_key="X_normed",
+#             log1p=is_raw,
+#             result_log1p_key="X_log1p",
+#             subset_hvg=False,
+#             binning=self.config.n_bins,
+#             result_binned_key="X_binned",
+#         )
+        
+#         if adata.n_obs <= chunk_size:
+#             self.preprocessor(adata, batch_key=None)
+#             return adata
+        
+#         # Process in chunks
+#         import tempfile
+#         temp_dir = tempfile.mkdtemp(prefix="scgpt_")
+#         temp_files = []
+        
+#         for start in range(0, adata.n_obs, chunk_size):
+#             end = min(start + chunk_size, adata.n_obs)
+#             chunk = adata[start:end, :].copy()
+#             self.preprocessor(chunk, batch_key=None)
+            
+#             temp_file = f"{temp_dir}/chunk_{start//chunk_size}.h5ad"
+#             chunk.write(temp_file)
+#             temp_files.append(temp_file)
+            
+#             del chunk
+#             gc.collect()
+        
+#         return temp_files
+    
+#     def prepare_dataset_splits_from_batches(self, task, chunk_size=1000):
+#         """Prepare splits with labels"""
+#         print("Preparing dataset splits...")
+        
+#         def process_split(batch_list, split_name):
+#             processed = []
+#             for i, batch in enumerate(batch_list):
+#                 print(f"Processing {split_name} batch {i+1}/{len(batch_list)}")
+#                 result = self.preprocess_data(batch.copy(), is_raw=True, chunk_size=chunk_size)
+                
+#                 if isinstance(result, list):
+#                     processed.extend([sc.read(f) for f in result])
+#                 else:
+#                     processed.append(result)
+                
+#                 del batch
+#                 gc.collect()
+            
+#             return processed
+        
+#         train_processed = process_split(self.train_batches, "train")
+#         val_processed = process_split(self.val_batches, "val")
+#         test_processed = process_split(self.test_batches, "test")
+        
+#         # Collect all labels
+#         all_labels = set()
+#         for batches in [train_processed, val_processed, test_processed]:
+#             for batch in batches:
+#                 if task in batch.obs.columns:
+#                     all_labels.update(batch.obs[task].unique())
+        
+#         all_labels = sorted(list(all_labels))
+#         id_to_label = {i: label for i, label in enumerate(all_labels)}
+#         label_to_id = {label: i for i, label in enumerate(all_labels)}
+        
+#         print(f"Found {len(all_labels)} unique labels")
+        
+#         # Add label IDs
+#         for batches in [train_processed, val_processed, test_processed]:
+#             for batch in batches:
+#                 if task not in batch.obs.columns:
+#                     raise ValueError(f"Missing '{task}' column")
+                
+#                 batch.obs[f"{task}_id"] = [label_to_id[label] for label in batch.obs[task].values]
+        
+#         self.train_processed = train_processed
+#         self.val_processed = val_processed
+#         self.test_processed = test_processed
+        
+#         return len(all_labels), id_to_label
+    
+#     def tokenize_data(self, adata, subset_name=""):
+#         """Tokenize data"""
+#         input_layer = {
+#             "normed_raw": "X_normed",
+#             "log1p": "X_normed",
+#             "binned": "X_binned",
+#         }[self.config.input_style]
+        
+#         expr_data = adata.layers[input_layer].toarray() if issparse(adata.layers[input_layer]) else adata.layers[input_layer]
+#         genes = adata.var_names.tolist()
+#         gene_ids = np.array(self.vocab(genes), dtype=int)
+        
+#         tokenized = tokenize_and_pad_batch(
+#             expr_data,
+#             gene_ids,
+#             max_len=self.config.max_seq_len,
+#             vocab=self.vocab,
+#             pad_token=self.pad_token,
+#             pad_value=self.pad_value,
+#             append_cls=True,
+#             include_zero_gene=self.config.include_zero_gene,
+#         )
+        
+#         print(f"{subset_name}: {tokenized['genes'].shape[0]} samples")
+#         return tokenized, expr_data, gene_ids
+    
+#     def create_data_dict(self, tokenized, adata, task, mask_ratio=0.0):
+#         """Create data dictionary"""
+#         data_dict = {
+#             "gene_ids": tokenized["genes"],
+#             "values": tokenized["values"],
+#             "labels": torch.tensor(adata.obs[f"{task}_id"].values, dtype=torch.long),
+#         }
+        
+#         if mask_ratio > 0:
+#             masked = random_mask_value(tokenized["values"], mask_ratio, self.mask_value, self.pad_value)
+#             data_dict["masked_values"] = masked
+#             data_dict["input_values"] = tokenized["values"]
+#         else:
+#             data_dict["masked_values"] = tokenized["values"]
+        
+#         if "batch_id" in adata.obs:
+#             batch_ids = adata.obs["batch_id"].astype("category").cat.codes.values
+#             data_dict["batch_labels"] = torch.tensor(batch_ids, dtype=torch.long)
+        
+#         return data_dict
+    
+#     def create_batch_data_loaders(self, task, config):
+#         """Create data loaders from batches"""
+#         print("Creating data loaders...")
+        
+#         def process_batches(batch_list, split_name, mask_ratio=0.0):
+#             all_dicts = []
+            
+#             for i, batch in enumerate(batch_list):
+#                 print(f"Tokenizing {split_name} batch {i+1}/{len(batch_list)}")
+#                 tokenized, _, _ = self.tokenize_data(batch, f"{split_name} batch {i+1}")
+#                 data_dict = self.create_data_dict(tokenized, batch, task, mask_ratio)
+#                 all_dicts.append(data_dict)
+                
+#                 del tokenized, batch
+#                 gc.collect()
+            
+#             # Combine all batches
+#             combined = {k: torch.cat([d[k] for d in all_dicts], dim=0) for k in all_dicts[0].keys()}
+#             del all_dicts
+#             gc.collect()
+            
+#             return combined
+        
+#         train_data = process_batches(self.train_processed, "train", config.mask_ratio)
+#         val_data = process_batches(self.val_processed, "val", 0.0)
+#         test_data = process_batches(self.test_processed, "test", 0.0)
+        
+#         train_loader = self.create_dataloader(train_data, config.batch_size, shuffle=True)
+#         val_loader = self.create_dataloader(val_data, config.eval_batch_size, shuffle=False)
+#         test_loader = self.create_dataloader(test_data, config.eval_batch_size, shuffle=False)
+        
+#         return train_loader, val_loader, test_loader
+    
+#     def create_dataloader(self, data_dict, batch_size, shuffle=False):
+#         """Create DataLoader"""
+#         dataset = SeqDataset(data_dict)
+#         return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=4, pin_memory=True)
+
+
+
+"""Simplified data loading for scGPT fine-tuning with chunked processing"""
+
+"""Simplified data loading for scGPT fine-tuning with chunked processing"""
+
 import numpy as np
 import pandas as pd
 import scanpy as sc
-from pathlib import Path
-from typing import Dict, Tuple, Optional, List
 import torch
-from torch.utils.data import Dataset, DataLoader
-from scipy.sparse import issparse
-from sklearn.model_selection import train_test_split
 import gc
 import sys
+from pathlib import Path
+from scipy.sparse import issparse
+from torch.utils.data import Dataset, DataLoader
+
 sys.path.insert(0, "../")
 from scgpt.preprocess import Preprocessor
 from scgpt.tokenizer import tokenize_and_pad_batch, random_mask_value
 from scgpt.tokenizer.gene_tokenizer import GeneVocab
-from scgpt import SubsetsBatchSampler
-import anndata as ad
+
+
+class SeqDataset(Dataset):
+    def __init__(self, data):
+        self.data = data
+    
+    def __len__(self):
+        return self.data["gene_ids"].shape[0]
+    
+    def __getitem__(self, idx):
+        return {k: v[idx] for k, v in self.data.items()}
 
 
 class ScGPTDataLoader:
@@ -27,204 +352,82 @@ class ScGPTDataLoader:
         self.preprocessor = None
         self.special_tokens = ["<pad>", "<cls>", "<eoc>"]
         
-        # Set preprocessing parameters
         self.pad_token = "<pad>"
         self.mask_value = -1 if config.input_emb_style != "category" else config.n_bins + 1
         self.pad_value = -2 if config.input_emb_style != "category" else config.n_bins
     
-    def create_data_dict(self, tokenized_data, adata, task, mask_ratio=0.0):
-        data_dict = {
-            "gene_ids": tokenized_data["genes"],
-            "values": tokenized_data["values"],
-            "labels": torch.tensor(adata.obs[f"{task}_id"].values, dtype=torch.long),  # ✅ changed to "labels"
-        }
-
-        if mask_ratio > 0:
-            masked_values = random_mask_value(
-                tokenized_data["values"],
-                mask_ratio=mask_ratio,
-                mask_value=self.mask_value,
-                pad_value=self.pad_value,
-            )
-            data_dict["masked_values"] = masked_values
-            data_dict["input_values"] = tokenized_data["values"]
-        else:
-            data_dict["masked_values"] = tokenized_data["values"]
-
-        if "batch_id" in adata.obs:
-            batch_ids = adata.obs["batch_id"].astype("category").cat.codes.values
-            data_dict["batch_labels"] = torch.tensor(batch_ids, dtype=torch.long)
-
-        return data_dict
-    
-    def load_data_from_files(self, train_files: List[Path], val_files: List[Path], test_files: List[Path]) -> Tuple:
-        """Load datasets from file lists without concatenation"""
-        print("Processing datasets in batches...")
+    def load_data_from_files(self, train_files, val_files, test_files):
+        """Load and align all data files"""
+        print("Loading data files...")
         
-        # First pass: collect gene names and basic stats
+        # Collect all unique genes
         all_genes = set()
-        total_cells = {"train": 0, "val": 0, "test": 0}
+        for files in [train_files, val_files, test_files]:
+            for f in files:
+                adata = sc.read(f)
+                all_genes.update(adata.var_names.tolist())
+                del adata
         
-        file_splits = {
-            "train": train_files,
-            "val": val_files, 
-            "test": test_files
-        }
-        
-        # Collect gene universe and cell counts
-        for split_name, files in file_splits.items():
-            for file_path in files:
-                print(f"Scanning {file_path} for genes...")
-                adata_temp = sc.read(file_path)
-                all_genes.update(adata_temp.var_names.tolist())
-                total_cells[split_name] += adata_temp.shape[0]
-                del adata_temp  # Free memory immediately
-        
-        print(f"Found {len(all_genes)} unique genes across all files")
-        print(f"Cell counts: Train={total_cells['train']}, Val={total_cells['val']}, Test={total_cells['test']}")
-        
-        # Create a reference AnnData with all genes for consistent structure
         all_genes_list = sorted(list(all_genes))
+        print(f"Found {len(all_genes_list)} unique genes")
         
-        # Load and process each split separately
-        def load_split_data(files, split_name):
-            split_data = []
-            
-            for i, file_path in enumerate(files):
-                print(f"Loading {split_name} batch {i+1}/{len(files)}: {file_path}")
-                adata_batch = sc.read(file_path)
-
-                #limit to 100 samples for debugging
-                # if adata_batch.n_obs > 100:
-                #     adata_batch = adata_batch[:100, :].copy()
+        def load_split(files, split_name):
+            batches = []
+            for i, fpath in enumerate(files):
+                print(f"Loading {split_name} batch {i+1}/{len(files)}")
+                adata = sc.read(fpath)
                 
-
-
-                # --- 🔑 Handle duplicate genes by summing counts ---
-                if adata_batch.var_names.has_duplicates:
-                    print(f"Found {sum(adata_batch.var_names.duplicated())} duplicate genes, aggregating...")
-
-                    var_names = adata_batch.var_names
-                    unique_genes, inverse_indices = np.unique(var_names, return_inverse=True)
+                # Handle duplicate genes by summing
+                if adata.var_names.has_duplicates:
+                    print(f"Aggregating {sum(adata.var_names.duplicated())} duplicate genes")
+                    unique_genes, inverse = np.unique(adata.var_names, return_inverse=True)
                     
-                    # Create a sparse matrix where each row is a cell, each column is a unique gene
-                    # We'll sum columns that map to the same gene
                     from scipy import sparse
+                    X = adata.X if sparse.issparse(adata.X) else sparse.csr_matrix(adata.X)
                     
-                    X = adata_batch.X  # should be sparse (csr or csc)
-                    if not sparse.issparse(X):
-                        X = sparse.csr_matrix(X)
-                    
-                    # Build a "grouping" matrix: shape (n_original_genes, n_unique_genes)
-                    # Each column has 1s where original genes map to that unique gene
-                    grouping_matrix = sparse.coo_matrix(
-                        (np.ones(len(inverse_indices)), (np.arange(len(inverse_indices)), inverse_indices)),
-                        shape=(len(var_names), len(unique_genes))
+                    grouping = sparse.coo_matrix(
+                        (np.ones(len(inverse)), (np.arange(len(inverse)), inverse)),
+                        shape=(len(adata.var_names), len(unique_genes))
                     ).tocsr()
                     
-                    # Multiply: X @ grouping_matrix → sums duplicate gene columns
-                    X_dedup = X @ grouping_matrix  # still sparse!
-                    
-                    # Create new var DataFrame with unique genes
-                    new_var = pd.DataFrame(index=unique_genes)
-                    # Optional: preserve any var metadata by aggregating (e.g., mean, first, etc.)
-                    # For now, we just keep index since metadata may not be consistent
-                    
-                    # Recreate AnnData with deduplicated data
-                    adata_batch = sc.AnnData(
-                        X=X_dedup,
-                        obs=adata_batch.obs.copy(),
-                        var=new_var,
-                        uns=adata_batch.uns.copy() if hasattr(adata_batch, 'uns') else {},
-                        obsm=adata_batch.obsm.copy() if hasattr(adata_batch, 'obsm') else {},
-                    )
+                    X_dedup = X @ grouping
+                    adata = sc.AnnData(X=X_dedup, obs=adata.obs.copy(), var=pd.DataFrame(index=unique_genes))
                 
-                # Add batch and split identifiers
-                adata_batch.obs['batch_id'] = f"{split_name}_{i}"
-                adata_batch.obs['str_batch'] = split_name
-                adata_batch.obs['file_path'] = str(file_path)
-
-                # Ensure consistent gene ordering with the global gene list
-                missing_genes = [g for g in all_genes_list if g not in adata_batch.var_names]
-                if missing_genes:
-                    print(f"Adding {len(missing_genes)} missing genes to batch")
-                    import scipy.sparse as sp
-                    n_cells = adata_batch.shape[0]
-                    n_missing = len(missing_genes)
-
-                    if sp.issparse(adata_batch.X):
-                        missing_data = sp.csr_matrix((n_cells, n_missing))
-                        adata_batch.X = sp.hstack([adata_batch.X, missing_data])
+                # Add batch info
+                adata.obs['batch_id'] = f"{split_name}_{i}"
+                adata.obs['str_batch'] = split_name
+                
+                # Add missing genes
+                missing = [g for g in all_genes_list if g not in adata.var_names]
+                if missing:
+                    from scipy import sparse
+                    n_cells, n_missing = adata.shape[0], len(missing)
+                    
+                    if sparse.issparse(adata.X):
+                        adata.X = sparse.hstack([adata.X, sparse.csr_matrix((n_cells, n_missing))])
                     else:
-                        missing_data = np.zeros((n_cells, n_missing))
-                        adata_batch.X = np.hstack([adata_batch.X, missing_data])
-
-                    new_var = pd.DataFrame(index=missing_genes)
-                    adata_batch.var = pd.concat([adata_batch.var, new_var])
-
-                # Final reordering of genes
-                adata_batch = adata_batch[:, all_genes_list].copy()
-                split_data.append(adata_batch)
+                        adata.X = np.hstack([adata.X, np.zeros((n_cells, n_missing))])
+                    
+                    adata.var = pd.concat([adata.var, pd.DataFrame(index=missing)])
+                
+                # Reorder genes
+                adata = adata[:, all_genes_list].copy()
+                batches.append(adata)
             
-            return split_data
-
-
+            return batches
         
-        # Load each split
-        train_batches = load_split_data(train_files, "train")
-        val_batches = load_split_data(val_files, "val")
-        test_batches = load_split_data(test_files, "test")
+        train_batches = load_split(train_files, "train")
+        val_batches = load_split(val_files, "val")
+        test_batches = load_split(test_files, "test")
         
-        # For vocabulary setup, use first batch from each split
-        sample_adata = train_batches[0].copy()
-        sample_adata.obs["str_batch"] = "train"
-        
-        # Store batch data in the data loader for later use
         self.train_batches = train_batches
         self.val_batches = val_batches
         self.test_batches = test_batches
         self.all_genes_list = all_genes_list
         
-        return sample_adata, train_batches, val_batches, test_batches
-        
-    def load_data(self, train_path: str, val_path: str, test_path: str) -> Tuple:
-        """Load train, validation, and test datasets - now supports directory structure"""
-        print("Loading datasets...")
-        
-        # Check if paths are directories (your case) or files (original case)
-        train_path = Path(train_path)
-        val_path = Path(val_path)
-        test_path = Path(test_path)
-        
-        if train_path.is_dir() or not train_path.exists():
-            # Assume directory structure like yours
-            # Extract parent directory
-            if train_path.parent.name == "raw_data":
-                data_dir = train_path.parent
-            else:
-                data_dir = Path("raw_data")  # Default
-                
-            split_data = self.load_batch_data_from_directory(str(data_dir), ["train", "val", "test"])
-            adata_train = split_data["train"]
-            adata_val = split_data["val"]
-            adata_test = split_data["test"]
-        else:
-            # Original file-based loading
-            adata_train = sc.read(train_path)
-            adata_val = sc.read(val_path) 
-            adata_test = sc.read(test_path)
-        
-        # Add batch information
-        adata_train.obs["str_batch"] = "train"
-        adata_val.obs["str_batch"] = "val"
-        adata_test.obs["str_batch"] = "test"
-        
-        # Concatenate all data for consistent preprocessing
-        adata_all = adata_train.concatenate([adata_val, adata_test], batch_key="str_batch")
-        
-        return adata_all, adata_train, adata_val, adata_test
+        return train_batches[0].copy(), train_batches, val_batches, test_batches
     
-    def setup_vocabulary(self, adata, pretrained_vocab_path: Optional[str] = None):
+    def setup_vocabulary(self, adata, pretrained_vocab_path=None):
         """Setup gene vocabulary"""
         if pretrained_vocab_path:
             self.vocab = GeneVocab.from_file(pretrained_vocab_path)
@@ -241,222 +444,93 @@ class ScGPTDataLoader:
         return self.vocab
     
     def filter_genes_by_vocab(self, adata):
-        """Filter genes based on vocabulary"""
-        if self.vocab is None:
+        """Filter genes by vocabulary"""
+        if not self.vocab:
             return adata
-            
-        adata.var["id_in_vocab"] = [
-            1 if gene in self.vocab else -1 for gene in adata.var_names
-        ]
+        
+        adata.var["id_in_vocab"] = [1 if gene in self.vocab else -1 for gene in adata.var_names]
         gene_ids_in_vocab = np.array(adata.var["id_in_vocab"])
-        print(f"Matched {np.sum(gene_ids_in_vocab >= 0)}/{len(gene_ids_in_vocab)} genes in vocabulary")
+        print(f"Matched {np.sum(gene_ids_in_vocab >= 0)}/{len(gene_ids_in_vocab)} genes")
         
         return adata[:, adata.var["id_in_vocab"] >= 0]
     
-    def preprocess_data(self, adata, is_raw_data: bool = True, chunk_size: int = 10000):
-        """Preprocess the data with chunking to manage memory"""
-        print(f"Preprocessing data with chunk size: {chunk_size}")
+    def preprocess_data(self, adata, is_raw=True):
+        """Preprocess single adata object"""
+        print(f"Preprocessing {adata.n_obs} cells...")
         
-        self.preprocessor = Preprocessor(
-            use_key="X",
-            filter_gene_by_counts=False,
-            filter_cell_by_counts=False,
-            normalize_total=1e4,
-            result_normed_key="X_normed",
-            log1p=is_raw_data,
-            result_log1p_key="X_log1p",
-            subset_hvg=False,
-            binning=self.config.n_bins,
-            result_binned_key="X_binned",
-        )
+        if self.preprocessor is None:
+            self.preprocessor = Preprocessor(
+                use_key="X",
+                filter_gene_by_counts=False,
+                filter_cell_by_counts=False,
+                normalize_total=1e4,
+                result_normed_key="X_normed",
+                log1p=is_raw,
+                result_log1p_key="X_log1p",
+                subset_hvg=False,
+                binning=self.config.n_bins,
+                result_binned_key="X_binned",
+            )
         
-        n_cells = adata.n_obs
-        
-        # If data is small enough, process all at once
-        if n_cells <= chunk_size:
-            print(f"Processing all {n_cells} cells at once")
-            self.preprocessor(adata, batch_key=None)
-            return adata
-        
-        # Strategy 1: Process in place with temporary files (most memory efficient)
-        # You can switch strategies by changing this line:
-        return self._preprocess_with_temp_files(adata, chunk_size)
-        
+        self.preprocessor(adata, batch_key=None)
+        return adata
     
-    def _preprocess_with_temp_files(self, adata, chunk_size):
-        import tempfile
-        import os
-
-        n_cells = adata.n_obs
-        print(f"Processing {n_cells} cells in chunks of {chunk_size} using temporary files")
-
-        temp_dir = tempfile.mkdtemp(prefix="scgpt_preprocess_")
-        temp_files = []
-
-        try:
-            for start_idx in range(0, n_cells, chunk_size):
-                end_idx = min(start_idx + chunk_size, n_cells)
-                chunk_adata = adata[start_idx:end_idx, :].copy()
-
-                print(f"Processing chunk {start_idx//chunk_size + 1}/{(n_cells + chunk_size - 1)//chunk_size} "
-                    f"({end_idx - start_idx} cells)")
-
-                self.preprocessor(chunk_adata, batch_key=None)
-
-                temp_file = os.path.join(temp_dir, f"chunk_{start_idx//chunk_size}.h5ad")
-                chunk_adata.write(temp_file)
-                temp_files.append(temp_file)
-
-                del chunk_adata
-                gc.collect()
-
-            # RETURN TEMP FILE PATHS, NOT LOADED OBJECTS
-            return temp_files  # ⬅️ Critical change!
-
-        except Exception as e:
-            print(f"Error during preprocessing: {e}")
-            raise
-        finally:
-            # DO NOT CLEAN UP HERE — clean up after tokenization!
-            pass  # We'll clean up later
-            
-    
-    
-    def prepare_labels(self, adata, task: str):
-        """Prepare labels for classification task"""
-        if task == "cell_type":
-            label_key = "cell_type"
-        elif task == "disease":
-            label_key = "disease"
-        elif task == "tissue":
-            label_key = "tissue"
-        else:
-            raise ValueError(f"Unknown task: {task}")
-        
-        if label_key not in adata.obs.columns:
-            raise ValueError(f"Label '{label_key}' not found in adata.obs")
-        
-        # Convert to categorical and get integer labels
-        adata.obs[f"{label_key}_cat"] = adata.obs[label_key].astype("category")
-        adata.obs[f"{label_key}_id"] = adata.obs[f"{label_key}_cat"].cat.codes.values
-        
-        # Create label mapping
-        label_to_id = dict(enumerate(adata.obs[f"{label_key}_cat"].cat.categories))
-        id_to_label = {v: k for k, v in label_to_id.items()}
-        
-        return adata, len(label_to_id), id_to_label
-    
-    def prepare_dataset_splits_from_batches(self, task: str, chunk_size: int = 10000):
-        """Prepare train/val/test splits from batch lists with chunked preprocessing"""
-        print("Preparing dataset splits from batches with chunked preprocessing...")
-        
-        # Process each split separately to avoid memory issues
-        def process_split_batches(batch_list, split_name):
-            print(f"Processing {split_name} batches...")
-            processed_batches = []
-            
-            for i, adata_batch in enumerate(batch_list):
-                print(f"Processing {split_name} batch {i+1}/{len(batch_list)}")
-                
-                adata_processed = self.preprocess_data(
-                    adata_batch.copy(), is_raw_data=True, chunk_size=chunk_size
-                )
-
-                # 🔑 If preprocess_data returns a list of file paths, reload them
-                if isinstance(adata_processed, list):
-                    import scanpy as sc
-                    loaded_chunks = [sc.read(f) for f in adata_processed]
-                    processed_batches.extend(loaded_chunks)
-                else:
-                    processed_batches.append(adata_processed)
-                
-                del adata_batch
-                gc.collect()
-            
-            return processed_batches
-
-        
-        # Process all splits
-        train_processed = process_split_batches(self.train_batches, "train")
-        val_processed = process_split_batches(self.val_batches, "val") 
-        test_processed = process_split_batches(self.test_batches, "test")
-        
-        # Collect all unique labels across all batches
+    def get_label_mapping(self, task):
+        """Get label mappings from all batches"""
         all_labels = set()
-        for batch_list in [train_processed, val_processed, test_processed]:
-            for adata_batch in batch_list:
-                if task == "cell_type":
-                    label_key = "cell_type"
-                elif task == "disease":
-                    label_key = "disease"
-                elif task == "tissue":
-                    label_key = "tissue"
-                else:
-                    raise ValueError(f"Unknown task: {task}")
-                
-                if label_key in adata_batch.obs.columns:
-                    all_labels.update(adata_batch.obs[label_key].unique())
+        for batches in [self.train_batches, self.val_batches, self.test_batches]:
+            for batch in batches:
+                if task in batch.obs.columns:
+                    all_labels.update(batch.obs[task].unique())
         
         all_labels = sorted(list(all_labels))
         id_to_label = {i: label for i, label in enumerate(all_labels)}
         label_to_id = {label: i for i, label in enumerate(all_labels)}
         
-        print(f"Found {len(all_labels)} unique labels: {all_labels}")
-        
-        def add_label_ids(batch_list, split_name):
-            for adata_batch in batch_list:
-                if task in adata_batch.obs.columns:  # Check if task column exists (e.g., "celltype")
-                    # Convert labels to IDs
-                    labels = adata_batch.obs[task].values
-                    label_ids = []
-                    
-                    for label in labels:
-                        if label in label_to_id:
-                            label_ids.append(label_to_id[label])
-                        else:
-                            print(f"❌ WARNING: Label '{label}' not found in label mapping!")
-                            # Assign to first class as fallback
-                            label_ids.append(0)
-                    
-                    adata_batch.obs[f"{task}_id"] = label_ids
-                else:
-                    print(f"❌ ERROR: No '{task}' column found in batch!")
-                    print(f"Available columns: {adata_batch.obs.columns.tolist()}")
-                    # Don't assign -1, this will cause the error!
-                    raise ValueError(f"Missing '{task}' column in batch")
-        
-        add_label_ids(train_processed, "train")
-        add_label_ids(val_processed, "val")
-        add_label_ids(test_processed, "test")
-        
-        # Store processed batches
-        self.train_processed = train_processed
-        self.val_processed = val_processed  
-        self.test_processed = test_processed
-        
-        return len(all_labels), id_to_label
+        print(f"Found {len(all_labels)} unique labels")
+        return len(all_labels), id_to_label, label_to_id
     
-    def tokenize_data(self, adata, subset_name: str = ""):
-        """Tokenize and prepare data for model input - no chunking here"""
-        input_layer_key = {
+    def process_and_create_loader(self, batch, task, label_to_id, batch_size, shuffle=False):
+        """Process a single batch and create dataloader"""
+        # Preprocess
+        batch_copy = batch.copy()
+        batch_processed = self.preprocess_data(batch_copy, is_raw=True)
+        
+        # Add label IDs
+        if task not in batch_processed.obs.columns:
+            raise ValueError(f"Missing '{task}' column")
+        batch_processed.obs[f"{task}_id"] = [label_to_id[label] for label in batch_processed.obs[task].values]
+        
+        # Tokenize
+        tokenized, _, _ = self.tokenize_data(batch_processed, "")
+        
+        # Create data dict
+        mask_ratio = self.config.mask_ratio if shuffle else 0.0  # Only mask training data
+        data_dict = self.create_data_dict(tokenized, batch_processed, task, mask_ratio)
+        
+        # Create loader
+        dataset = SeqDataset(data_dict)
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=4, pin_memory=True)
+        
+        del batch_copy, batch_processed, tokenized, data_dict, dataset
+        gc.collect()
+        
+        return loader
+    
+    def tokenize_data(self, adata, subset_name=""):
+        """Tokenize data"""
+        input_layer = {
             "normed_raw": "X_normed",
-            "log1p": "X_normed", 
+            "log1p": "X_normed",
             "binned": "X_binned",
         }[self.config.input_style]
         
-        # Get expression data
-        if issparse(adata.layers[input_layer_key]):
-            expression_data = adata.layers[input_layer_key].toarray()
-        else:
-            expression_data = adata.layers[input_layer_key]
-        
-        # Get gene IDs
+        expr_data = adata.layers[input_layer].toarray() if issparse(adata.layers[input_layer]) else adata.layers[input_layer]
         genes = adata.var_names.tolist()
         gene_ids = np.array(self.vocab(genes), dtype=int)
         
-        # Tokenize all data at once (preprocessing already handled chunking)
         tokenized = tokenize_and_pad_batch(
-            expression_data,
+            expr_data,
             gene_ids,
             max_len=self.config.max_seq_len,
             vocab=self.vocab,
@@ -466,111 +540,26 @@ class ScGPTDataLoader:
             include_zero_gene=self.config.include_zero_gene,
         )
         
-        print(f"{subset_name} set: {tokenized['genes'].shape[0]} samples, "
-              f"feature length: {tokenized['genes'].shape[1]}")
-        
-        return tokenized, expression_data, gene_ids
+        print(f"{subset_name}: {tokenized['genes'].shape[0]} samples")
+        return tokenized, expr_data, gene_ids
     
-    def create_batch_data_loaders(self, task: str, config):
-        """Create data loaders from processed batches - simplified without tokenization chunking"""
-        print("Creating data loaders from processed batches...")
+    def create_data_dict(self, tokenized, adata, task, mask_ratio=0.0):
+        """Create data dictionary"""
+        data_dict = {
+            "gene_ids": tokenized["genes"],
+            "values": tokenized["values"],
+            "labels": torch.tensor(adata.obs[f"{task}_id"].values, dtype=torch.long),
+        }
         
-        def process_batches_to_dataloader(batch_list, split_name, mask_ratio=0.0):
-            all_data_dicts = []
-            
-            for i, adata_batch in enumerate(batch_list):
-                print(f"Tokenizing {split_name} batch {i+1}/{len(batch_list)}")
-                
-                # Tokenize the entire batch (preprocessing already handled memory management)
-                tokenized, _, _ = self.tokenize_data(adata_batch, subset_name=f"{split_name} batch {i+1}")
-                
-                print(f"Tokenized batch {i+1}: {tokenized['genes'].shape[0]} samples")
-
-                # Create data dict for this batch
-                data_dict = self.create_data_dict(
-                    tokenized, adata_batch, task, mask_ratio=mask_ratio
-                )
-                all_data_dicts.append(data_dict)
-                
-                # Clear memory
-                del tokenized, adata_batch
-                gc.collect()
-
-                print(f"✅ Finished processing {split_name} batch {i+1}")
-    
-            # Combine all batches into final data dict
-            if all_data_dicts:
-                combined_dict = {}
-                for key in all_data_dicts[0].keys():
-                    combined_dict[key] = torch.cat([d[key] for d in all_data_dicts], dim=0)
-                
-                # Clear batch data
-                del all_data_dicts
-                gc.collect()
-                
-                return combined_dict
-            else:
-                return {}  # Return empty dict if no data
+        if mask_ratio > 0:
+            masked = random_mask_value(tokenized["values"], mask_ratio, self.mask_value, self.pad_value)
+            data_dict["masked_values"] = masked
+            data_dict["input_values"] = tokenized["values"]
+        else:
+            data_dict["masked_values"] = tokenized["values"]
         
-        # Process each split
-        train_data_dict = process_batches_to_dataloader(
-            self.train_processed, "train", mask_ratio=config.mask_ratio
-        )
-        val_data_dict = process_batches_to_dataloader(
-            self.val_processed, "val", mask_ratio=0.0
-        )
-        test_data_dict = process_batches_to_dataloader(
-            self.test_processed, "test", mask_ratio=0.0
-        )
+        if "batch_id" in adata.obs:
+            batch_ids = adata.obs["batch_id"].astype("category").cat.codes.values
+            data_dict["batch_labels"] = torch.tensor(batch_ids, dtype=torch.long)
         
-        # Create data loaders
-        train_loader = create_dataloader(
-            train_data_dict, config.batch_size, shuffle=True
-        )
-        val_loader = create_dataloader(
-            val_data_dict, config.eval_batch_size, shuffle=False
-        )
-        test_loader = create_dataloader(
-            test_data_dict, config.eval_batch_size, shuffle=False
-        )
-        
-        return train_loader, val_loader, test_loader
-
-
-class SeqDataset(Dataset):
-    """Dataset class for scGPT sequences"""
-    def __init__(self, data: Dict[str, torch.Tensor]):
-        self.data = data
-
-    def __len__(self):
-        return self.data["gene_ids"].shape[0]
-
-    def __getitem__(self, idx):
-        return {k: v[idx] for k, v in self.data.items()}
-
-
-def create_dataloader(data_dict: Dict[str, torch.Tensor], 
-                     batch_size: int,
-                     shuffle: bool = False,
-                     num_workers: int = 0) -> DataLoader:
-    """Create DataLoader from data dictionary"""
-    if num_workers == 0:
-        import os
-        try:
-            num_workers = min(len(os.sched_getaffinity(0)), batch_size // 2)
-        except AttributeError:
-            # Windows doesn't have sched_getaffinity
-            num_workers = min(4, batch_size // 2)
-    
-    dataset = SeqDataset(data_dict)
-    
-    dataloader = DataLoader(
-        dataset=dataset,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        drop_last=False,
-        num_workers=num_workers,
-        pin_memory=True,
-    )
-    
-    return dataloader
+        return data_dict
