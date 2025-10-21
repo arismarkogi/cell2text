@@ -1,5 +1,5 @@
 data:
-  base_data_path: "/home/arism/datasets/zip_dataset"
+  base_data_path: "/home/arism/dataset_200k"
   label_key: "cell_type"
   cell_type_csv: "/home/arism/analysis_output/final_combined/final_combined_cell_type_top_values.csv"
 
