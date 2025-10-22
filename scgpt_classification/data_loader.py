@@ -137,25 +137,58 @@ class ScGPTDataLoader:
         return adata
     
     def get_label_mapping(self, task):
-        """Get label mappings from all files (low memory)."""
-        all_labels = set()
-        all_files = self.train_files + self.val_files + self.test_files
-        for f in all_files:
-            try:
-                adata_obs = sc.read_h5ad(f, backed='r').obs
-                if task in adata_obs.columns:
-                    all_labels.update(adata_obs[task].unique())
-            except Exception as e:
-                print(f"Warning: Could not read {f} for labels. {e}")
+        """
+        Get label mappings from pre-defined CSV files.
+        This ensures a consistent label mapping across all chunks and runs.
+        """
+        # Base path provided by the user
+        base_path = "/home/arism/analysis_output/final_combined/"
         
-        all_labels = sorted([l for l in all_labels if pd.notna(l)])
-        id_to_label = {i: label for i, label in enumerate(all_labels)}
-        label_to_id = {label: i for i, label in enumerate(all_labels)}
+        # Map task name to the specific CSV file
+        task_to_file = {
+            "cell_type": "final_combined_cell_type_top_values.csv",
+            "disease": "final_combined_disease_top_values.csv",
+            "tissue": "final_combined_tissue_top_values.csv"
+        }
         
-        print(f"Found {len(all_labels)} unique labels for task '{task}'")
-        print(f"Label to ID mapping: {label_to_id}")  # DEBUG
+        if task not in task_to_file:
+            print(f"Warning: No pre-defined label CSV for task '{task}'. "
+                  "Falling back to scanning H5AD files. This may be slow or inconsistent.")
+            # Call the original function (which we will rename)
+            return self.get_label_mapping_from_scan(task)
+
+        csv_file_path = Path(base_path) / task_to_file[task]
         
-        return len(all_labels), id_to_label, label_to_id
+        if not csv_file_path.exists():
+            print(f"ERROR: Label file not found: {csv_file_path}")
+            print("Falling back to scanning H5AD files.")
+            return self.get_label_mapping_from_scan(task)
+        
+        print(f"Loading consistent label mapping from: {csv_file_path}")
+        try:
+            df = pd.read_csv(csv_file_path)
+            
+            if 'value' not in df.columns:
+                raise ValueError(f"'value' column not in {csv_file_path}")
+                
+            # Get all labels from the 'value' column
+            all_labels = df['value'].tolist()
+            
+            # Ensure they are unique and sorted
+            all_labels = sorted(list(set([l for l in all_labels if pd.notna(l)])))
+            
+            id_to_label = {i: label for i, label in enumerate(all_labels)}
+            label_to_id = {label: i for i, label in enumerate(all_labels)}
+            
+            print(f"Found {len(all_labels)} unique labels for task '{task}' from CSV.")
+            print(f"Label to ID mapping (first 5): {dict(list(label_to_id.items())[:5])}")
+            
+            return len(all_labels), id_to_label, label_to_id
+        
+        except Exception as e:
+            print(f"ERROR: Could not read labels from {csv_file_path}. {e}")
+            print("Falling back to scanning H5AD files.")
+            return self.get_label_mapping_from_scan(task)
     
     def process_and_create_loader(self, file_path, cell_indices, task, label_to_id, batch_size, 
                                     shuffle=False, rank=0, world_size=1, debug=False):

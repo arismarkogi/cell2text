@@ -190,6 +190,24 @@ def main(local_rank=0, world_size=1, args=None):
             json.dump({"accuracy": acc, "f1_macro": f1, "f1_weighted": weighted_f1}, f, indent=2)
         logger.info(f"Results saved to {save_dir}/results.json")
 
+        logger.info("Saving raw predictions and labels to JSON...")
+        try:
+            # Ensure data is in standard Python lists for JSON serialization
+            predictions_list = [int(p) for p in all_predictions]
+            labels_list = [int(l) for l in all_labels_true]
+            
+            output_data = {
+                "predictions": predictions_list,
+                "labels": labels_list
+            }
+            
+            with open(save_dir / "predictions_and_labels.json", "w") as f:
+                json.dump(output_data, f, indent=2)
+                
+            logger.info(f"Predictions saved to {save_dir}/predictions_and_labels.json")
+        except Exception as e:
+            logger.error(f"Failed to save predictions as JSON: {e}")
+
 
 def main_worker(local_rank, n_gpus, args):
     os.environ['MASTER_ADDR'] = 'localhost'
