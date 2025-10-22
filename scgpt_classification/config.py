@@ -94,17 +94,17 @@ def get_task_specific_config(task="cell_type"):
         base_config.update({
             "epochs": 3
             ,
-            "lr": 5e-5,
+            "lr": 1e-4,
         })
     elif task == "disease":
         base_config.update({
             "epochs": 3,
-            "lr": 5e-5,
+            "lr": 1e-4,
         })
     elif task == "tissue":
         base_config.update({
             "epochs": 3,
-            "lr": 5e-5,
+            "lr": 1e-4,
         })
     
     return Config(base_config)

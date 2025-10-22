@@ -34,6 +34,9 @@ class ScGPTDataLoader:
         self.pad_token = "<pad>"
         self.mask_value = -1 if config.input_emb_style != "category" else config.n_bins + 1
         self.pad_value = -2 if config.input_emb_style != "category" else config.n_bins
+        
+        # ADDED: Debug tracking
+        self._debug_label_checks = []
     
     def get_n_obs(self, file_path: Path) -> int:
         """Reads the number of observations (cells) from an h5ad file without loading it."""
@@ -90,6 +93,19 @@ class ScGPTDataLoader:
         self.val_files = val_files
         self.test_files = test_files
         
+        # Build train_batches: list of (file_path, cell_indices_range) tuples used for chunked training
+        self.train_batches = []
+        chunk_size = getattr(self.config, "cell_chunk_size", None) or 1000
+        for f in self.train_files:
+            n_cells = self.get_n_obs(f)
+            if n_cells == 0:
+                # skip files we couldn't read metadata for
+                continue
+            for i in range(0, n_cells, chunk_size):
+                cell_range = range(i, min(i + chunk_size, n_cells))
+                self.train_batches.append((f, cell_range))
+        print(f"Prepared {len(self.train_batches)} training chunks (chunk_size={chunk_size})")
+        
         return sample_adata_aligned, train_files, val_files, test_files
     
     def setup_vocabulary(self, adata, pretrained_vocab_path=None):
@@ -137,9 +153,12 @@ class ScGPTDataLoader:
         label_to_id = {label: i for i, label in enumerate(all_labels)}
         
         print(f"Found {len(all_labels)} unique labels for task '{task}'")
+        print(f"Label to ID mapping: {label_to_id}")  # DEBUG
+        
         return len(all_labels), id_to_label, label_to_id
     
-    def process_and_create_loader(self, file_path, cell_indices, task, label_to_id, batch_size, shuffle=False, rank=0, world_size=1):
+    def process_and_create_loader(self, file_path, cell_indices, task, label_to_id, batch_size, 
+                                    shuffle=False, rank=0, world_size=1, debug=False):
         """Process a slice of cells from a single file and create a DDP-aware dataloader"""
         adata_full = sc.read(file_path)
         batch = adata_full[cell_indices, :].copy()
@@ -153,10 +172,57 @@ class ScGPTDataLoader:
         
         if task not in batch_processed.obs.columns:
             raise ValueError(f"Missing '{task}' column in {file_path}")
+        
+        # CRITICAL: Check for missing labels BEFORE mapping
+        original_labels = batch_processed.obs[task].values
+        unique_original = np.unique(original_labels)
+        
+        # Check if any labels are missing from label_to_id
+        missing_labels = [l for l in unique_original if pd.notna(l) and l not in label_to_id]
+        if missing_labels:
+            print(f"ERROR: Found labels not in label_to_id mapping: {missing_labels}")
+            print(f"Available labels in mapping: {sorted(label_to_id.keys())}")
+            raise ValueError(f"Label mismatch! Found unknown labels: {missing_labels}")
+        
+        # Map labels to IDs
         batch_processed.obs[f"{task}_id"] = batch_processed.obs[task].map(label_to_id)
         
+        # CRITICAL: Check for NaN values after mapping (indicates unmapped labels)
+        if batch_processed.obs[f"{task}_id"].isna().any():
+            nan_labels = batch_processed.obs[task][batch_processed.obs[f"{task}_id"].isna()].unique()
+            print(f"ERROR: Found NaN after label mapping! Original labels: {nan_labels}")
+            raise ValueError(f"Label mapping failed for: {nan_labels}")
+        
+        # DEBUG: Track label statistics
+        label_ids = batch_processed.obs[f"{task}_id"].values
+        unique_ids = np.unique(label_ids[~pd.isna(label_ids)])
+        
+        if debug or rank == 0:
+            print(f"\n[DEBUG] File: {file_path.name}")
+            print(f"  Cells in chunk: {len(cell_indices)}")
+            print(f"  Unique original labels: {unique_original.tolist()}")
+            print(f"  Unique label IDs: {unique_ids.tolist()}")
+            print(f"  Expected ID range: 0 to {len(label_to_id)-1}")
+            print(f"  Label ID stats - min: {unique_ids.min()}, max: {unique_ids.max()}")
+            
+            # Check label distribution
+            label_counts = pd.Series(label_ids).value_counts().sort_index()
+            print(f"  Label distribution:\n{label_counts}")
+        
         tokenized, _, _ = self.tokenize_data(batch_processed)
-        data_dict = self.create_data_dict(tokenized, batch_processed, task, self.config.mask_ratio if shuffle else 0.0)
+        data_dict = self.create_data_dict(tokenized, batch_processed, task, 
+                                          self.config.mask_ratio if shuffle else 0.0)
+        
+        # FINAL CHECK: Verify labels in data_dict
+        final_labels = data_dict["labels"]
+        if torch.isnan(final_labels).any() or torch.isinf(final_labels).any():
+            print(f"ERROR: Invalid labels in data_dict!")
+            raise ValueError("Data dict contains NaN or Inf labels!")
+        
+        if final_labels.min() < 0 or final_labels.max() >= len(label_to_id):
+            print(f"ERROR: Label IDs out of range! Min: {final_labels.min()}, Max: {final_labels.max()}")
+            print(f"Expected range: 0 to {len(label_to_id)-1}")
+            raise ValueError("Label IDs out of expected range!")
         
         dataset = SeqDataset(data_dict)
         
@@ -191,10 +257,22 @@ class ScGPTDataLoader:
     
     def create_data_dict(self, tokenized, adata, task, mask_ratio=0.0):
         """Create data dictionary for the dataloader"""
+        # CRITICAL FIX: Convert to long tensor and validate
+        label_values = adata.obs[f"{task}_id"].values
+        
+        # Remove any NaN values (shouldn't happen if previous checks passed)
+        if pd.isna(label_values).any():
+            print(f"WARNING: Found NaN in labels before tensor conversion!")
+            # Option 1: Raise error
+            raise ValueError("Cannot create data dict with NaN labels")
+            # Option 2: Filter them out (not recommended)
+            # valid_mask = ~pd.isna(label_values)
+            # label_values = label_values[valid_mask]
+        
         data_dict = {
             "gene_ids": tokenized["genes"],
             "values": tokenized["values"],
-            "labels": torch.tensor(adata.obs[f"{task}_id"].values, dtype=torch.long),
+            "labels": torch.tensor(label_values, dtype=torch.long),
         }
         
         if mask_ratio > 0:
@@ -205,4 +283,22 @@ class ScGPTDataLoader:
             data_dict["masked_values"] = tokenized["values"]
         
         return data_dict
-
+    
+    def verify_label_consistency(self, loader, label_to_id, rank=0):
+        """Helper function to verify label consistency in a loader"""
+        if rank != 0:
+            return
+        
+        print("\n[LABEL CONSISTENCY CHECK]")
+        all_labels = []
+        for batch_idx, batch in enumerate(loader):
+            labels = batch["labels"].numpy()
+            all_labels.extend(labels.tolist())
+            if batch_idx >= 2:  # Check first 3 batches
+                break
+        
+        unique_labels = np.unique(all_labels)
+        print(f"  Labels in first batches: {unique_labels}")
+        print(f"  Expected range: 0 to {len(label_to_id)-1}")
+        print(f"  Valid: {unique_labels.min() >= 0 and unique_labels.max() < len(label_to_id)}")
+        print()

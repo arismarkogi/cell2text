@@ -1,6 +1,6 @@
 python3 /home/arism/cell2text/scgpt_classification/main.py \
-  --task tissue \
-  --data_dir /home/arism/raw_data_200k \
+  --task disease \
+  --data_dir /home/arism/raw_data \
   --load_model /home/arism/scgpt_model/scGPT_human \
   --epochs 3 \
   --batch_size 16 \

@@ -35,7 +35,7 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--eval_batch_size", type=int, default=8)
-    parser.add_argument("--cell_chunk_size", type=int, default=20000, help="Number of cells to process at a time")
+    parser.add_argument("--cell_chunk_size", type=int, default=1000, help="Number of cells to process at a time")
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--mask_ratio", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=42)
@@ -97,6 +97,7 @@ def main(local_rank=0, world_size=1, args=None):
     for key, value in vars(args).items():
         setattr(config, key, value)
     config.validate()
+    
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     save_dir = Path(args.save_dir) if args.save_dir else Path(f"./save/scGPT_{config.classification_task}_{config.dataset_name}_{timestamp}")
