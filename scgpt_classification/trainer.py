@@ -67,13 +67,14 @@ class ClassificationTrainer:
         
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.config.amp)
     
-    def train_epoch(self, train_loader: DataLoader, set_sampler_epoch: bool = True) -> Dict[str, float]:
+    def train_epoch(self, train_loader: DataLoader, set_sampler_epoch: bool = True, pbar_leave: bool = False) -> Dict[str, float]:
         """Train for one epoch (DDP-safe)
         
         Args:
             train_loader: DataLoader for training
             set_sampler_epoch: Whether to call set_epoch on the sampler (default True).
                               Set to False when training on chunks within an epoch.
+            pbar_leave: Whether the tqdm progress bar should remain after completion.
         """
         self.model.train()
         total_loss = 0.0
@@ -92,8 +93,8 @@ class ClassificationTrainer:
             pbar = tqdm(
                 enumerate(train_loader),
                 total=len(train_loader),
-                desc=f"Epoch {self.current_epoch} [Train]",
-                leave=False,
+                desc=f"Epoch {self.current_epoch} [Train Batch]",
+                leave=pbar_leave, # MODIFIED: Use the new parameter
                 ncols=100
             )
         else:
@@ -297,7 +298,8 @@ class ClassificationTrainer:
             epoch_start = time.time()
             
             # Training only - skip validation
-            train_metrics = self.train_epoch(train_loader)
+            # MODIFIED: Pass pbar_leave=True so this bar stays
+            train_metrics = self.train_epoch(train_loader, pbar_leave=True) 
             
             # Update learning rate
             self.scheduler.step()
@@ -462,9 +464,24 @@ class ClassificationTrainer:
             epoch_total_correct = 0
             epoch_total_samples = 0
             
-            for chunk_idx, train_batch in enumerate(train_batches):
+            # MODIFIED: Create an outer pbar for chunks (rank 0 only)
+            chunk_pbar_iterator = train_batches
+            if self.rank == 0:
+                chunk_pbar_iterator = tqdm(
+                    train_batches,
+                    total=len(train_batches),
+                    desc=f"Epoch {epoch} [Chunks]",
+                    leave=True,  # Keep this bar visible
+                    ncols=100
+                )
+
+            # MODIFIED: Iterate over the new pbar
+            for chunk_idx, train_batch in enumerate(chunk_pbar_iterator):
                 if self.rank == 0:
-                    print(f"\n[Epoch {epoch}] Processing training chunk {chunk_idx + 1}/{len(train_batches)}")
+                    # Optional: update the description
+                    chunk_pbar_iterator.set_description(
+                        f"Epoch {epoch} [Chunk {chunk_idx + 1}/{len(train_batches)}]"
+                    )
                 
                 # ALL RANKS: Process the data to get the dataset
                 file_path, cell_indices = train_batch
@@ -512,7 +529,10 @@ class ClassificationTrainer:
                 # ALL RANKS: Train on this chunk
                 # FIXED: Pass set_sampler_epoch=False to prevent train_epoch from 
                 # resetting the sampler epoch we just set
-                chunk_metrics = self.train_epoch(chunk_loader, set_sampler_epoch=False)
+                # MODIFIED: Pass pbar_leave=False so the inner bar disappears
+                chunk_metrics = self.train_epoch(chunk_loader, 
+                                               set_sampler_epoch=False, 
+                                               pbar_leave=False)
                 
                 # Accumulate metrics (all ranks have the same DDP-synced values)
                 epoch_total_loss += chunk_metrics["train_loss_total"]
