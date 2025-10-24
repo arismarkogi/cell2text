@@ -49,20 +49,21 @@ class ModelManager:
             self.nlayers = self.model_configs["nlayers"]
             self.n_layers_cls = self.model_configs.get("n_layers_cls", 3)
             
-            # 🚨 FORCE the same transformer type as pretrained
-            self.use_fast_transformer = self.model_configs.get("use_fast_transformer", True)
-            self.fast_transformer_backend = self.model_configs.get("fast_transformer_backend", "linear")
-            self.pre_norm = self.model_configs.get("pre_norm", False)
+            # -----------------------------------------------------------------
+            # --- FIX 1: Force architecture to match checkpoint keys ---
+            # The 'Wqkv' keys in your log mean the checkpoint uses 
+            # a fused QKV layer, which corresponds to the 'flash' backend.
+            # We will IGNORE the args.json and force this architecture.
+            # -----------------------------------------------------------------
+            self.use_fast_transformer = True
+            self.fast_transformer_backend = "flash" # This backend uses Wqkv
+            self.pre_norm = self.model_configs.get("pre_norm", False) # pre_norm is probably fine
             
-            print(f"⚠️ Using pretrained model architecture: "
-                f"fast_transformer={self.use_fast_transformer}, "
-                f"backend={self.fast_transformer_backend}")
+            print(f"⚠️ FORCING pretrained model architecture: "
+                  f"fast_transformer={self.use_fast_transformer}, "
+                  f"backend={self.fast_transformer_backend}")
         else:
             raise FileNotFoundError("Pretrained model config is required for compatibility")
-        
-        self.use_fast_transformer =  True
-        self.fast_transformer_backend =  "linear"
-        self.pre_norm =  False
         
         # Create model with EXACT same architecture
         ntokens = len(self.vocab)
@@ -95,10 +96,11 @@ class ModelManager:
         )
         
         # Load pretrained weights
+        # This (non-strict) loading logic is what the tutorial's 'except' block
+        # was doing, but we do it by default to be safe.
         state_dict = torch.load(model_file, map_location=self.device)
-        
-        # Print ALL keys that will be ignored
         model_dict = self.model.state_dict()
+        
         ignored_keys = []
         compatible_keys = []
         
@@ -130,22 +132,30 @@ class ModelManager:
         
         return self.model
     
+    # --------------------------------------------------------------------
+    # --- FIX 2: CORRECTED FREEZING LOGIC ---
+    # This logic correctly freezes everything EXCEPT the classifier head.
+    # This is what gives the correct ~593k trainable parameter count.
+    # --------------------------------------------------------------------
     def freeze_encoder(self):
         """Freeze encoder parameters for fine-tuning"""
         if not self.model:
             raise ValueError("Model not loaded yet")
         
         pre_freeze_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        
-        # Freeze encoder parameters
-        for name, param in self.model.named_parameters():
-            if self.config.freeze and "encoder" in name and "transformer_encoder" not in name:
-                print(f"Freezing weights for: {name}")
-                param.requires_grad = False
-        
-        post_freeze_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        
         print(f"Pre-freeze trainable parameters: {pre_freeze_params:,}")
+
+        print("--- Freezing Model Layers ---")
+        for name, param in self.model.named_parameters():
+            # Freeze everything that is NOT part of the classification head
+            # The classifier layers have "cls" in their name
+            if self.config.freeze and "cls" not in name:
+                param.requires_grad = False
+            else:
+                # This will print the layers you ARE training
+                print(f"✅ TRAINING: {name}")
+
+        post_freeze_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         print(f"Post-freeze trainable parameters: {post_freeze_params:,}")
         
         return pre_freeze_params, post_freeze_params
@@ -189,6 +199,24 @@ class ModelManager:
         if self.config.freeze:
             self.freeze_encoder()
         
+        # -----------------------------------------------------------------
+        # --- FIX 3: BATCHNORM FIX ---
+        # This prevents contamination of BatchNorm running statistics 
+        # during chunked training. This is correct.
+        # -----------------------------------------------------------------
+        
+        def set_bn_eval(module):
+            """Recursively set all BatchNorm layers to eval mode."""
+            if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
+                module.eval()
+
+        # Apply the fix to the entire model
+        self.model.apply(set_bn_eval)
+        print("✅ Applied BatchNorm fix: All BatchNorm layers set to eval mode.")
+        # -----------------------------------------------------------------
+        # --- END FIX ---
+        # -----------------------------------------------------------------
+        
         # Move to device
         self.model.to(self.device)
         
@@ -199,8 +227,11 @@ class ModelManager:
         if not self.model:
             raise ValueError("Model not setup yet")
         
+        # Get only parameters that require gradients
+        trainable_params = filter(lambda p: p.requires_grad, self.model.parameters())
+
         optimizer = torch.optim.Adam(
-            self.model.parameters(),
+            trainable_params,  # Only pass trainable parameters to the optimizer
             lr=self.config.lr,
             eps=1e-4 if self.config.amp else 1e-8
         )
