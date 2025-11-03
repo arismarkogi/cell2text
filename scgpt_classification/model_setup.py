@@ -1,6 +1,4 @@
-"""
-Model setup and loading utilities for scGPT fine-tuning
-"""
+
 import json
 import torch
 import torch.nn as nn
@@ -51,13 +49,11 @@ class ModelManager:
             
             # -----------------------------------------------------------------
             # --- FIX 1: Force architecture to match checkpoint keys ---
-            # The 'Wqkv' keys in your log mean the checkpoint uses 
-            # a fused QKV layer, which corresponds to the 'flash' backend.
-            # We will IGNORE the args.json and force this architecture.
+            # This is still necessary to fix the IGNORED KEYS error.
             # -----------------------------------------------------------------
             self.use_fast_transformer = True
             self.fast_transformer_backend = "flash" # This backend uses Wqkv
-            self.pre_norm = self.model_configs.get("pre_norm", False) # pre_norm is probably fine
+            self.pre_norm = self.model_configs.get("pre_norm", False) 
             
             print(f"⚠️ FORCING pretrained model architecture: "
                   f"fast_transformer={self.use_fast_transformer}, "
@@ -96,8 +92,6 @@ class ModelManager:
         )
         
         # Load pretrained weights
-        # This (non-strict) loading logic is what the tutorial's 'except' block
-        # was doing, but we do it by default to be safe.
         state_dict = torch.load(model_file, map_location=self.device)
         model_dict = self.model.state_dict()
         
@@ -131,34 +125,6 @@ class ModelManager:
         print(f"✅ Successfully loaded {len(compatible_keys)}/{len(state_dict)} parameters")
         
         return self.model
-    
-    # --------------------------------------------------------------------
-    # --- FIX 2: CORRECTED FREEZING LOGIC ---
-    # This logic correctly freezes everything EXCEPT the classifier head.
-    # This is what gives the correct ~593k trainable parameter count.
-    # --------------------------------------------------------------------
-    def freeze_encoder(self):
-        """Freeze encoder parameters for fine-tuning"""
-        if not self.model:
-            raise ValueError("Model not loaded yet")
-        
-        pre_freeze_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        print(f"Pre-freeze trainable parameters: {pre_freeze_params:,}")
-
-        print("--- Freezing Model Layers ---")
-        for name, param in self.model.named_parameters():
-            # Freeze everything that is NOT part of the classification head
-            # The classifier layers have "cls" in their name
-            if self.config.freeze and "cls" not in name:
-                param.requires_grad = False
-            else:
-                # This will print the layers you ARE training
-                print(f"✅ TRAINING: {name}")
-
-        post_freeze_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        print(f"Post-freeze trainable parameters: {post_freeze_params:,}")
-        
-        return pre_freeze_params, post_freeze_params
     
     def setup_model(self, pretrained_path: Optional[str] = None) -> TransformerModel:
         """Setup model with optional pretrained weights"""
@@ -195,33 +161,37 @@ class ModelManager:
                 pre_norm=self.config.pre_norm,
             )
         
-        # Apply freezing if specified
-        if self.config.freeze:
-            self.freeze_encoder()
-        
-        # -----------------------------------------------------------------
-        # --- FIX 3: BATCHNORM FIX ---
-        # This prevents contamination of BatchNorm running statistics 
-        # during chunked training. This is correct.
-        # -----------------------------------------------------------------
-        
-        def set_bn_eval(module):
-            """Recursively set all BatchNorm layers to eval mode."""
-            if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
-                module.eval()
+        if self.config.freeze:  # Assuming 'freeze' is a boolean in your config
+            print("❄️ Freezing all non-decoder parameters...")
+            frozen_count = 0
+            unfrozen_count = 0
+            
+            for name, para in self.model.named_parameters():
+                # We want to freeze everything EXCEPT the decoder/classification head
+                if "decoder" not in name:  # Adjust 'decoder' if your head is named differently
+                    para.requires_grad = False
+                    frozen_count += 1
+                else:
+                    para.requires_grad = True
+                    unfrozen_count += 1
+                    print(f"    ✅ Left unfrozen (trainable): {name}")
 
-        # Apply the fix to the entire model
-        self.model.apply(set_bn_eval)
-        print("✅ Applied BatchNorm fix: All BatchNorm layers set to eval mode.")
-        # -----------------------------------------------------------------
-        # --- END FIX ---
+            print(f"--- Frozen {frozen_count} parameters. ---")
+            print(f"--- Left {unfrozen_count} parameters trainable. ---")
         # -----------------------------------------------------------------
         
         # Move to device
         self.model.to(self.device)
         
+        # Log parameter count
+        total_params = sum(p.numel() for p in self.model.parameters())
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        
+        print(f"Total Model Parameters:     {total_params:,}")
+        print(f"Total Trainable Parameters: {trainable_params:,}")
+        
         return self.model
-    
+        
     def get_optimizer_and_scheduler(self):
         """Setup optimizer and learning rate scheduler"""
         if not self.model:
@@ -270,3 +240,5 @@ class ModelManager:
             self.vocab.save(save_dir / "vocab.json")
         
         print(f"Model saved to {save_dir}")
+
+

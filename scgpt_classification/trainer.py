@@ -1,6 +1,3 @@
-"""
-Training and evaluation utilities for scGPT classification fine-tuning
-"""
 import time
 import copy
 import warnings
@@ -52,8 +49,11 @@ class ClassificationTrainer:
     
     def setup_training(self):
         """Setup optimizer, scheduler, and other training components"""
+        # Filter parameters that require gradients (for "freeze" option)
+        trainable_params = filter(lambda p: p.requires_grad, self.model.parameters())
+
         self.optimizer = torch.optim.Adam(
-            self.model.parameters(),
+            trainable_params, # Pass only trainable params
             lr=self.config.lr,
             eps=1e-4 if self.config.amp else 1e-8
         )
@@ -64,18 +64,10 @@ class ClassificationTrainer:
             gamma=self.config.schedule_ratio
         )
         
-        
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.config.amp)
     
-    def train_epoch(self, train_loader: DataLoader, set_sampler_epoch: bool = True, pbar_leave: bool = False) -> Dict[str, float]:
-        """Train for one epoch (DDP-safe)
-        
-        Args:
-            train_loader: DataLoader for training
-            set_sampler_epoch: Whether to call set_epoch on the sampler (default True).
-                              Set to False when training on chunks within an epoch.
-            pbar_leave: Whether the tqdm progress bar should remain after completion.
-        """
+    def train_epoch(self, train_loader: DataLoader) -> Dict[str, float]:
+        """Train for one epoch (DDP-safe)"""
         self.model.train()
         total_loss = 0.0
         total_correct = 0
@@ -84,17 +76,17 @@ class ClassificationTrainer:
         start_time = time.time()
 
         # Set epoch for DistributedSampler (important for shuffling)
-        # Only do this if set_sampler_epoch is True
-        if set_sampler_epoch and hasattr(train_loader, 'sampler') and hasattr(train_loader.sampler, 'set_epoch'):
+        if hasattr(train_loader, 'sampler') and hasattr(train_loader.sampler, 'set_epoch'):
             train_loader.sampler.set_epoch(self.current_epoch)
 
         # tqdm only on rank 0
+        pbar_desc = f"Epoch {self.current_epoch} [Train]"
         if hasattr(self, "rank") and self.rank == 0:
             pbar = tqdm(
                 enumerate(train_loader),
                 total=len(train_loader),
-                desc=f"Epoch {self.current_epoch} [Train Batch]",
-                leave=pbar_leave, # MODIFIED: Use the new parameter
+                desc=pbar_desc,
+                leave=False, 
                 ncols=100
             )
         else:
@@ -174,18 +166,19 @@ class ClassificationTrainer:
         }
 
     
-    def evaluate(self, eval_loader: DataLoader, return_predictions: bool = False) -> Dict[str, float]:
+    def evaluate(self, eval_loader: DataLoader, desc: str = "Evaluate") -> Dict[str, float]:
         """Evaluate model on validation/test set (DDP-safe)"""
         self.model.eval()
         total_loss = 0.0
         all_predictions, all_labels = [], []
 
         # tqdm only on rank 0
+        pbar_desc = f"Epoch {self.current_epoch} [{desc}]"
         if hasattr(self, "rank") and self.rank == 0:
             pbar = tqdm(
                 enumerate(eval_loader),
                 total=len(eval_loader),
-                desc="Evaluating",
+                desc=pbar_desc,
                 leave=False,
                 ncols=100
             )
@@ -222,7 +215,8 @@ class ClassificationTrainer:
                 all_labels.extend(labels_np)
 
                 if hasattr(self, "rank") and self.rank == 0:
-                    pbar.set_postfix({'Loss': f'{total_loss / (batch_idx + 1):.4f}'})
+                    avg_loss_so_far = total_loss / (len(all_labels)) if len(all_labels) > 0 else 0
+                    pbar.set_postfix({'Loss': f'{avg_loss_so_far:.4f}'})
 
         if hasattr(self, "rank") and self.rank == 0:
             pbar.close()
@@ -279,57 +273,73 @@ class ClassificationTrainer:
                 "f1": f1,
                 "weighted_f1": weighted_f1
             }
-            if return_predictions:
-                metrics["predictions"] = preds_all
-                metrics["labels"] = labels_all
+            metrics["predictions"] = preds_all
+            metrics["labels"] = labels_all
+            
         else:
-            metrics = None
+            metrics = None # Return None for non-rank-0 processes
 
         return metrics
 
-
     
     def train(self, train_loader: DataLoader, val_loader: DataLoader, epochs: int, save_dir: str = None):
-        """Complete training loop - skips validation and saves model after each epoch"""
+        """Complete training loop with validation"""
         self.setup_training()
         
         for epoch in range(1, epochs + 1):
             self.current_epoch = epoch
             epoch_start = time.time()
             
-            # Training only - skip validation
-            # MODIFIED: Pass pbar_leave=True so this bar stays
-            train_metrics = self.train_epoch(train_loader, pbar_leave=True) 
+            # --- Training ---
+            train_metrics = self.train_epoch(train_loader) 
             
+            # --- Validation ---
+            val_metrics = self.evaluate(val_loader, desc="Validate")
+
             # Update learning rate
             self.scheduler.step()
             
-            if save_dir and self.rank == 0:
-                epoch_model_path = os.path.join(save_dir, f"model_epoch_{epoch}.pt")
-                # if DDP, save module state_dict
-                state = self.model.module.state_dict() if hasattr(self.model, "module") else self.model.state_dict()
-                torch.save(state, epoch_model_path)
+            # Only rank 0 handles logging, history, and saving
+            if self.rank == 0:
+                val_loss = val_metrics.get('loss', float("inf"))
+                val_acc = val_metrics.get('acc', 0.0)
+                
+                # Update history
+                self.training_history["train_loss"].append(train_metrics["train_loss_avg"])
+                self.training_history["val_loss"].append(val_loss)
+                self.training_history["val_acc"].append(val_acc)
+                
+                # Log epoch results
+                elapsed = time.time() - epoch_start
                 if self.logger:
-                    self.logger.info(f"Model saved for epoch {epoch} at {epoch_model_path}")
-
-            
-            # Update history with training metrics only
-            self.training_history["train_loss"].append(train_metrics["train_loss_avg"])
-            # Keep validation history empty or with default values
-            self.training_history["val_loss"].append(float("inf"))
-            self.training_history["val_acc"].append(0.0)
-            
-            # Log epoch results
-            elapsed = time.time() - epoch_start
-            if self.logger:
-                self.logger.info(
-                    f"Epoch {epoch}/{epochs} | Time: {elapsed:.2f}s | "
-                    f"Train Loss: {train_metrics['train_loss_avg']:.4f} | "
-                    f"Train Acc: {train_metrics['train_acc']:.4f}"
-                )
+                    self.logger.info(
+                        f"Epoch {epoch}/{epochs} | Time: {elapsed:.2f}s | "
+                        f"Train Loss: {train_metrics['train_loss_avg']:.4f} | "
+                        f"Train Acc: {train_metrics['train_acc']:.4f} | "
+                        f"Val Loss: {val_loss:.4f} | "
+                        f"Val Acc: {val_acc:.4f}"
+                    )
+                
+                # Save best model
+                if val_loss < self.best_val_loss:
+                    self.best_val_loss = val_loss
+                    self.best_model = copy.deepcopy(self.model.state_dict())
+                    if self.logger:
+                        self.logger.info(f"New best model found! Val Loss: {val_loss:.4f}")
+                    if save_dir:
+                        best_model_path = os.path.join(save_dir, "best_model.pt")
+                        state = self.model.module.state_dict() if hasattr(self.model, "module") else self.model.state_dict()
+                        torch.save(state, best_model_path)
+                        if self.logger:
+                            self.logger.info(f"Best model saved to {best_model_path}")
         
-        # Set best model to the final model since we're not doing validation
-        self.best_model = copy.deepcopy(self.model.state_dict())
+        # Ensure all processes have the final model
+        if self.world_size > 1:
+            dist.barrier()
+            
+        # If no validation was done or all val_loss were inf, use final model
+        if self.best_model is None:
+            self.best_model = self.model.state_dict()
         
         return self.training_history
     
@@ -340,19 +350,31 @@ class ClassificationTrainer:
     def test(self, test_loader: DataLoader, id_to_label: Dict[int, str] = None):
         """Test the best model"""
         if self.best_model is None:
-            raise ValueError("No best model found. Train first.")
+            if self.rank == 0:
+                self.logger.warning("No best model found. Using final model for testing.")
+            self.best_model = self.model.state_dict()
         
         # Load best model
-        self.model.load_state_dict(self.best_model)
+        try:
+            self.model.load_state_dict(self.best_model)
+        except RuntimeError: # Handle DDP/non-DDP state_dict mismatch
+             # create new OrderedDict that does not contain `module.`
+            from collections import OrderedDict
+            new_state_dict = OrderedDict()
+            for k, v in self.best_model.items():
+                name = k[7:] if k.startswith('module.') else k
+                new_state_dict[name] = v
+            self.model.load_state_dict(new_state_dict)
+
         
         # Evaluate
-        test_metrics = self.evaluate(test_loader, return_predictions=True)
+        test_metrics = self.evaluate(test_loader, desc="Test")
         
         # Add this check to handle None metrics in non-rank-0 processes
         if test_metrics is None:
-            return None  # Return None for non-rank-0 processes
+            return None
         
-        if self.logger:
+        if self.logger and self.rank == 0:
             self.logger.info(
                 f"Test Results - Loss: {test_metrics.get('loss', float('inf')):.4f} | "
                 f"Acc: {test_metrics.get('acc', 0.0):.4f} | "
@@ -429,7 +451,7 @@ class ClassificationTrainer:
         ax1.legend()
         ax1.grid(True)
         
-        # Accuracy plot - only training accuracy since we skip validation
+        # Accuracy plot
         ax2.plot(self.training_history["val_acc"], label="Val Accuracy")
         ax2.set_xlabel("Epoch")
         ax2.set_ylabel("Accuracy")
@@ -444,140 +466,9 @@ class ClassificationTrainer:
         
         plt.show()
 
-    def train_on_chunks(self, data_loader, task, label_to_id, epochs: int, save_dir: str = None):
-        """Train on data chunks sequentially (DDP-safe) - FIXED VERSION
-        
-        Key fix: We create a unique sampler for each chunk with a chunk-specific seed
-        that combines the epoch number and chunk index. This ensures proper shuffling
-        across epochs while maintaining deterministic behavior.
-        """
-        self.setup_training()
-        
-        train_batches = data_loader.train_batches
-        
-        for epoch in range(1, epochs + 1):
-            self.current_epoch = epoch
-            epoch_start = time.time()
-            
-            # Train on each chunk
-            epoch_total_loss = 0.0
-            epoch_total_correct = 0
-            epoch_total_samples = 0
-            
-            # MODIFIED: Create an outer pbar for chunks (rank 0 only)
-            chunk_pbar_iterator = train_batches
-            if self.rank == 0:
-                chunk_pbar_iterator = tqdm(
-                    train_batches,
-                    total=len(train_batches),
-                    desc=f"Epoch {epoch} [Chunks]",
-                    leave=True,  # Keep this bar visible
-                    ncols=100
-                )
-
-            # MODIFIED: Iterate over the new pbar
-            for chunk_idx, train_batch in enumerate(chunk_pbar_iterator):
-                if self.rank == 0:
-                    # Optional: update the description
-                    chunk_pbar_iterator.set_description(
-                        f"Epoch {epoch} [Chunk {chunk_idx + 1}/{len(train_batches)}]"
-                    )
-                
-                # ALL RANKS: Process the data to get the dataset
-                file_path, cell_indices = train_batch
-                temp_loader = data_loader.process_and_create_loader(
-                    file_path,
-                    cell_indices,
-                    task,
-                    label_to_id,
-                    self.config.batch_size,
-                    shuffle=False,
-                    rank=self.rank,
-                    world_size=self.world_size,
-                )
-                chunk_dataset = temp_loader.dataset
-                del temp_loader
-                
-                # ALL RANKS: Create DDP sampler with epoch-aware seeding
-                sampler = None
-                shuffle = True
-                if torch.distributed.is_available() and torch.distributed.is_initialized():
-                    # FIXED: Create sampler with chunk-specific seed based on epoch
-                    # This ensures different shuffling for each epoch but same shuffling
-                    # across ranks within the same epoch
-                    sampler = DistributedSampler(
-                        chunk_dataset, 
-                        num_replicas=self.world_size, 
-                        rank=self.rank, 
-                        shuffle=True,
-                        seed=42 + epoch  # Seed changes with epoch, not chunk
-                    )
-                    # FIXED: Manually set the epoch on the sampler for this chunk
-                    # This combines the epoch with the chunk_idx for unique shuffling
-                    sampler.set_epoch(epoch * 1000 + chunk_idx)
-                    shuffle = False
-                
-                chunk_loader = DataLoader(
-                    chunk_dataset, 
-                    batch_size=self.config.batch_size,
-                    shuffle=shuffle,
-                    sampler=sampler,
-                    num_workers=4, 
-                    pin_memory=True
-                )
-                
-                # ALL RANKS: Train on this chunk
-                # FIXED: Pass set_sampler_epoch=False to prevent train_epoch from 
-                # resetting the sampler epoch we just set
-                # MODIFIED: Pass pbar_leave=False so the inner bar disappears
-                chunk_metrics = self.train_epoch(chunk_loader, 
-                                               set_sampler_epoch=False, 
-                                               pbar_leave=False)
-                
-                # Accumulate metrics (all ranks have the same DDP-synced values)
-                epoch_total_loss += chunk_metrics["train_loss_total"]
-                epoch_total_correct += chunk_metrics["train_correct"]
-                epoch_total_samples += chunk_metrics["train_samples"]
-                
-                # Clean up (all ranks)
-                del chunk_loader, chunk_dataset, sampler
-                gc.collect()
-                torch.cuda.empty_cache()
-                
-                # Barrier so all ranks wait for each other before loading next chunk
-                if torch.distributed.is_available() and torch.distributed.is_initialized():
-                    torch.distributed.barrier()
-            
-            # Calculate epoch metrics (all ranks compute the same value)
-            epoch_loss = epoch_total_loss / epoch_total_samples if epoch_total_samples > 0 else 0
-            epoch_acc = epoch_total_correct / epoch_total_samples if epoch_total_samples > 0 else 0
-            
-            # Update learning rate
-            self.scheduler.step()
-            
-            # Save model (only rank 0)
-            if save_dir and self.rank == 0:
-                epoch_model_path = os.path.join(save_dir, f"model_epoch_{epoch}.pt")
-                state = self.model.module.state_dict() if hasattr(self.model, "module") else self.model.state_dict()
-                torch.save(state, epoch_model_path)
-                if self.logger:
-                    self.logger.info(f"Model saved for epoch {epoch} at {epoch_model_path}")
-            
-            # Update history
-            self.training_history["train_loss"].append(epoch_loss)
-            self.training_history["val_loss"].append(float("inf"))
-            self.training_history["val_acc"].append(0.0)
-            
-            # Log epoch results (only rank 0)
-            elapsed = time.time() - epoch_start
-            if self.logger and self.rank == 0:
-                self.logger.info(
-                    f"Epoch {epoch}/{epochs} | Time: {elapsed:.2f}s | "
-                    f"Train Loss: {epoch_loss:.4f} | "
-                    f"Train Acc: {epoch_acc:.4f}"
-                )
-        
-        # Set best model to final model
-        self.best_model = copy.deepcopy(self.model.state_dict())
-        
-        return self.training_history
+    # -----------------------------------------------------------------
+    # --- OBSOLETE: This function is the cause of the BatchNorm bug ---
+    # --- and is no longer needed. It has been removed. ---
+    # -----------------------------------------------------------------
+    # def train_on_chunks(...):
+    #     ...
