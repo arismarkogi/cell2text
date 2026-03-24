@@ -106,4 +106,3 @@ python cell2text_eval/run_evaluation.py \
 * `/cell2text_model`: Contains the core architecture (`model.py`), merging Geneformer, the Projector classes, and LLaMA.
 * `/cell2text_train`: PyTorch distributed training loops (`train_ddp.py`, `train_fsdp.py`).
 * `/cell2text_eval`: Inference scripts and complex biological/NLP evaluation metrics.
-```
