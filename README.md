@@ -1,8 +1,4 @@
-Here is a complete, clean, and professional `README.md` for your `cell2text` project. I've structured it to concisely explain the architecture, outline the pipeline, and provide the exact execution commands based on the scripts you provided.
 
-***
-
-```markdown
 # 🧬 Cell2Text
 
 > A Multimodal Large Language Model pipeline that translates single-cell transcriptomic data (gene expression) into comprehensive natural language descriptions.
