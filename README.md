@@ -5,7 +5,7 @@
 
 Cell2Text bridges the gap between single-cell biology and natural language processing. By leveraging foundational models for both biology and language, it takes raw cell gene expression tokens, projects them into a language semantic space, and generates detailed biological descriptions of the cell (including cell type, tissue, disease state, and active pathways).
 
-#📄 Read the Thesis
+# 📄 Read the Thesis
 
 Thesis: Cell2Text: Multimodal LLM for Generating Textual Descriptions from Single-Cell RNA-Seq Profiles (https://artemis.ece.ntua.gr/server/api/core/bitstreams/a1eed1ad-50a7-4895-9e67-448b2c962b78/content) 
 
